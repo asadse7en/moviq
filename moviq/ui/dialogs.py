@@ -10,6 +10,7 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 import requests
 
+from .. import __version__ as APP_VERSION
 from ..core.matching import (
     rank, rank_tv, score, to_choice, to_tv_choice, tv_score, tv_year_of,
     year_of,
@@ -1173,7 +1174,7 @@ class SearchDialog(tk.Toplevel):
         try:
             response = requests.get(
                 f"{IMAGE_BASE}/w185{poster_path}",
-                headers={"User-Agent": "Moviq/0.1"},
+                headers={"User-Agent": f"Moviq/{APP_VERSION}"},
                 timeout=12,
             )
             response.raise_for_status()

@@ -2088,6 +2088,8 @@ class SettingsView(ttk.Frame):
             release_url = release["html_url"]
             if not isinstance(latest, str) or not isinstance(release_url, str):
                 raise ValueError("GitHub release response is missing valid fields.")
+            if not release_url.startswith("https://github.com/"):
+                raise ValueError("GitHub release response contains an invalid URL.")
             current_version = _version_tuple(APP_VERSION)
             latest_version = _version_tuple(latest)
             width = max(len(current_version), len(latest_version))
