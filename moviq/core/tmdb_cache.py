@@ -160,6 +160,12 @@ class TMDBCache:
             self._connection.commit()
             return cursor.rowcount
 
+    def clear(self):
+        with self._lock:
+            cursor = self._connection.execute("DELETE FROM tmdb_cache")
+            self._connection.commit()
+            return cursor.rowcount
+
     def close(self):
         with self._lock:
             self._connection.close()
@@ -189,3 +195,10 @@ def get_cache():
             log.warning("TMDB response cache is unavailable: %s", error)
             return None
         return _cache
+
+
+def clear_tmdb_cache():
+    cache = get_cache()
+    if cache is None:
+        raise RuntimeError("TMDB response cache is unavailable.")
+    return cache.clear()
