@@ -27,10 +27,10 @@ from ..core.formatting import (
     MOVIE_DEFAULT_ID, TV_DEFAULT_ID, format_pattern,
 )
 from ..core.matching import (
-    group_match_items, is_confident, normalize_search_title,
-    rank, score, to_choice, to_tv_choice, tv_match_is_applicable,
-    tv_score,
+    group_match_items, normalize_search_title, score, to_tv_choice,
+    tv_match_is_applicable, tv_score,
 )
+from ..core.match_pipeline import match_movie_items
 from ..core.models import Item
 from ..core.naming import (
     NAMING, parse_name, parse_tv_name,
@@ -2271,29 +2271,9 @@ class App:
                             status, choice, error, review_reason,
                         ))
                 else:
-                    search_results = tmdb.search(
-                        search_query, first_item.year,
+                    results = match_movie_items(
+                        tmdb, items, thr, search_query,
                     )
-                    results = []
-                    for item in items:
-                        res = rank(
-                            search_results, item.query,
-                        )
-                        if not res:
-                            results.append(("nomatch", None, ""))
-                            continue
-                        confident = is_confident(
-                            res, item.query, item.year, thr,
-                        )
-                        status = "auto" if confident else "review"
-                        choice = to_choice(res[0])
-                        review_reason = (
-                            self._review_reason(
-                                res[0], item.query, item.year, res, thr,
-                                False,
-                            )
-                        )
-                        results.append((status, choice, "", review_reason))
             except TMDBAuthError as error:
                 cancel_event.set()
                 self.results.put((
