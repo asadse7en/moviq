@@ -27,10 +27,10 @@ from ..core.formatting import (
     MOVIE_DEFAULT_ID, TV_DEFAULT_ID, format_pattern,
 )
 from ..core.matching import (
-    group_match_items, normalize_search_title, score, to_tv_choice,
-    tv_match_is_applicable, tv_score,
+    group_match_items, normalize_search_title, score, tv_match_is_applicable,
+    tv_score,
 )
-from ..core.match_pipeline import match_movie_items
+from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
 from ..core.naming import (
     NAMING, parse_name, parse_tv_name,
@@ -40,7 +40,7 @@ from ..core.tmdb import (
     TMDBOperationCache,
 )
 from ..core.show_resolver import (
-    ShowResolver, ShowState,
+    ShowResolver,
 )
 from .design import LANGUAGES, PALETTES
 from .controls import (
@@ -2112,18 +2112,6 @@ class App:
     def worker(self):
         tmdb = None
 
-        def get_season(show_id, season_number):
-            return tmdb.season(show_id, season_number) or {}
-
-        def get_season_episode(show_id, season_number, episode_number):
-            season = get_season(show_id, season_number)
-            for episode in season.get("episodes") or []:
-                if episode.get("episode_number") == episode_number:
-                    episode = dict(episode)
-                    episode.setdefault("season_number", season_number)
-                    return episode
-            return None
-
         while True:
             job = self.jobs.get()
             if job is None:
@@ -2153,123 +2141,10 @@ class App:
                 first_item = items[0]
                 search_query = normalize_search_title(first_item.query)
                 if first_item.media_type == "tv":
-                    results = []
-                    for item in items:
-                        resolved = self.show_resolver.resolve_show(
-                            item.query, item.year, operation_cache,
-                        )
-                        item.show_result = resolved
-                        if resolved.state == ShowState.NOT_FOUND:
-                            results.append(("nomatch", None, ""))
-                            continue
-                        if resolved.state == ShowState.ERROR:
-                            results.append((
-                                "error", None,
-                                resolved.error or "TV show lookup failed.",
-                            ))
-                            continue
-                        show = dict(resolved.candidate or {})
-                        show.update({
-                            "id": resolved.tmdb_id,
-                            "name": resolved.name,
-                            "year": resolved.year,
-                        })
-                        show_id = resolved.tmdb_id
-                        season_number = item.season_number
-                        episode_numbers = item.episode_numbers
-                        absolute_needed = not item.season_was_explicit
-                        if not absolute_needed:
-                            season_data = get_season(
-                                show_id, season_number,
-                            )
-                            absolute_needed = (
-                                item.episode_number
-                                > len(season_data.get("episodes") or [])
-                            )
-                        episodes = []
-                        if absolute_needed:
-                            episodes = [
-                                tmdb.absolute_episode(show_id, number)
-                                for number in episode_numbers
-                            ]
-                            mapped = (
-                                all(episodes)
-                                and len({
-                                    episode.get("season_number")
-                                    for episode in episodes
-                                }) == 1
-                                and all(
-                                    isinstance(
-                                        episode.get("episode_number"), int,
-                                    )
-                                    for episode in episodes
-                                )
-                                and all(
-                                    episodes[index]["episode_number"]
-                                    == episodes[0]["episode_number"] + index
-                                    for index in range(len(episodes))
-                                )
-                            )
-                            if not mapped:
-                                choice = to_tv_choice(
-                                    show, None, None,
-                                )
-                                results.append((
-                                    "review", choice, "", "absolute",
-                                ))
-                                continue
-                            season_number = episodes[0]["season_number"]
-                            mapped_numbers = [
-                                episode["episode_number"]
-                                for episode in episodes
-                            ]
-                        else:
-                            mapped_numbers = list(episode_numbers)
-                            episodes = [
-                                get_season_episode(
-                                    show_id, season_number, number,
-                                )
-                                for number in mapped_numbers
-                            ]
-                        if not all(episodes):
-                            episode_title = None
-                        else:
-                            episode_titles = [
-                                episode.get("name") or ""
-                                for episode in episodes
-                            ]
-                            episode_title = (
-                                " & ".join(episode_titles)
-                                if all(episode_titles) else None
-                            )
-                        episode_number = mapped_numbers[0]
-                        episode_end_number = (
-                            mapped_numbers[-1]
-                            if len(mapped_numbers) > 1 else None
-                        )
-                        choice = to_tv_choice(
-                            show, season_number, episode_number,
-                            episode_title, episode_end_number,
-                        )
-                        confident = resolved.confidence >= thr
-                        status = (
-                            "auto" if confident and episode_title else "review"
-                        )
-                        error = "" if episode_title else (
-                            "TMDB episode title unavailable; review this "
-                            "episode before renaming."
-                        )
-                        if not confident:
-                            error = ""
-                        review_reason = (
-                            self._review_reason(
-                                choice, item.query, item.year, [choice], thr,
-                                True,
-                            )
-                        )
-                        results.append((
-                            status, choice, error, review_reason,
-                        ))
+                    results = match_tv_items(
+                        tmdb, self.show_resolver, items, operation_cache,
+                        thr, self._review_reason,
+                    )
                 else:
                     results = match_movie_items(
                         tmdb, items, thr, search_query,
