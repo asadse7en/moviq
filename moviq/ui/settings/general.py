@@ -3,6 +3,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, ttk
 
+from ..controls import SegmentedModeToggle
 from ._common import TMDB_KEY_URL, TMDB_SIGNUP_URL, check_tmdb_key
 
 
@@ -200,35 +201,78 @@ class GeneralTabMixin:
                 group, index * 2, title,
                 self._switch(group, self.vars[key]), description,
             )
-        self._label(group, "Library destination").grid(
-            row=6, column=0, sticky="w", pady=(8, 4),
+        library_group = self._group(frame, "Library destination")
+        library_group.columnconfigure(0, weight=1)
+        self._label(
+            library_group,
+            "Choose where renamed files should go.",
+            font="TkHeadingFont",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 2))
+        self.library_selector = SegmentedModeToggle(
+            library_group,
+            self.vars["library_mode"].get(),
+            self._select_library_mode,
+            ui_scale=self.app.UI_SCALE,
+            labels=("In place", "Move to library"),
+            values=("in_place", "library"),
         )
-        mode_row = ttk.Frame(group)
-        mode_row.grid(row=6, column=1, sticky="w", pady=(8, 4))
-        for label, value in (
-            ("Rename in place", "in_place"),
-            ("Move to library", "library"),
-        ):
-            ttk.Radiobutton(
-                mode_row, text=label, value=value,
-                variable=self.vars["library_mode"],
-            ).pack(side="left", padx=(0, 14))
-        self.library_paths_frame = ttk.Frame(group)
+        self.library_selector.grid(
+            row=0, column=1, rowspan=2, sticky="e", padx=(16, 0),
+        )
+        self.library_mode_hint = self._label(
+            library_group,
+            "Files stay in their current folders.",
+            muted=True,
+        )
+        self.library_mode_hint.grid(row=1, column=0, sticky="w")
+        ttk.Separator(library_group).grid(
+            row=2, column=0, columnspan=2, sticky="ew", pady=(12, 8),
+        )
+        self.library_paths_frame = ttk.Frame(library_group)
         self.library_paths_frame.grid(
-            row=7, column=0, columnspan=2, sticky="ew", pady=(4, 8),
+            row=3, column=0, columnspan=2, sticky="ew", pady=(2, 4),
         )
         self.library_paths_frame.columnconfigure(1, weight=1)
+        self._label(
+            self.library_paths_frame,
+            "Library folders",
+            font="TkHeadingFont",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
         self._library_path_row(
-            self.library_paths_frame, 0, "Movies library folder",
+            self.library_paths_frame, 1, "Movies folder",
             self.vars["movies_library"], "movies_library",
         )
         self._library_path_row(
-            self.library_paths_frame, 1, "Shows library folder",
+            self.library_paths_frame, 2, "TV shows folder",
             self.vars["tv_library"], "tv_library",
         )
         self.vars["library_mode"].trace_add(
-            "write", lambda *_args: self._show_library_paths(),
+            "write", lambda *_args: self._update_library_mode(),
         )
+        self._set_library_selector_theme(self.app.pal)
+        self._show_library_paths()
+
+    def _select_library_mode(self, mode):
+        self.vars["library_mode"].set(mode)
+
+    def _set_library_selector_theme(self, palette):
+        self.library_selector.set_theme(
+            background=palette["header_bg"],
+            track=palette["header_bg"],
+            border=palette["header_accent"],
+            active=palette["header_accent"],
+            foreground=palette["fg"],
+            muted=palette["header_muted"],
+            accent_foreground=palette["accent_text"],
+            canvas_background=palette["header_bg"],
+        )
+        self.library_selector.set_mode(
+            self.vars["library_mode"].get(), animate=False,
+        )
+
+    def _update_library_mode(self):
+        mode = self.vars["library_mode"].get()
+        self.library_selector.set_mode(mode)
         self._show_library_paths()
 
     def _library_path_row(self, parent, row, label, variable, setting):
@@ -257,9 +301,16 @@ class GeneralTabMixin:
             variable.set(folder)
 
     def _show_library_paths(self):
-        if self.vars["library_mode"].get() == "library":
+        is_library = self.vars["library_mode"].get() == "library"
+        if is_library:
+            self.library_mode_hint.configure(
+                text="Organize renamed files under your chosen movie and TV folders.",
+            )
             self.library_paths_frame.grid()
         else:
+            self.library_mode_hint.configure(
+                text="Files stay in their current folders.",
+            )
             self.library_paths_frame.grid_remove()
 
     def _set_key_status(self, status):

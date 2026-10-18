@@ -529,6 +529,7 @@ class SettingsView(
         self._configure_settings_styles(palette)
         self.content_canvas.configure(background=palette["bg"])
         self._set_format_selector_theme(palette)
+        self._set_library_selector_theme(palette)
         self._recolor_styled_entries(palette)
         for text in self._rich_texts:
             text.configure(

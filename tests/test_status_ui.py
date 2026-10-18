@@ -276,6 +276,7 @@ class FormatPresetLayoutTests(unittest.TestCase):
         view._configure_settings_styles = Mock()
         view.content_canvas = Mock()
         view._set_format_selector_theme = Mock()
+        view._set_library_selector_theme = Mock()
         view._recolor_styled_entries = Mock()
         view._recolor_format_panel = Mock()
         view._rich_texts = []

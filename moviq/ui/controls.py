@@ -561,7 +561,9 @@ def _mix_color(start, end, amount):
 
 class SegmentedModeToggle(tk.Canvas):
     def __init__(self, master, mode, on_select, font="TkDefaultFont",
-                 background=None, fit_content=True, ui_scale=1.0):
+                 background=None, fit_content=True, ui_scale=1.0,
+                 labels=("Movies", "TV Shows"),
+                 values=("movie", "tv")):
         super().__init__(
             master, width=1, height=1, highlightthickness=0, bd=0,
             background=background or master.winfo_toplevel().cget("background"),
@@ -571,19 +573,20 @@ class SegmentedModeToggle(tk.Canvas):
         self.on_select = on_select
         self.ui_scale = ui_scale
         self.font = tkfont.nametofont(font)
-        self.labels = ("Movies", "TV Shows")
+        self.labels = labels
+        self.values = values
         self.horizontal_padding = 14
         self.vertical_padding = 8
         self.fit_content = fit_content
         self.palette = {}
-        self.position = 0.0 if mode == "movie" else 1.0
+        self.position = 0.0 if mode == values[0] else 1.0
         self._animation_id = None
         self._animation_start = 0.0
         self._animation_from = self.position
         self._animation_to = self.position
         self.bind("<Button-1>", self._on_click)
-        self.bind("<Left>", lambda _event: self.on_select("movie"))
-        self.bind("<Right>", lambda _event: self.on_select("tv"))
+        self.bind("<Left>", lambda _event: self.on_select(self.values[0]))
+        self.bind("<Right>", lambda _event: self.on_select(self.values[1]))
         self.bind("<Configure>", self._on_configure)
         self._size_to_content()
 
@@ -633,7 +636,7 @@ class SegmentedModeToggle(tk.Canvas):
 
     def set_mode(self, mode, animate=True):
         self.mode = mode
-        target = 0.0 if mode == "movie" else 1.0
+        target = 0.0 if mode == self.values[0] else 1.0
         if self._animation_id is not None:
             self.after_cancel(self._animation_id)
             self._animation_id = None
@@ -652,7 +655,7 @@ class SegmentedModeToggle(tk.Canvas):
         inset = max(1, _tk_scale(self)) / 2
         available = self.winfo_width() - 1 - inset * 2
         boundary = inset + available * widths[0] / sum(widths)
-        side = "movie" if event.x < boundary else "tv"
+        side = self.values[0] if event.x < boundary else self.values[1]
         self.on_select(side)
         return "break"
 
