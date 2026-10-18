@@ -17,20 +17,21 @@ from moviq.core.formatting import (
 )
 from moviq.core.naming import NAMING, folder_name_for, tv_episode_name_for
 from moviq.core.tmdb import TMDB
-from moviq.ui.settings import (
+from moviq.core.settings_store import (
     DEFAULTS,
     MOVIE_PRESETS,
-    TMDB_KEY_URL,
-    TMDB_SIGNUP_URL,
     TV_PRESETS,
     SettingsStore,
-    _version_tuple,
-    check_for_updates,
     check_tmdb_key,
     render_pattern,
-    SettingsView,
     validate_pattern,
 )
+from moviq.core.updater import (
+    _version_tuple,
+    check_latest_release as check_for_updates,
+)
+from moviq.ui.settings._common import TMDB_KEY_URL, TMDB_SIGNUP_URL
+from moviq.ui.settings import SettingsView
 
 
 class SettingsStoreTests(unittest.TestCase):
