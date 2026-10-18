@@ -72,6 +72,40 @@ from .theme import HAVE_SV, apply_theme as apply_app_theme
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
+CONFIG_FIELDS = {
+    "remember": lambda app: app.remember.get(),
+    "key": lambda app: app.key_var.get().strip(),
+    "theme": lambda app: app.theme_var.get(),
+    "language": lambda app: app.lang_var.get(),
+    "threshold": lambda app: app.threshold_pct(),
+    "auto_match": lambda app: app.auto_match.get(),
+    "confirm_apply": lambda app: app.confirm_apply.get(),
+    "name_template": lambda app: app.name_template.get(),
+    "movie_preset_id": lambda app: app.movie_preset_id.get(),
+    "movie_folder_pattern": lambda app: app.movie_folder_pattern.get(),
+    "movie_file_pattern": lambda app: app.name_template.get(),
+    "movie_create_folder": lambda app: app.movie_folder.get(),
+    "tag_id": lambda app: app.tag_id.get(),
+    "media_mode": lambda app: app.media_mode.get(),
+    "tv_template": lambda app: app.tv_template.get(),
+    "tv_preset_id": lambda app: app.tv_preset_id.get(),
+    "tv_show_folder_pattern": lambda app: app.tv_show_folder_pattern.get(),
+    "tv_season_folder_pattern": lambda app: app.tv_season_folder_pattern.get(),
+    "tv_file_pattern": lambda app: app.tv_template.get(),
+    "tv_create_show_folder": lambda app: app.tv_create_show_folder.get(),
+    "tv_create_season_folder": lambda app: app.tv_create_season_folder.get(),
+    "movie_folder": lambda app: app.movie_folder.get(),
+    "tv_folder": lambda app: app.tv_folder.get(),
+    "rename_subtitles": lambda app: app.rename_subtitles.get(),
+    "library_mode": lambda app: app.library_mode.get(),
+    "movies_library": lambda app: app.movies_library.get(),
+    "tv_library": lambda app: app.tv_library.get(),
+    "window_geometry": lambda app: app._window_geometry(),
+    "window_state": lambda app: (
+        "zoomed" if app.root.state() == "zoomed" else "normal"
+    ),
+    "last_folder": lambda app: app._last_folder,
+}
 ERROR_STATUS_DETAILS = {
     "wrong_mode_movie_in_tv": (
         "This file looks like a movie (no season or episode in the name), "
@@ -260,38 +294,8 @@ class App:
     # ---- config ----------------------------------------------------------
     def save_config(self):
         values = {
-            "remember": self.remember.get(),
-            "key": self.key_var.get().strip(),
-            "theme": self.theme_var.get(),
-            "language": self.lang_var.get(),
-            "threshold": self.threshold_pct(),
-            "auto_match": self.auto_match.get(),
-            "confirm_apply": self.confirm_apply.get(),
-            "name_template": self.name_template.get(),
-            "movie_preset_id": self.movie_preset_id.get(),
-            "movie_folder_pattern": self.movie_folder_pattern.get(),
-            "movie_file_pattern": self.name_template.get(),
-            "movie_create_folder": self.movie_folder.get(),
-            "tag_id": self.tag_id.get(),
-            "media_mode": self.media_mode.get(),
-            "tv_template": self.tv_template.get(),
-            "tv_preset_id": self.tv_preset_id.get(),
-            "tv_show_folder_pattern": self.tv_show_folder_pattern.get(),
-            "tv_season_folder_pattern": self.tv_season_folder_pattern.get(),
-            "tv_file_pattern": self.tv_template.get(),
-            "tv_create_show_folder": self.tv_create_show_folder.get(),
-            "tv_create_season_folder": self.tv_create_season_folder.get(),
-            "movie_folder": self.movie_folder.get(),
-            "tv_folder": self.tv_folder.get(),
-            "rename_subtitles": self.rename_subtitles.get(),
-            "library_mode": self.library_mode.get(),
-            "movies_library": self.movies_library.get(),
-            "tv_library": self.tv_library.get(),
-            "window_geometry": self._window_geometry(),
-            "window_state": (
-                "zoomed" if self.root.state() == "zoomed" else "normal"
-            ),
-            "last_folder": self._last_folder,
+            key: read_value(self)
+            for key, read_value in CONFIG_FIELDS.items()
         }
         self.settings_store.update(values)
         self.settings_store.save_now()
