@@ -20,9 +20,10 @@ from ..core.config import (
     ERROR_LOG_FILE, VIDEO_EXT, remove_legacy_cache_files,
 )
 from ..core.file_ops import (
-    count_videos, is_hidden_path, make_plan, make_tv_plan, perform_plan,
-    rebase, scan_dir, tv_root_for_folder, undo_ops,
+    count_videos, is_hidden_path, make_plan, make_tv_plan, rebase, scan_dir,
+    tv_root_for_folder, undo_ops,
 )
+from ..core.apply import apply_item_plan, build_plans
 from ..core.formatting import (
     MOVIE_DEFAULT_ID, TV_DEFAULT_ID, format_pattern,
 )
@@ -2978,16 +2979,48 @@ class App:
                 show_warning(self, "Library folder required", str(error))
                 return
 
-        plans = {}
         try:
-            for item in todo:
-                plans[id(item)] = self.plan_for(item)
+            plans = build_plans(todo, self.plan_for)
         except (OSError, ValueError, KeyError) as error:
             show_error(
                 self, "Could not build rename plan",
                 f"Moviq could not create the rename plan: {error}",
             )
             return
+
+        movie_destinations = {}
+        reserved_destinations = {
+            self._normalized_path(plans[id(item)].dest)
+            for item in todo
+        }
+        for item in todo:
+            if item.media_type == "tv":
+                continue
+            plan = plans[id(item)]
+            key = (
+                self._normalized_path(plan.dest_dir),
+                os.path.normcase(plan.new_stem),
+            )
+            movie_destinations.setdefault(key, []).append(item)
+        for duplicates in movie_destinations.values():
+            if len(duplicates) < 2:
+                continue
+            for item in duplicates:
+                plan = plans[id(item)]
+                number = 1
+                while True:
+                    numbered_stem = f"{plan.new_stem} ({number})"
+                    destination = plan.dest_dir / (
+                        numbered_stem + item.path.suffix
+                    )
+                    key = self._normalized_path(destination)
+                    if key in reserved_destinations or destination.exists():
+                        number += 1
+                        continue
+                    plan.new_stem = numbered_stem
+                    plan.dest = destination
+                    reserved_destinations.add(key)
+                    break
 
         destinations = {}
         conflicts_by_item = {}
@@ -2997,12 +3030,21 @@ class App:
             destinations.setdefault(key, []).append(item)
         for colliding in destinations.values():
             destination = plans[id(colliding[0])].dest
-            same_target = len(colliding) > 1
+            target_path = self._normalized_path(destination)
+            destination_is_source = any(
+                self._normalized_path(item.path) == target_path
+                for item in colliding
+            )
+            keep_item = next(
+                (
+                    item for item in colliding
+                    if self._normalized_path(item.path) == target_path
+                ),
+                colliding[0],
+            )
             for item in colliding:
-                if same_target or (
-                    destination.exists()
-                    and self._normalized_path(destination)
-                    != self._normalized_path(item.path)
+                if item is not keep_item or (
+                    destination.exists() and not destination_is_source
                 ):
                     conflicts_by_item[id(item)] = destination
         skipped_count = len(scope) - len(todo)
@@ -3056,21 +3098,18 @@ class App:
 
         for it in todo:
             plan = plans[id(it)]
-            ops_start = len(ops)
-            try:
-                new_path = perform_plan(
-                    it.path, plan, ops,
-                    rename_subtitles=self.rename_subtitles.get(),
-                )
-            except Exception as e:
-                apply_folder_renames(ops_start)
+            new_path, error = apply_item_plan(
+                it, plan, ops, self.rename_subtitles.get(),
+                apply_folder_renames,
+            )
+            if error is not None:
+                e = error
                 it.error_code = self._error_code_for_exception(e)
                 it.error = self._safe_exception_message(e)
                 it.status = "error"
                 errors.append(f"{it.path.name}: {e}")
                 self.refresh_row(it)
                 continue
-            apply_folder_renames(ops_start)
             it.path, it.status, it.error = new_path, "done", ""
             it.error_code = None
             pending_show = getattr(it, "_pending_manual_show", None)
