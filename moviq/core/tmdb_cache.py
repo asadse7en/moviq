@@ -179,8 +179,6 @@ def get_cache():
         if _cache_initialization_failed:
             return None
         try:
-            from .config import USER_DATA_DIR
-
             cache = TMDBCache(TMDB_CACHE_FILE)
             cache.purge_expired()
             _cache = cache

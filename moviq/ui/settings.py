@@ -29,7 +29,6 @@ from ..core.formatting import (
 from ..core.tmdb import MAX_WORKERS, TMDB, TMDBAuthError, TMDBError
 from .controls import SegmentedModeToggle
 from .design import LANGUAGES
-from .popups import show_error
 
 
 GITHUB_OWNER = "asadse7en"
@@ -1857,26 +1856,6 @@ class SettingsView(ttk.Frame):
         before, components = self._format_preview_components(kind, patterns)
         after = "\\".join(components)
         return f"Before: {before}\nAfter: {after}"
-
-    def _format_preview(self, kind, pattern, sample, warning):
-        if warning and not warning.startswith("Warning:"):
-            return f"Preview unavailable — {warning}"
-        file_name = render_pattern(pattern, sample)
-        if kind == "movie":
-            folder = (
-                f"{file_name}\\"
-                if self.vars["movie_folder"].get() else ""
-            )
-            before = "Inception.2010.mkv"
-        else:
-            folder = (
-                f"{sample['title']}\\Season {sample['season']:02d}\\"
-                if self.vars["tv_folder"].get() else ""
-            )
-            before = "Breaking.Bad.S01E01.mkv"
-        return (
-            f"Before: {before}   →   After: {folder}{file_name}.mkv"
-        )
 
     def _format_preview(self, kind, pattern, sample, warning):
         if warning and not warning.startswith("Warning:"):

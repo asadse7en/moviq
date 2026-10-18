@@ -52,7 +52,7 @@ from .controls import (
 from .dialogs import SearchDialog
 from .popups import (
     MatchProgressPopup, RenameConfirmationDialog, apply_titlebar_theme,
-    ask_yes_no, ask_yes_no_cancel, show_error, show_info, show_warning,
+    ask_yes_no, show_error, show_info, show_warning,
 )
 from .settings import SettingsStore, SettingsView, resolve_system_theme
 from .table_layout import (
