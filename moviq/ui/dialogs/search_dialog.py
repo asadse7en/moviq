@@ -6,7 +6,6 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
 
-from ... import __version__ as APP_VERSION
 from ...core.matching import (
     score, to_choice, to_tv_choice, tv_score, tv_year_of, year_of,
 )

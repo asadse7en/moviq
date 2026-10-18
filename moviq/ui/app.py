@@ -58,7 +58,7 @@ from .table_layout import (
     target_name_display, tv_target_name_display,
 )
 from .main_page import (
-    MAIN_SHORTCUTS, build_main_page as build_app_main_page,
+    build_main_page as build_app_main_page,
 )
 
 try:
@@ -1210,6 +1210,7 @@ class App:
             if not self.tree.exists(item.iid):
                 continue
             self._sync_row_visibility(item)
+        self._restore_visible_row_order()
         self._refresh_filter_chip_styles()
         self.update_summary()
 

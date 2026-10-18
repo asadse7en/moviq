@@ -1,7 +1,6 @@
 import json
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -423,7 +422,9 @@ class FormattingSettingsTests(unittest.TestCase):
             ("api_link",),
         ]
 
-        with patch("moviq.ui.settings.webbrowser.open") as open_url:
+        with patch(
+            "moviq.ui.settings.general.webbrowser.open",
+        ) as open_url:
             self.assertEqual(
                 SettingsView._open_api_help_link(event, text), "break",
             )
@@ -522,51 +523,40 @@ class UpdateAndKeyCheckTests(unittest.TestCase):
     def test_version_tuple_ignores_leading_v(self):
         self.assertEqual(_version_tuple("v1.2.0"), (1, 2, 0))
 
-    @patch("moviq.ui.settings.urllib.request.urlopen")
-    def test_update_check_detects_newer_release_and_uses_github_url(self, urlopen):
+    @patch("moviq.core.updater.requests.get")
+    def test_update_check_detects_newer_release_and_uses_github_url(self, get):
         response = Mock()
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        response.read.return_value = json.dumps({
+        response.json.return_value = {
             "tag_name": "v0.2.0",
             "html_url": "https://github.com/asadse7en/Moviq/releases/tag/v0.2.0",
-        }).encode()
-        urlopen.return_value = response
-        with patch("moviq.ui.settings.json.load", return_value={
-            "tag_name": "v0.2.0",
-            "html_url": "https://github.com/asadse7en/Moviq/releases/tag/v0.2.0",
-        }):
-            state, url = check_for_updates("0.1.0")
+        }
+        get.return_value = response
+        state, version, url = check_for_updates("0.1.0")
 
-        self.assertEqual(state, "available:0.2.0")
+        self.assertEqual((state, version), ("available", "v0.2.0"))
         self.assertEqual(url, "https://github.com/asadse7en/Moviq/releases/tag/v0.2.0")
-        request = urlopen.call_args.args[0]
-        self.assertTrue(any(
-            key.lower() == "user-agent" for key in request.headers
+        response.raise_for_status.assert_called_once_with()
+        self.assertIn("User-Agent", get.call_args.kwargs["headers"])
+
+    @patch("moviq.core.updater.requests.get")
+    def test_update_check_reports_same_version(self, get):
+        response = Mock()
+        response.json.return_value = {
+            "tag_name": "v0.1.0",
+            "html_url": "https://github.com/asadse7en/Moviq/releases/tag/v0.1.0",
+        }
+        get.return_value = response
+        self.assertEqual(check_for_updates("0.1.0"), (
+            "current", "v0.1.0",
+            "https://github.com/asadse7en/Moviq/releases/tag/v0.1.0",
         ))
 
-    @patch("moviq.ui.settings.urllib.request.urlopen")
-    def test_update_check_reports_same_version(self, urlopen):
-        response = Mock()
-        response.__enter__ = Mock(return_value=response)
-        response.__exit__ = Mock(return_value=False)
-        urlopen.return_value = response
-        with patch("moviq.ui.settings.json.load", return_value={
-            "tag_name": "v0.1.0",
-            "html_url": "https://example.test/release",
-        }):
-            self.assertEqual(check_for_updates("0.1.0"), (
-                "latest", "https://example.test/release",
-            ))
-
-    @patch("moviq.ui.settings.urllib.request.urlopen")
-    def test_update_check_handles_offline_and_rate_limit(self, urlopen):
-        urlopen.side_effect = urllib.error.URLError("offline")
-        self.assertEqual(check_for_updates("0.1.0"), ("error", None))
-        urlopen.side_effect = urllib.error.HTTPError(
-            "https://api.github.com", 429, "rate limit", {}, None,
-        )
-        self.assertEqual(check_for_updates("0.1.0"), ("error", None))
+    @patch("moviq.core.updater.requests.get")
+    def test_update_check_handles_offline_and_rate_limit(self, get):
+        get.side_effect = requests.ConnectionError("offline")
+        self.assertEqual(check_for_updates("0.1.0"), ("error", None, None))
+        get.side_effect = requests.HTTPError("rate limit")
+        self.assertEqual(check_for_updates("0.1.0"), ("error", None, None))
 
     def test_invalid_v3_key_is_rejected_without_a_network_request(self):
         self.assertEqual(check_tmdb_key("not-a-valid-v3-key"), "Wrong format")

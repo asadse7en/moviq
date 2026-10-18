@@ -51,6 +51,7 @@ class MissingSourceTests(unittest.TestCase):
                 "hidden": hidden,
             }
             app._filtered_out = set()
+            app._row_tooltip_paths = {}
             app.schedule_summary = lambda: None
 
             removed, unavailable = app._prune_missing_items()
@@ -345,6 +346,7 @@ class SettingsViewCloseTests(unittest.TestCase):
             _root=lambda: root,
             _scroll_bindings=[("<MouseWheel>", "callback-id")],
             _key_after=None,
+            _saved_key_status_after=None,
             _poll_id=None,
             _preference_traces=[],
             _executor=Mock(),
@@ -403,7 +405,7 @@ class MediaModeDetectionTests(unittest.TestCase):
                 app._confirm_detected_media_mode([episode])
 
             app.media_mode.set.assert_called_once_with("tv")
-            app.clear.assert_called_once_with()
+            app.clear.assert_called_once_with(record=False)
             app.update_media_mode_selector.assert_called_once_with()
             app.save_config.assert_called_once_with()
             self.assertIn("Switch to TV Shows", confirm.call_args.args[2])
@@ -442,7 +444,7 @@ class StatusPresentationTests(unittest.TestCase):
                 "pending": "Pending",
                 "matching": "Matching",
                 "auto": "Matched",
-                "formatted": "No Change",
+                "no_change": "No change",
                 "review": "Review",
                 "manual": "Confirmed",
                 "nomatch": "No Match",
@@ -456,7 +458,7 @@ class StatusPresentationTests(unittest.TestCase):
                 "pending": "clock",
                 "matching": "spinner",
                 "auto": "check_circle",
-                "formatted": "check_circle",
+                "no_change": "check_circle",
                 "review": "warning",
                 "manual": "verified",
                 "nomatch": "circle_minus",
@@ -503,8 +505,10 @@ class MatchCancellationTests(unittest.TestCase):
             "id": 7,
             "items": [completed, unfinished],
             "originals": {
-                completed: ("pending", None, ""),
-                unfinished: ("review", previous_match, "previous error"),
+                completed: ("pending", None, "", None, None),
+                unfinished: (
+                    "review", previous_match, "previous error", None, None,
+                ),
             },
             "completed": {completed},
             "done": 1,
@@ -529,6 +533,8 @@ class MatchCancellationTests(unittest.TestCase):
         app.job_done = 1
         app.items = [completed, unfinished]
         app.refresh_row = Mock()
+        app._record_match_history = Mock()
+        app._update_undo_button = Mock()
         app._match_progress_dialog = dialog
         app.status = Mock()
 
@@ -554,7 +560,7 @@ class MatchCancellationTests(unittest.TestCase):
         run = {
             "id": 9,
             "items": [item],
-            "originals": {item: ("pending", None, "")},
+            "originals": {item: ("pending", None, "", None, None)},
             "completed": set(),
             "done": 0,
             "total": 1,
@@ -567,6 +573,9 @@ class MatchCancellationTests(unittest.TestCase):
         app.job_total = app.job_done = 1
         app.items = [item]
         app.refresh_row = Mock()
+        app._record_match_history = Mock()
+        app._update_undo_button = Mock()
+        app.key_var = SimpleNamespace(get=lambda: "")
         app._match_progress_dialog = None
         app.status = Mock()
 
@@ -579,7 +588,7 @@ class MatchCancellationTests(unittest.TestCase):
         self.assertTrue(cancellation.is_set())
         self.assertIsNone(app._matching_run)
         self.assertEqual((item.status, item.match, item.error), (
-            "pending", None, "",
+            "error", None, "",
         ))
         self.assertTrue(app.jobs.empty())
         show_error.assert_called_once_with(
@@ -600,7 +609,7 @@ class MatchCountTests(unittest.TestCase):
             Path("The Matrix (1999).mkv"),
             Path("Movies") / "The Matrix (1999)",
         )
-        already_formatted_movie.status = "formatted"
+        already_formatted_movie.status = "no_change"
         confirmed_movie = Item(Path("Confirmed.mkv"), Path("Movies"))
         confirmed_movie.status = "manual"
         needs_review = Item(Path("Review.mkv"), Path("Movies"))
@@ -619,7 +628,7 @@ class MatchCountTests(unittest.TestCase):
             (3, 1, 1),
         )
 
-    def test_automatic_match_is_formatted_when_its_destination_is_unchanged(self):
+    def test_automatic_match_is_no_change_when_its_destination_is_unchanged(self):
         item = Item(Path("formatted.mkv"), Path("."))
         choice = {"id": 1, "title": "Formatted", "year": 2024}
         run = {
@@ -633,15 +642,18 @@ class MatchCountTests(unittest.TestCase):
         app.results.put(("finished", 1, item, "auto", choice, ""))
         app._matching_run = run
         app.items = [item]
-        app.refresh_row = Mock()
+        app.refresh_row = lambda current: App._update_no_change_status(
+            app, current,
+        )
         app._update_match_progress = Mock()
         app._finish_match_run = Mock()
         app.plan_for = Mock(return_value=SimpleNamespace(dest=item.path))
         app.thr_var = SimpleNamespace(get=lambda: 90)
+        app.key_var = SimpleNamespace(get=lambda: "")
 
         app._process_match_events()
 
-        self.assertEqual(item.status, "formatted")
+        self.assertEqual(item.status, "no_change")
         self.assertEqual(item.match, choice)
 
     def test_low_confidence_auto_result_is_left_unmatched_for_review(self):
@@ -663,6 +675,7 @@ class MatchCountTests(unittest.TestCase):
         }
         app.items = [item]
         app.thr_var = SimpleNamespace(get=lambda: 90)
+        app.key_var = SimpleNamespace(get=lambda: "")
         app.refresh_row = Mock()
         app._update_match_progress = Mock()
         app._finish_match_run = Mock()
@@ -697,13 +710,19 @@ class MatchProgressTextTests(unittest.TestCase):
 class SelectionActionTests(unittest.TestCase):
     def test_action_labels_distinguish_subset_from_all_selection(self):
         for selected, expected_match, expected_rename in (
-            (0, "Match all (8)", "Rename All"),
-            (3, "Match selected (3)", "Rename (3)"),
-            (8, "Match all (8)", "Rename All"),
+            (0, "Auto Match", "Rename All"),
+            (3, "Auto Match (3)", "Rename (3)"),
+            (8, "Auto Match", "Rename All"),
         ):
             with self.subTest(selected=selected):
                 app = App.__new__(App)
-                app.items = [object() for _ in range(8)]
+                app.items = [
+                    SimpleNamespace(
+                        iid=index, status="auto", match={"id": index},
+                    )
+                    for index in range(8)
+                ]
+                app.by_iid = {item.iid: item for item in app.items}
                 app.tree = SimpleNamespace(
                     selection=lambda: tuple(range(selected)),
                 )
@@ -715,7 +734,7 @@ class SelectionActionTests(unittest.TestCase):
 
                 app.match_btn_var.set.assert_called_once_with(expected_match)
                 app.manual_match_btn_var.set.assert_called_once_with(
-                    "Fix match…",
+                    "Manual Match" if selected != 3 else "Manual Match (3)",
                 )
                 app.apply_btn_var.set.assert_called_once_with(expected_rename)
 
@@ -735,6 +754,7 @@ class SelectionActionTests(unittest.TestCase):
         }
         app.update_action_labels = Mock()
         app.update_detail = Mock()
+        app._schedule_status_cells = Mock()
         app._status_filter = None
         app.empty_state = Mock()
 
@@ -742,7 +762,7 @@ class SelectionActionTests(unittest.TestCase):
 
         app.filter_vars["all"].set.assert_called_once_with("All 4")
         app.filter_vars["ready"].set.assert_called_once_with("Ready 1")
-        app.filter_vars["review"].set.assert_called_once_with("Review 2")
+        app.filter_vars["review"].set.assert_called_once_with("Review 1")
         app.filter_vars["nomatch"].set.assert_called_once_with("No match 0")
         app.filter_vars["done"].set.assert_called_once_with("Done 1")
         app.empty_state.place_forget.assert_called_once_with()
@@ -750,13 +770,14 @@ class SelectionActionTests(unittest.TestCase):
     def test_filter_categories_match_their_file_statuses(self):
         for status, selected_filter, expected in (
             ("auto", "ready", True),
-            ("formatted", "ready", True),
+            ("no_change", "ready", False),
             ("manual", "ready", True),
-            ("pending", "review", True),
+            ("pending", "review", False),
             ("review", "review", True),
-            ("error", "review", True),
+            ("error", "review", False),
             ("nomatch", "nomatch", True),
             ("done", "done", True),
+            ("no_change", "done", True),
             ("nomatch", "review", False),
             ("done", "ready", False),
         ):
@@ -770,7 +791,7 @@ class SelectionActionTests(unittest.TestCase):
 
     def test_rename_all_skips_no_change_items(self):
         item = Item(Path("The Matrix (1999).mkv"), Path("Movies"))
-        item.status = "formatted"
+        item.status = "no_change"
         item.match = {"id": 1, "title": "The Matrix", "year": 1999}
 
         app = App.__new__(App)
@@ -792,8 +813,9 @@ class SelectionActionTests(unittest.TestCase):
         with patch("moviq.ui.app.show_info") as show_info:
             app.apply(all_matched=False)
 
-        self.assertEqual(item.status, "formatted")
-        show_info.assert_called_once()
+        self.assertEqual(item.status, "no_change")
+        app.status.assert_called_once_with("Nothing to rename")
+        show_info.assert_not_called()
 
     def test_auto_match_uses_only_selected_rows(self):
         selected = SimpleNamespace(status="pending")
@@ -811,22 +833,38 @@ class SelectionActionTests(unittest.TestCase):
         pending = SimpleNamespace(status="pending")
         done = SimpleNamespace(status="done")
         confirmed = SimpleNamespace(status="manual")
-        formatted = SimpleNamespace(status="formatted")
+        formatted = SimpleNamespace(status="no_change")
         auto = SimpleNamespace(status="auto")
         app = App.__new__(App)
         app.selected = lambda: []
+        app._status_filter = None
         app.items = [pending, done, confirmed, formatted, auto]
         app.start_match = Mock()
 
         app.match_run()
 
-        app.start_match.assert_called_once_with([pending], show_dialog=True)
+        app.start_match.assert_called_once_with(
+            [pending, done, confirmed, formatted, auto],
+            show_dialog=True,
+        )
 
     def test_auto_match_skips_already_ready_rows(self):
-        pending = SimpleNamespace(status="pending", media_type="movie", is_tv_episode=False)
-        matched = SimpleNamespace(status="auto", media_type="movie", is_tv_episode=False)
-        formatted = SimpleNamespace(status="formatted", media_type="movie", is_tv_episode=False)
-        confirmed = SimpleNamespace(status="manual", media_type="movie", is_tv_episode=False)
+        pending = SimpleNamespace(
+            status="pending", media_type="movie", is_tv_episode=False,
+            error_code=None,
+        )
+        matched = SimpleNamespace(
+            status="auto", media_type="movie", is_tv_episode=False,
+            error_code=None,
+        )
+        formatted = SimpleNamespace(
+            status="no_change", media_type="movie", is_tv_episode=False,
+            error_code=None,
+        )
+        confirmed = SimpleNamespace(
+            status="manual", media_type="movie", is_tv_episode=False,
+            error_code=None,
+        )
         app = App.__new__(App)
         app.selected = lambda: [pending, matched, formatted, confirmed]
         app.items = [pending, matched, formatted, confirmed]
@@ -834,7 +872,17 @@ class SelectionActionTests(unittest.TestCase):
 
         app.match_run()
 
-        app.start_match.assert_called_once_with([pending], show_dialog=True)
+        app.start_match.assert_called_once_with(
+            [pending, matched, formatted, confirmed],
+            show_dialog=True,
+        )
+        self.assertEqual(
+            [
+                item for item in app.items
+                if App._auto_match_eligible(item)
+            ],
+            [pending],
+        )
 
     def test_manual_match_uses_only_selected_rows(self):
         selected = SimpleNamespace(
@@ -846,14 +894,23 @@ class SelectionActionTests(unittest.TestCase):
         app = App.__new__(App)
         app._manual_match_active = False
         app.job_total = 0
-        app.selected = lambda: [selected]
+        selected.iid = "selected"
+        unselected.iid = "unselected"
         app.items = [selected, unselected]
+        app.by_iid = {"selected": selected, "unselected": unselected}
+        app._filtered_out = set()
+        app._status_filter = None
+        app.tree = SimpleNamespace(
+            selection=lambda: ("selected",),
+            exists=lambda iid: iid in app.by_iid,
+        )
         app._start_manual_matches = Mock()
 
         app.match_manually()
 
         app._start_manual_matches.assert_called_once_with(
-            [selected], renamed_skipped=0,
+            [selected], renamed_skipped=0, queue_source="selected",
+            view_count=2,
         )
 
     def test_manual_match_allows_a_confirmed_row_to_be_rematched(self):
@@ -863,14 +920,22 @@ class SelectionActionTests(unittest.TestCase):
         app = App.__new__(App)
         app._manual_match_active = False
         app.job_total = 0
-        app.selected = lambda: [confirmed]
+        confirmed.iid = "confirmed"
         app.items = [confirmed]
+        app.by_iid = {"confirmed": confirmed}
+        app._filtered_out = set()
+        app._status_filter = None
+        app.tree = SimpleNamespace(
+            selection=lambda: ("confirmed",),
+            exists=lambda iid: iid in app.by_iid,
+        )
         app._start_manual_matches = Mock()
 
         app.match_manually()
 
         app._start_manual_matches.assert_called_once_with(
-            [confirmed], renamed_skipped=0,
+            [confirmed], renamed_skipped=0, queue_source="selected",
+            view_count=1,
         )
 
     def test_confirmed_row_match_cell_opens_match_flow(self):
@@ -966,13 +1031,16 @@ class MatchVisibilityTests(unittest.TestCase):
         app._filtered_out = set()
         app._review_filter = False
         app._status_filter = None
+        app.deselect = Mock()
+        app._restore_visible_row_order = Mock()
+        app._schedule_status_cells = Mock()
         app.update_summary = Mock()
 
         app.toggle_review_filter()
 
         self.assertTrue(app._review_filter)
-        self.assertEqual(app.tree.rows, ["review", "pending"])
-        self.assertEqual(app._filtered_out, {"ready"})
+        self.assertEqual(app.tree.rows, ["review"])
+        self.assertEqual(app._filtered_out, {"ready", "pending"})
 
         app.toggle_review_filter()
 
@@ -982,9 +1050,15 @@ class MatchVisibilityTests(unittest.TestCase):
 
     def test_starting_matching_restores_all_rows_in_original_order(self):
         items = [
-            SimpleNamespace(iid="first"),
-            SimpleNamespace(iid="second"),
-            SimpleNamespace(iid="third"),
+            SimpleNamespace(
+                iid="first", query="first", orig_path=Path("first"),
+            ),
+            SimpleNamespace(
+                iid="second", query="second", orig_path=Path("second"),
+            ),
+            SimpleNamespace(
+                iid="third", query="third", orig_path=Path("third"),
+            ),
         ]
 
         class Tree:
@@ -1011,6 +1085,7 @@ class MatchVisibilityTests(unittest.TestCase):
         app = App.__new__(App)
         app.items = items
         app.tree = Tree()
+        app.media_mode = SimpleNamespace(get=lambda: "movie")
         app._review_filter = True
         app._filtered_out = {"second"}
         app._refresh_pending_label_style = lambda: None
@@ -1067,6 +1142,8 @@ class ReviewFlaggedTests(unittest.TestCase):
         app._review_filter = False
         app._status_filter = None
         app._filtered_out = set()
+        app._restore_visible_row_order = Mock()
+        app._schedule_status_cells = Mock()
         app.deselect = Mock()
         app._sync_row_visibility = Mock()
         app.update_summary = Mock()

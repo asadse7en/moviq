@@ -41,7 +41,9 @@ TV_SEASON_MARKER_RE = re.compile(
 )
 TV_GENERIC_TITLES = {
     "episode", "episodes", "season", "series", "show", "the show",
-    "show name", "example",
+    "show name", "example", "download", "downloads", "folder", "library",
+    "media", "movies", "new folder", "shows", "tv", "tv shows", "video",
+    "videos",
 }
 TV_GENERIC_WORDS = {
     "the", "show", "name", "example", "episode", "episodes", "season",
