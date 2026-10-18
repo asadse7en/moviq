@@ -16,24 +16,22 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from PIL import Image, ImageTk
-
-from .. import resource
 from ..core.config import (
     ERROR_LOG_FILE, VIDEO_EXT, remove_legacy_cache_files,
 )
 from ..core.file_ops import (
-    count_videos, is_hidden_path, make_plan, make_tv_plan, perform_plan,
-    rebase, scan_dir, tv_root_for_folder, undo_ops,
+    count_videos, is_hidden_path, make_plan, make_tv_plan, rebase, scan_dir,
+    tv_root_for_folder, undo_ops,
 )
+from ..core.apply import apply_item_plan, build_plans
 from ..core.formatting import (
     MOVIE_DEFAULT_ID, TV_DEFAULT_ID, format_pattern,
 )
 from ..core.matching import (
-    group_match_items, is_confident, normalize_search_title,
-    rank, score, to_choice, to_tv_choice, tv_match_is_applicable,
+    group_match_items, normalize_search_title, score, tv_match_is_applicable,
     tv_score,
 )
+from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
 from ..core.naming import (
     NAMING, parse_name, parse_tv_name,
@@ -43,20 +41,24 @@ from ..core.tmdb import (
     TMDBOperationCache,
 )
 from ..core.show_resolver import (
-    ShowResolver, ShowState,
+    ShowResolver,
 )
 from .design import LANGUAGES, PALETTES
 from .controls import (
-    RoundedButton, SegmentedModeToggle, TableTooltip, ToolTip,
+    TableTooltip,
 )
 from .dialogs import SearchDialog
 from .popups import (
-    MatchProgressPopup, RenameConfirmationDialog, apply_titlebar_theme,
-    ask_yes_no, ask_yes_no_cancel, show_error, show_info, show_warning,
+    MatchProgressPopup, RenameConfirmationDialog, ask_yes_no, show_error,
+    show_info, show_warning,
 )
-from .settings import SettingsStore, SettingsView, resolve_system_theme
+from ..core.settings_store import SettingsStore, resolve_system_theme
+from .settings import SettingsView
 from .table_layout import (
     target_name_display, tv_target_name_display,
+)
+from .main_page import (
+    build_main_page as build_app_main_page,
 )
 
 try:
@@ -67,22 +69,43 @@ except ImportError:
     TkinterDnD = None
     HAVE_DND = False
 
-try:
-    import sv_ttk
-    HAVE_SV = True
-except ImportError:
-    sv_ttk = None
-    HAVE_SV = False
+from .theme import HAVE_SV, apply_theme as apply_app_theme
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
-MAIN_SHORTCUTS = {
-    "<Control-a>": "select_all",
-    "<Control-A>": "select_all",
-    "<Delete>": "remove_selected",
-    "<Control-z>": "undo",
-    "<Control-Z>": "undo",
-    "<Return>": "match_manually",
+CONFIG_FIELDS = {
+    "remember": lambda app: app.remember.get(),
+    "key": lambda app: app.key_var.get().strip(),
+    "theme": lambda app: app.theme_var.get(),
+    "language": lambda app: app.lang_var.get(),
+    "threshold": lambda app: app.threshold_pct(),
+    "auto_match": lambda app: app.auto_match.get(),
+    "confirm_apply": lambda app: app.confirm_apply.get(),
+    "name_template": lambda app: app.name_template.get(),
+    "movie_preset_id": lambda app: app.movie_preset_id.get(),
+    "movie_folder_pattern": lambda app: app.movie_folder_pattern.get(),
+    "movie_file_pattern": lambda app: app.name_template.get(),
+    "movie_create_folder": lambda app: app.movie_folder.get(),
+    "tag_id": lambda app: app.tag_id.get(),
+    "media_mode": lambda app: app.media_mode.get(),
+    "tv_template": lambda app: app.tv_template.get(),
+    "tv_preset_id": lambda app: app.tv_preset_id.get(),
+    "tv_show_folder_pattern": lambda app: app.tv_show_folder_pattern.get(),
+    "tv_season_folder_pattern": lambda app: app.tv_season_folder_pattern.get(),
+    "tv_file_pattern": lambda app: app.tv_template.get(),
+    "tv_create_show_folder": lambda app: app.tv_create_show_folder.get(),
+    "tv_create_season_folder": lambda app: app.tv_create_season_folder.get(),
+    "movie_folder": lambda app: app.movie_folder.get(),
+    "tv_folder": lambda app: app.tv_folder.get(),
+    "rename_subtitles": lambda app: app.rename_subtitles.get(),
+    "library_mode": lambda app: app.library_mode.get(),
+    "movies_library": lambda app: app.movies_library.get(),
+    "tv_library": lambda app: app.tv_library.get(),
+    "window_geometry": lambda app: app._window_geometry(),
+    "window_state": lambda app: (
+        "zoomed" if app.root.state() == "zoomed" else "normal"
+    ),
+    "last_folder": lambda app: app._last_folder,
 }
 ERROR_STATUS_DETAILS = {
     "wrong_mode_movie_in_tv": (
@@ -272,38 +295,8 @@ class App:
     # ---- config ----------------------------------------------------------
     def save_config(self):
         values = {
-            "remember": self.remember.get(),
-            "key": self.key_var.get().strip(),
-            "theme": self.theme_var.get(),
-            "language": self.lang_var.get(),
-            "threshold": self.threshold_pct(),
-            "auto_match": self.auto_match.get(),
-            "confirm_apply": self.confirm_apply.get(),
-            "name_template": self.name_template.get(),
-            "movie_preset_id": self.movie_preset_id.get(),
-            "movie_folder_pattern": self.movie_folder_pattern.get(),
-            "movie_file_pattern": self.name_template.get(),
-            "movie_create_folder": self.movie_folder.get(),
-            "tag_id": self.tag_id.get(),
-            "media_mode": self.media_mode.get(),
-            "tv_template": self.tv_template.get(),
-            "tv_preset_id": self.tv_preset_id.get(),
-            "tv_show_folder_pattern": self.tv_show_folder_pattern.get(),
-            "tv_season_folder_pattern": self.tv_season_folder_pattern.get(),
-            "tv_file_pattern": self.tv_template.get(),
-            "tv_create_show_folder": self.tv_create_show_folder.get(),
-            "tv_create_season_folder": self.tv_create_season_folder.get(),
-            "movie_folder": self.movie_folder.get(),
-            "tv_folder": self.tv_folder.get(),
-            "rename_subtitles": self.rename_subtitles.get(),
-            "library_mode": self.library_mode.get(),
-            "movies_library": self.movies_library.get(),
-            "tv_library": self.tv_library.get(),
-            "window_geometry": self._window_geometry(),
-            "window_state": (
-                "zoomed" if self.root.state() == "zoomed" else "normal"
-            ),
-            "last_folder": self._last_folder,
+            key: read_value(self)
+            for key, read_value in CONFIG_FIELDS.items()
         }
         self.settings_store.update(values)
         self.settings_store.save_now()
@@ -357,235 +350,7 @@ class App:
         )
 
     def apply_theme(self, mode):
-        self.mode, self.pal = mode, PALETTES[mode]
-        pal = self.pal
-        self._status_tooltip.set_theme(
-            pal["card"], pal["fg"], pal["chip_border"],
-        )
-        style = ttk.Style()
-        if HAVE_SV:
-            sv_ttk.set_theme(mode)
-            style.layout("Accent.TButton", style.layout("TButton"))
-        else:
-            style.theme_use("clam")
-            style.configure(".", background=pal["bg"], foreground=pal["fg"],
-                            fieldbackground=pal["card"], bordercolor=pal["btn"],
-                            lightcolor=pal["bg"], darkcolor=pal["bg"],
-                            font="TkDefaultFont")
-            style.configure("TButton", padding=(14, 7), background=pal["btn"],
-                            borderwidth=0, relief="flat")
-            style.map("TButton", background=[("active", pal["btn_hi"])])
-            style.configure("Accent.TButton", background=pal["accent"],
-                            foreground="#ffffff", padding=(20, 8),
-                            font="TkHeadingFont")
-            style.map("Accent.TButton",
-                      background=[("active", pal["accent_hi"])])
-            style.configure("TEntry", padding=6)
-            style.configure("Treeview", background=pal["card"],
-                            fieldbackground=pal["card"], foreground=pal["fg"],
-                            borderwidth=0)
-        style.configure(".", font="TkDefaultFont")
-        for style_name in (
-            "TLabel", "TButton", "TCheckbutton", "TRadiobutton",
-            "TEntry", "TCombobox", "TSpinbox",
-        ):
-            style.configure(style_name, font="TkDefaultFont")
-        if not HAVE_SV:
-            style.configure(
-                "Treeview.Heading", background=pal["btn"],
-                foreground=pal["fg"], relief="flat", padding=(8, 8),
-            )
-            style.map(
-                "Treeview", background=[("selected", pal["accent"])],
-                foreground=[("selected", "#ffffff")],
-            )
-            style.configure(
-                "Horizontal.TProgressbar",
-                background=pal["accent"], troughcolor=pal["btn"],
-                borderwidth=0,
-            )
-        compact = getattr(self, "_toolbar_compact", False)
-        style.configure("TFrame", background=pal["bg"])
-        style.configure(
-            "TLabel", background=pal["bg"], foreground=pal["fg"],
-        )
-        style.configure("Toolbar.TFrame", background=pal["bg"])
-        style.configure(
-            "Toolbar.TButton",
-            background=pal["btn"],
-            foreground=pal["fg"],
-            padding=(3, 5) if compact else (9, 8),
-            borderwidth=0,
-            relief="flat",
-            font="TkDefaultFont",
-        )
-        style.map(
-            "Toolbar.TButton",
-            background=[
-                ("pressed", pal["accent"]),
-                ("active", pal["btn_hi"]),
-            ],
-        )
-        style.configure(
-            "Icon.TButton",
-            background=pal["btn"],
-            foreground=pal["fg"],
-            padding=(7, 6),
-            borderwidth=0,
-            relief="flat",
-        )
-        style.map(
-            "Icon.TButton",
-            background=[("active", pal["btn_hi"])],
-        )
-        style.configure(
-            "ResetColumns.TButton",
-            background=pal["header_bg"],
-            foreground=pal["header_muted"],
-            borderwidth=0,
-            padding=(3, 1),
-            font="TkDefaultFont",
-        )
-        style.map(
-            "ResetColumns.TButton",
-            background=[("active", pal["header_bg"])],
-            foreground=[("active", pal["muted"])],
-        )
-        style.configure(
-            "Table.TFrame",
-            background=pal["border"],
-            bordercolor=pal["border"],
-            lightcolor=pal["border"],
-            darkcolor=pal["border"],
-            borderwidth=1,
-            relief="solid",
-        )
-        style.configure("TableContent.TFrame", background=pal["card"])
-        style.configure("EmptyState.TFrame", background=pal["card"])
-        style.configure(
-            "EmptyTitle.TLabel",
-            background=pal["card"],
-            foreground=pal["fg"],
-            font="TkHeadingFont",
-        )
-        style.configure(
-            "EmptyHint.TLabel",
-            background=pal["card"],
-            foreground=pal["muted"],
-            font="TkDefaultFont",
-        )
-        style.configure(
-            "Stats.TLabel",
-            background=pal["bg"],
-            foreground=pal["fg"],
-            font="TkDefaultFont",
-        )
-        style.configure(
-            "Stats.Ready.TLabel",
-            background=pal["bg"],
-            foreground=pal["accent"],
-            font="TkDefaultFont",
-        )
-        style.configure(
-            "PendingCount.TLabel",
-            background=pal["bg"],
-            foreground=pal["accent"],
-            font="TkDefaultFont",
-        )
-        style.configure(
-            "Treeview",
-            background=pal["bg"],
-            fieldbackground=pal["bg"],
-            foreground=pal["rowfg"],
-            borderwidth=0,
-            font="TkTextFont",
-            rowheight=tkfont.nametofont("TkTextFont").metrics("linespace") + 12,
-            padding=(12, 2),
-            indent=0,
-        )
-        style.map(
-            "Treeview",
-            background=[("selected", pal.get("selection", pal["zone_hi"]))],
-            foreground=[("selected", pal["fg"])],
-        )
-        style.configure(
-            "Accent.TButton",
-            background=pal["accent"],
-            foreground="#ffffff",
-            padding=(20, 8),
-            borderwidth=0,
-            font="TkHeadingFont",
-        )
-        style.map(
-            "Accent.TButton",
-            background=[
-                ("disabled", pal["btn"]),
-                ("active", pal["accent_hi"]),
-                ("!disabled", pal["accent"]),
-            ],
-            foreground=[
-                ("disabled", pal["muted"]),
-                ("active", "#ffffff"),
-                ("!disabled", "#ffffff"),
-            ],
-        )
-        style.configure("Treeview.Heading", font="TkHeadingFont",
-                        padding=(14, 10), background=pal["card"],
-                        foreground=pal["fg"], borderwidth=0)
-        style.configure(
-            "Title.TLabel", font="MoviqTitleFont",
-            background=pal["header_bg"], foreground=pal["fg"],
-        )
-        style.configure(
-            "HeaderSubtitle.TLabel",
-            font="TkDefaultFont",
-            foreground=pal["header_muted"],
-            background=pal["header_bg"],
-        )
-        style.configure("Section.TLabel", font="TkHeadingFont",
-                        foreground=pal["accent"])
-        style.configure("Muted.TLabel", foreground=pal["muted"])
-        style.configure(
-            "MatchedCount.TLabel",
-            foreground=pal["status_colors"]["auto"][0],
-            background=pal["bg"],
-        )
-        style.configure(
-            "PendingCount.TLabel",
-            foreground=pal["accent"],
-            background=pal["bg"],
-        )
-        style.configure(
-            "PendingCount.Active.TLabel",
-            foreground=pal["accent_hi"],
-            background=pal["bg"],
-            font="TkHeadingFont",
-        )
-        style.configure(
-            "DoneCount.TLabel",
-            foreground=pal.get("done", pal["muted"]),
-            background=pal["bg"],
-        )
-        style.configure("Link.TLabel", foreground=pal["accent"],
-                        font="TkDefaultFont")
-        style.configure("Divider.TSeparator", background=pal["border"])
-        self.root.configure(bg=pal["bg"])
-        style.configure("Header.TFrame", background=pal["header_bg"])
-        style.configure("Toolbar.TFrame", background=pal["header_bg"])
-        style.configure(
-            "HeaderDivider.TSeparator", background=pal["header_border"],
-        )
-        self.media_mode_selector.set_theme(
-            background=pal["header_bg"], track=pal["header_bg"],
-            border=pal["header_accent"], active=pal["header_accent"],
-            foreground=pal["fg"],
-            muted=pal["header_muted"],
-            accent_foreground=pal["accent_text"],
-            canvas_background=pal["header_bg"],
-        )
-        self.media_mode_selector.set_mode(self.media_mode.get(), animate=False)
-        self._apply_header_theme()
-        apply_titlebar_theme(self.root, mode == "dark")
+        return apply_app_theme(self, mode)
 
     def _poll_system_theme(self):
         self._system_theme_after = None
@@ -804,325 +569,7 @@ class App:
         self.show_page("main")
 
     def build_main_page(self, page):
-        self.match_btn_var = tk.StringVar(value="Auto Match")
-        self.manual_match_btn_var = tk.StringVar(value="Manual Match")
-        self.apply_btn_var = tk.StringVar(value="Rename All")
-        head = ttk.Frame(page, style="Header.TFrame")
-        head.pack(fill="x", pady=(2, 12))
-        logo = tk.Canvas(
-            head, width=round(40 * self.UI_SCALE),
-            height=round(40 * self.UI_SCALE),
-            background=self.pal["header_bg"],
-            highlightthickness=0, bd=0, takefocus=0,
-        )
-        logo.ui_scale = self.UI_SCALE
-        self.logo_canvas = logo
-        logo.pack(side="left")
-        logo_size = round(40 * self.UI_SCALE)
-        with Image.open(resource("assets/moviq-icon.png")) as icon:
-            resized_icon = icon.resize(
-                (logo_size, logo_size), Image.Resampling.LANCZOS,
-            )
-            self.logo_image = ImageTk.PhotoImage(resized_icon)
-        logo.create_image(
-            round(20 * self.UI_SCALE), round(20 * self.UI_SCALE),
-            image=self.logo_image,
-        )
-        titles = ttk.Frame(head, style="Header.TFrame")
-        titles.pack(side="left", padx=(12, 0), pady=1)
-        ttk.Label(titles, text="Moviq",
-                  style="Title.TLabel").pack(anchor="w")
-        ttk.Label(titles, style="HeaderSubtitle.TLabel",
-                  text="Match, review, and organize your media files."
-                  ).pack(anchor="w", pady=(2, 0))
-        header_actions = ttk.Frame(head, style="Header.TFrame")
-        header_actions.pack(side="right", padx=(12, 0))
-        self.rename_all_button = RoundedButton(
-            header_actions,
-            self.apply_btn_var, self.apply, font="TkHeadingFont",
-            ui_scale=self.UI_SCALE,
-            bold=True, variant="accent", padx=18, pady=9, radius=6,
-            background=self.pal["header_bg"],
-        )
-        self.rename_all_button.pack()
-        ttk.Separator(
-            page, orient="horizontal", style="HeaderDivider.TSeparator",
-        ).pack(fill="x", pady=(0, 10))
-
-        bar = ttk.Frame(page, style="Toolbar.TFrame")
-        bar.pack(fill="x", pady=(0, 8))
-        bar.columnconfigure(0, weight=1)
-        left_controls = ttk.Frame(bar, style="Toolbar.TFrame")
-        left_controls.grid(row=0, column=0, sticky="w")
-        self.add_files_button = RoundedButton(
-            left_controls, tk.StringVar(value="Add files"), self.add_files,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.add_files_button.pack(side="left", padx=(0, 6))
-        self.add_folder_button = RoundedButton(
-            left_controls, tk.StringVar(value="Add folder"), self.add_folder,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.add_folder_button.pack(side="left", padx=(0, 8))
-        self.media_mode_selector = SegmentedModeToggle(
-            left_controls,
-            self.media_mode.get(),
-            self.switch_media_mode,
-            font="TkDefaultFont",
-            background=self.pal["header_bg"],
-            ui_scale=self.UI_SCALE,
-        )
-        self.media_mode_selector.pack(side="left")
-        self.update_media_mode_selector()
-
-        match_actions = ttk.Frame(bar, style="Toolbar.TFrame")
-        self.match_actions = match_actions
-        match_actions.grid(row=0, column=1, sticky="e")
-        self.auto_match_button = RoundedButton(
-            match_actions, self.match_btn_var, self.match_run,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.auto_match_button.pack(side="left", padx=(0, 6))
-        self.manual_match_button = RoundedButton(
-            match_actions, self.manual_match_btn_var, self.match_manually,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.manual_match_button.pack(side="left", padx=(0, 8))
-        self.undo_button = RoundedButton(
-            match_actions, tk.StringVar(value="Undo"), self.undo,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.undo_button.pack(side="left", padx=(0, 6))
-        self.clear_list_button = RoundedButton(
-            match_actions, tk.StringVar(value="Clear"), self.clear,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.clear_list_button.pack(side="left", padx=(0, 6))
-        settings_button = RoundedButton(
-            match_actions, tk.StringVar(value="\u2699\ufe0f"),
-            lambda: self.show_page("settings"),             font="TkDefaultFont",
-            ui_scale=self.UI_SCALE, padx=10,
-            background=self.pal["header_bg"],
-        )
-        self.settings_button = settings_button
-        settings_button.pack(side="left")
-        ToolTip(
-            settings_button, "Settings", self.pal["card"], self.pal["fg"],
-        )
-        self.toolbar_buttons = (
-            self.add_files_button, self.add_folder_button,
-            self.auto_match_button, self.manual_match_button,
-            self.undo_button, self.clear_list_button,
-        )
-        for widget, text in (
-            (self.add_files_button, "Add files"),
-            (self.add_folder_button, "Add folder"),
-            (self.auto_match_button, "Automatically match files"),
-            (
-                self.manual_match_button,
-                "Manually match selected files, or all files if none are selected",
-            ),
-            (self.undo_button, "Undo"),
-            (self.clear_list_button, "Clear the file list"),
-        ):
-            tooltip = ToolTip(widget, text, self.pal["card"], self.pal["fg"])
-            if widget is self.undo_button:
-                self._undo_tooltip = tooltip
-
-        self.filter_row = ttk.Frame(page, style="Toolbar.TFrame")
-        self.filter_row.pack(fill="x", pady=(6, 12))
-        self.filter_vars = {
-            key: tk.StringVar(value=f"{label} 0")
-            for key, label in (
-                ("all", "All"), ("ready", "Ready"),
-                ("review", "Review"), ("nomatch", "No match"),
-                ("done", "Done"),
-            )
-        }
-        self.filter_chips = {}
-        for key in self.filter_vars:
-            base_color = {
-                "all": self.pal["fg"],
-                "ready": self.pal["status_text"]["matched"],
-                "review": self.pal["status_text"]["review"],
-                "nomatch": self.pal["status_text"]["nomatch"],
-                "done": self.pal["status_text"]["done"],
-            }[key]
-            chip = RoundedButton(
-                self.filter_row, self.filter_vars[key],
-                lambda selected=key: self.set_status_filter(selected),
-                font="TkDefaultFont", padx=9, pady=6, radius=8,
-                ui_scale=self.UI_SCALE,
-                background=self.pal["header_bg"],
-            )
-            chip.filter_key = key
-            chip.filter_color = base_color
-            chip.pack(side="left", padx=(0, 6))
-            self.filter_chips[key] = chip
-        self.reset_columns_button = ttk.Button(
-            self.filter_row, text="Reset columns",
-            command=self._reset_table_widths,
-            style="ResetColumns.TButton",
-        )
-        self.reset_columns_button.pack(side="right")
-        self.reset_columns_button.pack_forget()
-        self.root.bind("<Configure>", self._update_toolbar_responsive, add="+")
-
-        # Bottom bars are packed BEFORE the list so they are never pushed
-        # out of view when the window is small.
-        sb = ttk.Frame(page)
-        sb.pack(side="bottom", fill="x", pady=(2, 0))
-        self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(sb, textvariable=self.status_var, style="Muted.TLabel"
-                  ).pack(side="left")
-
-        self.detail_var = tk.StringVar(value="")
-        ttk.Label(
-            page, textvariable=self.detail_var, style="Muted.TLabel",
-            wraplength=1100, justify="left",
-        ).pack(side="bottom", fill="x", pady=(8, 6))
-
-        frame = ttk.Frame(page, style="Table.TFrame", padding=1)
-        frame.pack(fill="both", expand=True)
-        table_content = ttk.Frame(frame, style="TableContent.TFrame")
-        table_content.pack(fill="both", expand=True)
-        cols = ("status", "new")
-        self.tree = ttk.Treeview(table_content, columns=cols, show=("tree", "headings"),
-                                 selectmode="extended")
-        self.status_column_width = self._status_column_width()
-        self.table_min_widths = {
-            "#0": 178, "status": self.status_column_width, "new": 150,
-        }
-        self._table_widths = {"#0": 240, "status": 100, "new": 150}
-        self._table_columns_initialized = False
-        self._table_columns_customized = False
-        self.tree.heading(
-            "#0", text="\u2610  Original name", anchor="w",
-        )
-        self.tree.column("#0", width=240, minwidth=178, anchor="w",
-                         stretch=False)
-        self._table_widths["status"] = self.status_column_width
-        for c, text, w, anc in (("status", "Status", self.status_column_width, "w"),
-                                ("new", "New Name", 150, "w")):
-            self.tree.heading(c, text=text, anchor=anc)
-            self.tree.column(
-                c, width=w, minwidth=self.table_min_widths[c],
-                anchor=anc, stretch=False,
-            )
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        table_content.rowconfigure(0, weight=1)
-        table_content.columnconfigure(0, weight=1)
-        self.tree.bind("<Configure>", self.fit_table_columns, add="+")
-        self.tree.bind("<Configure>", self._schedule_status_cells, add="+")
-        self.tree.bind(
-            "<ButtonPress-1>", self._hide_tree_tooltip, add="+",
-        )
-        self.tree.bind("<ButtonPress-1>", self._begin_table_resize, add="+")
-        self.tree.bind(
-            "<ButtonRelease-1>",
-            lambda _event: self.root.after_idle(self._finish_table_resize),
-            add="+",
-        )
-        self.tree.bind("<Motion>", self.on_tree_hover, add="+")
-        self.tree.bind("<Leave>", self.clear_tree_hover, add="+")
-        self.tree.bind("<MouseWheel>", self.on_mousewheel, add="+")
-        self.tree.bind("<Button-4>", lambda _event: self.scroll_rows(-1), add="+")
-        self.tree.bind("<Button-5>", lambda _event: self.scroll_rows(1), add="+")
-        self.tree.bind("<KeyPress>", self._hide_tooltip_on_scroll_key, add="+")
-        self._status_cell_labels = {}
-        self.empty_state = ttk.Frame(
-            table_content, style="EmptyState.TFrame", padding=(24, 18),
-        )
-        self.empty_icon = tk.Canvas(
-            self.empty_state, width=64, height=54,
-            bg=self.pal["card"], highlightthickness=0,
-        )
-        self.empty_icon.pack(pady=(0, 10))
-        self.empty_icon.create_line(
-            10, 17, 10, 12, 30, 12, 37, 19, 53, 19, 53, 41,
-            10, 41, 10, 17,
-            fill=self.pal["muted"], width=3, capstyle="round",
-            joinstyle="round",
-        )
-        self.empty_icon.create_oval(
-            38, 30, 58, 50, fill=self.pal["card"],
-            outline=self.pal["accent"], width=2,
-        )
-        self.empty_icon.create_line(
-            48, 34, 48, 46, fill=self.pal["accent"], width=2,
-            capstyle="round",
-        )
-        self.empty_icon.create_line(
-            42, 40, 54, 40, fill=self.pal["accent"], width=2,
-            capstyle="round",
-        )
-        self.empty_title_var = tk.StringVar(value="No files added yet")
-        ttk.Label(
-            self.empty_state, textvariable=self.empty_title_var,
-            style="EmptyTitle.TLabel", anchor="center",
-        ).pack(pady=(0, 6))
-        self.empty_lbl = ttk.Label(
-            self.empty_state,
-            text="Click ‘Add Files’ or ‘Add Folder’ or Drag & Drop files here "
-                 "to get started.",
-            style="EmptyHint.TLabel", anchor="center", justify="center",
-            wraplength=520,
-        )
-        self.empty_lbl.pack()
-        self.empty_state.place(relx=0.5, rely=0.5, anchor="center")
-
-        self.tree.bind("<Button-1>", self.on_click, add="+")
-        self.tree.bind("<Double-1>", self.on_double)
-        self.tree.bind("<<TreeviewSelect>>", self.on_select)
-        self.root.bind("<Escape>", lambda _e: self.deselect())
-        for sequence, action in MAIN_SHORTCUTS.items():
-            self.root.bind_all(
-                sequence,
-                lambda event, target=action: self._run_main_shortcut(
-                    event, target,
-                ),
-                add="+",
-            )
-        for sequence, action in (
-            ("<Control-y>", "redo"),
-            ("<Control-Y>", "redo"),
-            ("<Control-Shift-z>", "redo"),
-            ("<Control-Shift-Z>", "redo"),
-        ):
-            self.root.bind_all(
-                sequence,
-                lambda event, target=action: self._run_main_shortcut(
-                    event, target,
-                ),
-                add="+",
-            )
-        self._update_undo_button()
-        self.tree.bind("<Motion>", self._schedule_tree_tooltip, add="+")
-        self.tree.bind("<Leave>", self._hide_tree_tooltip, add="+")
-        self.tree.bind("<Button-3>", self.show_menu, add="+")
-        for b in ("<Button-2>", "<Control-Button-1>"):
-            self.tree.bind(b, self.show_menu, add="+")
-        self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(
-            label="Show file in Explorer", command=self.open_selected_file,
-        )
-        self.menu.add_separator()
-        self.menu.add_command(label="Search / fix match...", command=self.fix_selected)
-        self.menu.add_command(label="Accept this match", command=self.accept_selected)
-        self.menu.add_command(label="Re-match automatically", command=self.rematch_selected)
-        self.menu.add_command(label="Apply to selected now", command=self.apply)
-        self.menu.add_separator()
-        self.menu.add_command(label="Remove from list", command=self.remove_selected)
-        self.column_menu = tk.Menu(self.root, tearoff=0)
-        self.column_menu.add_command(
-            label="Reset column widths", command=self._reset_table_widths,
-        )
+        return build_app_main_page(self, page)
 
     def fit_table_columns(self, _event=None):
         if not hasattr(self, "_table_widths"):
@@ -1763,6 +1210,7 @@ class App:
             if not self.tree.exists(item.iid):
                 continue
             self._sync_row_visibility(item)
+        self._restore_visible_row_order()
         self._refresh_filter_chip_styles()
         self.update_summary()
 
@@ -2671,18 +2119,6 @@ class App:
     def worker(self):
         tmdb = None
 
-        def get_season(show_id, season_number):
-            return tmdb.season(show_id, season_number) or {}
-
-        def get_season_episode(show_id, season_number, episode_number):
-            season = get_season(show_id, season_number)
-            for episode in season.get("episodes") or []:
-                if episode.get("episode_number") == episode_number:
-                    episode = dict(episode)
-                    episode.setdefault("season_number", season_number)
-                    return episode
-            return None
-
         while True:
             job = self.jobs.get()
             if job is None:
@@ -2712,147 +2148,14 @@ class App:
                 first_item = items[0]
                 search_query = normalize_search_title(first_item.query)
                 if first_item.media_type == "tv":
-                    results = []
-                    for item in items:
-                        resolved = self.show_resolver.resolve_show(
-                            item.query, item.year, operation_cache,
-                        )
-                        item.show_result = resolved
-                        if resolved.state == ShowState.NOT_FOUND:
-                            results.append(("nomatch", None, ""))
-                            continue
-                        if resolved.state == ShowState.ERROR:
-                            results.append((
-                                "error", None,
-                                resolved.error or "TV show lookup failed.",
-                            ))
-                            continue
-                        show = dict(resolved.candidate or {})
-                        show.update({
-                            "id": resolved.tmdb_id,
-                            "name": resolved.name,
-                            "year": resolved.year,
-                        })
-                        show_id = resolved.tmdb_id
-                        season_number = item.season_number
-                        episode_numbers = item.episode_numbers
-                        absolute_needed = not item.season_was_explicit
-                        if not absolute_needed:
-                            season_data = get_season(
-                                show_id, season_number,
-                            )
-                            absolute_needed = (
-                                item.episode_number
-                                > len(season_data.get("episodes") or [])
-                            )
-                        episodes = []
-                        if absolute_needed:
-                            episodes = [
-                                tmdb.absolute_episode(show_id, number)
-                                for number in episode_numbers
-                            ]
-                            mapped = (
-                                all(episodes)
-                                and len({
-                                    episode.get("season_number")
-                                    for episode in episodes
-                                }) == 1
-                                and all(
-                                    isinstance(
-                                        episode.get("episode_number"), int,
-                                    )
-                                    for episode in episodes
-                                )
-                                and all(
-                                    episodes[index]["episode_number"]
-                                    == episodes[0]["episode_number"] + index
-                                    for index in range(len(episodes))
-                                )
-                            )
-                            if not mapped:
-                                choice = to_tv_choice(
-                                    show, None, None,
-                                )
-                                results.append((
-                                    "review", choice, "", "absolute",
-                                ))
-                                continue
-                            season_number = episodes[0]["season_number"]
-                            mapped_numbers = [
-                                episode["episode_number"]
-                                for episode in episodes
-                            ]
-                        else:
-                            mapped_numbers = list(episode_numbers)
-                            episodes = [
-                                get_season_episode(
-                                    show_id, season_number, number,
-                                )
-                                for number in mapped_numbers
-                            ]
-                        if not all(episodes):
-                            episode_title = None
-                        else:
-                            episode_titles = [
-                                episode.get("name") or ""
-                                for episode in episodes
-                            ]
-                            episode_title = (
-                                " & ".join(episode_titles)
-                                if all(episode_titles) else None
-                            )
-                        episode_number = mapped_numbers[0]
-                        episode_end_number = (
-                            mapped_numbers[-1]
-                            if len(mapped_numbers) > 1 else None
-                        )
-                        choice = to_tv_choice(
-                            show, season_number, episode_number,
-                            episode_title, episode_end_number,
-                        )
-                        confident = resolved.confidence >= thr
-                        status = (
-                            "auto" if confident and episode_title else "review"
-                        )
-                        error = "" if episode_title else (
-                            "TMDB episode title unavailable; review this "
-                            "episode before renaming."
-                        )
-                        if not confident:
-                            error = ""
-                        review_reason = (
-                            self._review_reason(
-                                choice, item.query, item.year, [choice], thr,
-                                True,
-                            )
-                        )
-                        results.append((
-                            status, choice, error, review_reason,
-                        ))
-                else:
-                    search_results = tmdb.search(
-                        search_query, first_item.year,
+                    results = match_tv_items(
+                        tmdb, self.show_resolver, items, operation_cache,
+                        thr, self._review_reason,
                     )
-                    results = []
-                    for item in items:
-                        res = rank(
-                            search_results, item.query,
-                        )
-                        if not res:
-                            results.append(("nomatch", None, ""))
-                            continue
-                        confident = is_confident(
-                            res, item.query, item.year, thr,
-                        )
-                        status = "auto" if confident else "review"
-                        choice = to_choice(res[0])
-                        review_reason = (
-                            self._review_reason(
-                                res[0], item.query, item.year, res, thr,
-                                False,
-                            )
-                        )
-                        results.append((status, choice, "", review_reason))
+                else:
+                    results = match_movie_items(
+                        tmdb, items, thr, search_query,
+                    )
             except TMDBAuthError as error:
                 cancel_event.set()
                 self.results.put((
@@ -3682,16 +2985,48 @@ class App:
                 show_warning(self, "Library folder required", str(error))
                 return
 
-        plans = {}
         try:
-            for item in todo:
-                plans[id(item)] = self.plan_for(item)
+            plans = build_plans(todo, self.plan_for)
         except (OSError, ValueError, KeyError) as error:
             show_error(
                 self, "Could not build rename plan",
                 f"Moviq could not create the rename plan: {error}",
             )
             return
+
+        movie_destinations = {}
+        reserved_destinations = {
+            self._normalized_path(plans[id(item)].dest)
+            for item in todo
+        }
+        for item in todo:
+            if item.media_type == "tv":
+                continue
+            plan = plans[id(item)]
+            key = (
+                self._normalized_path(plan.dest_dir),
+                os.path.normcase(plan.new_stem),
+            )
+            movie_destinations.setdefault(key, []).append(item)
+        for duplicates in movie_destinations.values():
+            if len(duplicates) < 2:
+                continue
+            for item in duplicates:
+                plan = plans[id(item)]
+                number = 1
+                while True:
+                    numbered_stem = f"{plan.new_stem} ({number})"
+                    destination = plan.dest_dir / (
+                        numbered_stem + item.path.suffix
+                    )
+                    key = self._normalized_path(destination)
+                    if key in reserved_destinations or destination.exists():
+                        number += 1
+                        continue
+                    plan.new_stem = numbered_stem
+                    plan.dest = destination
+                    reserved_destinations.add(key)
+                    break
 
         destinations = {}
         conflicts_by_item = {}
@@ -3701,12 +3036,21 @@ class App:
             destinations.setdefault(key, []).append(item)
         for colliding in destinations.values():
             destination = plans[id(colliding[0])].dest
-            same_target = len(colliding) > 1
+            target_path = self._normalized_path(destination)
+            destination_is_source = any(
+                self._normalized_path(item.path) == target_path
+                for item in colliding
+            )
+            keep_item = next(
+                (
+                    item for item in colliding
+                    if self._normalized_path(item.path) == target_path
+                ),
+                colliding[0],
+            )
             for item in colliding:
-                if same_target or (
-                    destination.exists()
-                    and self._normalized_path(destination)
-                    != self._normalized_path(item.path)
+                if item is not keep_item or (
+                    destination.exists() and not destination_is_source
                 ):
                     conflicts_by_item[id(item)] = destination
         skipped_count = len(scope) - len(todo)
@@ -3760,21 +3104,18 @@ class App:
 
         for it in todo:
             plan = plans[id(it)]
-            ops_start = len(ops)
-            try:
-                new_path = perform_plan(
-                    it.path, plan, ops,
-                    rename_subtitles=self.rename_subtitles.get(),
-                )
-            except Exception as e:
-                apply_folder_renames(ops_start)
+            new_path, error = apply_item_plan(
+                it, plan, ops, self.rename_subtitles.get(),
+                apply_folder_renames,
+            )
+            if error is not None:
+                e = error
                 it.error_code = self._error_code_for_exception(e)
                 it.error = self._safe_exception_message(e)
                 it.status = "error"
                 errors.append(f"{it.path.name}: {e}")
                 self.refresh_row(it)
                 continue
-            apply_folder_renames(ops_start)
             it.path, it.status, it.error = new_path, "done", ""
             it.error_code = None
             pending_show = getattr(it, "_pending_manual_show", None)

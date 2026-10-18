@@ -14,8 +14,8 @@ import requests
 from .config import API_BASE
 from .tmdb_cache import get_cache
 
-MAX_WORKERS = 5
-MAX_REQUEST_RATE = 15
+MAX_WORKERS = 8
+MAX_REQUEST_RATE = 20
 MAX_RETRIES = 3
 REQUEST_TIMEOUT = (5, 15)
 _SESSION = requests.Session()

@@ -61,6 +61,18 @@ _TOKEN_RE = re.compile(
     r"\{(title|year|id|season(?::00|:02d)?|episode(?::00|:02d)?|episode_title)\}",
 )
 _INVALID_COMPONENT_CHARS = re.compile(r'[\\/:*?"<>|]')
+_WINDOWS_RESERVED_NAME_RE = re.compile(
+    r"(?i)(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])",
+)
+
+
+def _avoid_windows_reserved_name(name):
+    first_part = name.split(".", 1)[0].rstrip(" ")
+    if _WINDOWS_RESERVED_NAME_RE.fullmatch(first_part):
+        return (
+            name[:len(first_part)] + "_" + name[len(first_part):]
+        )
+    return name
 
 
 def format_component(pattern, values):
@@ -82,7 +94,7 @@ def format_component(pattern, values):
     result = _TOKEN_RE.sub(replace, pattern)
     result = _INVALID_COMPONENT_CHARS.sub("", result)
     result = re.sub(r" {2,}", " ", result)
-    return result.strip().rstrip(". ")
+    return _avoid_windows_reserved_name(result.strip().rstrip(". "))
 
 
 def _value_for(token, values):

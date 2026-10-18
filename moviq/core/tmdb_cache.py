@@ -8,9 +8,9 @@ from pathlib import Path
 
 from .config import TMDB_CACHE_FILE
 
-CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
+CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 FAILURE_TTL_SECONDS = 60 * 60
-MAX_CACHE_ENTRIES = 1000
+MAX_CACHE_ENTRIES = 20000
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class TMDBCache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._clock = clock
         self._lock = threading.RLock()
+        self._writes_since_eviction = 0
         self._connection = sqlite3.connect(
             self.path, timeout=5, check_same_thread=False,
         )
@@ -35,6 +36,12 @@ class TMDBCache:
                 ttl_seconds INTEGER NOT NULL,
                 response_json TEXT NOT NULL
             )
+            """,
+        )
+        self._connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tmdb_cache_timestamp
+            ON tmdb_cache(timestamp)
             """,
         )
         self._connection.commit()
@@ -128,17 +135,20 @@ class TMDBCache:
                 """,
                 (key, path, int(self._clock()), ttl_seconds, response_json),
             )
-            self._connection.execute(
-                """
-                DELETE FROM tmdb_cache
-                WHERE cache_key IN (
-                    SELECT cache_key FROM tmdb_cache
-                    ORDER BY timestamp DESC
-                    LIMIT -1 OFFSET ?
+            self._writes_since_eviction += 1
+            if self._writes_since_eviction >= 100:
+                self._connection.execute(
+                    """
+                    DELETE FROM tmdb_cache
+                    WHERE cache_key IN (
+                        SELECT cache_key FROM tmdb_cache
+                        ORDER BY timestamp DESC
+                        LIMIT -1 OFFSET ?
+                    )
+                    """,
+                    (MAX_CACHE_ENTRIES,),
                 )
-                """,
-                (MAX_CACHE_ENTRIES,),
-            )
+                self._writes_since_eviction = 0
             self._connection.commit()
 
     def purge_expired(self):
@@ -147,6 +157,12 @@ class TMDBCache:
                 "DELETE FROM tmdb_cache WHERE timestamp + ttl_seconds <= ?",
                 (self._clock(),),
             )
+            self._connection.commit()
+            return cursor.rowcount
+
+    def clear(self):
+        with self._lock:
+            cursor = self._connection.execute("DELETE FROM tmdb_cache")
             self._connection.commit()
             return cursor.rowcount
 
@@ -169,8 +185,6 @@ def get_cache():
         if _cache_initialization_failed:
             return None
         try:
-            from .config import USER_DATA_DIR
-
             cache = TMDBCache(TMDB_CACHE_FILE)
             cache.purge_expired()
             _cache = cache
@@ -181,3 +195,10 @@ def get_cache():
             log.warning("TMDB response cache is unavailable: %s", error)
             return None
         return _cache
+
+
+def clear_tmdb_cache():
+    cache = get_cache()
+    if cache is None:
+        raise RuntimeError("TMDB response cache is unavailable.")
+    return cache.clear()

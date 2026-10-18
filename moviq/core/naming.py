@@ -2,6 +2,8 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from .formatting import _avoid_windows_reserved_name
+
 
 YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
 FILE_NUMBER_RE = re.compile(r"^\s*\d{1,3}\s+-\s+")
@@ -39,7 +41,9 @@ TV_SEASON_MARKER_RE = re.compile(
 )
 TV_GENERIC_TITLES = {
     "episode", "episodes", "season", "series", "show", "the show",
-    "show name", "example",
+    "show name", "example", "download", "downloads", "folder", "library",
+    "media", "movies", "new folder", "shows", "tv", "tv shows", "video",
+    "videos",
 }
 TV_GENERIC_WORDS = {
     "the", "show", "name", "example", "episode", "episodes", "season",
@@ -291,7 +295,8 @@ def parse_tv_episode_title(stem):
 
 def sanitize(name):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name)
-    return re.sub(r"\s+", " ", name).strip(" .")
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    return _avoid_windows_reserved_name(name)
 
 
 def folder_name_for(choice):

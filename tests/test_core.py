@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from moviq import __version__
 from moviq.core.file_ops import (
     is_hidden_path, make_plan, make_tv_plan, perform_plan, scan_dir,
     tv_root_for_folder, undo_ops,
@@ -23,8 +24,8 @@ from moviq.core.naming import (
     folder_name_for, parse_name, parse_tv_episode, parse_tv_episode_title,
     tv_episode_name_for,
 )
+from moviq.core.show_resolver import ShowResult, ShowState
 from moviq.core.tmdb import TMDB, TMDBCancelled
-from moviq.ui.app import to_choice as app_to_choice
 from moviq.ui.dialogs import SearchDialog, _match_dialog_sizes
 from moviq.ui.table_layout import (
     fit_column_widths, folder_and_file, source_path_display,
@@ -297,7 +298,6 @@ class MatchingTests(unittest.TestCase):
             score(to_choice(ranked[0]), "The Matrix"),
             score(ranked[0], "The Matrix"),
         )
-        self.assertIs(app_to_choice, to_choice)
         self.assertEqual(
             to_choice({
                 "id": 1,
@@ -333,7 +333,7 @@ class MatchingTests(unittest.TestCase):
             **choice, "season_number": 1, "episode_number": 1,
             "episode_title": "Pilot",
         }))
-        self.assertTrue(tv_match_is_applicable("formatted", {
+        self.assertTrue(tv_match_is_applicable("no_change", {
             **choice, "season_number": 1, "episode_number": 1,
             "episode_title": "Pilot",
         }))
@@ -852,7 +852,7 @@ class SearchDialogInputTests(unittest.TestCase):
 
         get.assert_called_once_with(
             "https://image.tmdb.org/t/p/w185/poster.jpg",
-            headers={"User-Agent": "Moviq/0.1"},
+            headers={"User-Agent": f"Moviq/{__version__}"},
             timeout=12,
         )
         response.raise_for_status.assert_called_once_with()
@@ -913,6 +913,7 @@ class SearchDialogInputTests(unittest.TestCase):
         self.assertEqual(dialog._result_widgets, [(card, title)])
 
     def test_current_match_similarity_uses_the_filename_title(self):
+        current_match_var = SimpleNamespace(value="")
         item = Item(
             Path("The.Movie [Directors Cut] 2019.mkv"), Path("Movies"),
         )
@@ -923,6 +924,9 @@ class SearchDialogInputTests(unittest.TestCase):
         dialog = SimpleNamespace(
             item=item,
             is_tv=False,
+            current_match_var=SimpleNamespace(
+                set=lambda value: setattr(current_match_var, "value", value),
+            ),
             file_var=SimpleNamespace(set=lambda value: setattr(
                 dialog.file_var, "value", value,
             )),
@@ -931,7 +935,7 @@ class SearchDialogInputTests(unittest.TestCase):
 
         SearchDialog._display_current_match(dialog)
 
-        self.assertIn("(0%)", dialog.file_var.value)
+        self.assertIn("0%", current_match_var.value)
 
     def test_match_details_score_against_the_filename_title(self):
         class FakeVar:
@@ -982,6 +986,7 @@ class SearchDialogInputTests(unittest.TestCase):
         dialog = SimpleNamespace(
             _search_generation=3,
             is_tv=False,
+            item=SimpleNamespace(match=None),
             results=[],
             result_count_var=FakeVar(),
             search_status_var=FakeVar(),
@@ -1046,8 +1051,26 @@ class SearchDialogInputTests(unittest.TestCase):
 
         dialog = SimpleNamespace(
             tmdb=FakeTMDB(),
+            app=SimpleNamespace(
+                resolve_show=lambda title, _year, _cache: (
+                    ShowResult(ShowState.NOT_FOUND)
+                    if title == "Pilot"
+                    else ShowResult(
+                        ShowState.RESOLVED,
+                        1396,
+                        "Breaking Bad",
+                        2008,
+                        candidate={
+                            "id": 1396,
+                            "name": "Breaking Bad",
+                            "first_air_date": "2008-01-20",
+                        },
+                    )
+                ),
+            ),
             item=item,
             _result_queue=queue.Queue(),
+            operation_cache=None,
         )
         dialog._season_episode = lambda show_id: (
             SearchDialog._season_episode(dialog, show_id)
@@ -1111,6 +1134,7 @@ class SearchDialogInputTests(unittest.TestCase):
                 query="Lanterns",
                 season_number=1,
                 episode_number=4,
+                episode_end_number=None,
             ),
             is_tv=True,
             details_title_var=FakeVar(),
@@ -1144,6 +1168,7 @@ class SearchDialogInputTests(unittest.TestCase):
             season_number=1,
             episode_number=4,
             episode_title="Cancer Man",
+            episode_end_number=None,
         )
         saved = []
         closed = []
@@ -1153,15 +1178,18 @@ class SearchDialogInputTests(unittest.TestCase):
             is_tv=True,
             item=item,
             app=SimpleNamespace(
-                set_match=lambda *args: saved.append(args),
+                set_match=lambda *args, **kwargs: saved.append(
+                    (args, kwargs),
+                ),
             ),
             _close=lambda outcome: closed.append(outcome),
         )
 
         SearchDialog.update_match(dialog)
 
-        self.assertEqual(saved[0][2], "manual")
-        self.assertEqual(saved[0][1]["episode_title"], "Cancer Man")
+        self.assertEqual(saved[0][0][2], "manual")
+        self.assertEqual(saved[0][0][1]["episode_title"], "Cancer Man")
+        self.assertEqual(saved[0][1], {"source": "manual"})
         self.assertEqual(closed, ["matched"])
 
     def test_reuses_episode_title_when_reconfirming_the_same_show_episode(self):
