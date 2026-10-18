@@ -30,7 +30,7 @@ class AboutTabMixin:
             borderwidth=0,
         ).grid(row=0, column=0, sticky="w", pady=(5, 0))
         self._label(
-            group, f"Moviq  {APP_VERSION}",
+            group, f"Moviq {APP_VERSION}",
             font="TkHeadingFont",
         ).grid(row=1, column=0, sticky="w", pady=5)
         self.update_button = ttk.Button(

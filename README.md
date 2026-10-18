@@ -46,7 +46,7 @@ Preview your new filenames and folder structure, review matches, and approve cha
 
 ## Download for Windows
 
-Download the portable Windows executable from the project's [GitHub Releases](https://github.com/asadse7en/Moviq/releases) page.
+Download either the versioned portable ZIP archive or Windows installer from the project's [GitHub Releases](https://github.com/asadse7en/Moviq/releases) page.
 
 
 ## Getting Started

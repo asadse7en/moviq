@@ -31,9 +31,9 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
-    name=f"Moviq-{__version__}",
+    [],
+    exclude_binaries=True,
+    name=f"Moviq-Portable-{__version__}",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -45,4 +45,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(asset_root / "moviq-icon.ico"),
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name=f"Moviq-Portable-{__version__}",
 )

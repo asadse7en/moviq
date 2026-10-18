@@ -494,12 +494,12 @@ class SettingsView(
                     self.update_button.configure(state="normal")
                     if result == "current":
                         self.update_status_var.set(
-                            f"You're up to date (v{APP_VERSION}).",
+                            f"You're up to date (Moviq {APP_VERSION}).",
                         )
                         self._update_release_url = None
                     elif result == "available":
                         self.update_status_var.set(
-                            f"Version {latest} is available.",
+                            f"Moviq {latest.removeprefix('v')} is available.",
                         )
                         self._update_release_url = release_url
                         self.download_update_button.grid()

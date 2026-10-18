@@ -18,6 +18,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, ttk
 
+from .. import __version__ as APP_VERSION
 from ..core.config import (
     ERROR_LOG_FILE, VIDEO_EXT, remove_legacy_cache_files,
 )
@@ -174,7 +175,7 @@ def _detect_media_mode(paths, current_mode):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Moviq")
+        root.title(f"Moviq {APP_VERSION}")
         self.UI_SCALE = float(root.winfo_fpixels("1i")) / 96
         self.settings_store = SettingsStore(
             on_change=self._setting_changed,
