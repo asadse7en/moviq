@@ -4,3 +4,4 @@ __pycache__/
 release/
 docs/
 .env
+REFACTOR_RULES.md
