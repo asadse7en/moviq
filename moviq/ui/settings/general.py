@@ -89,14 +89,80 @@ class GeneralTabMixin:
 
         appearance = self._group(frame, "Appearance")
         theme_controls = ttk.Frame(appearance)
+        self._theme_option_indicators = {}
         for text, value in (
             ("Light", "light"), ("Dark", "dark"), ("System", "system"),
         ):
-            ttk.Radiobutton(
-                theme_controls, text=text, value=value,
-                variable=self.vars["theme"],
-            ).pack(side="left", padx=(0, 12))
+            option = ttk.Frame(theme_controls)
+            indicator = tk.Canvas(
+                option, width=18, height=18,
+                background=self.app.pal["bg"],
+                highlightthickness=0, bd=0, takefocus=1,
+                cursor="hand2",
+            )
+            ring = indicator.create_oval(
+                3, 3, 15, 15, width=2,
+            )
+            dot = indicator.create_oval(7, 7, 11, 11, outline="")
+            indicator.pack(side="left", padx=(0, 4))
+            label = self._label(option, text, cursor="hand2")
+            label.pack(side="left")
+            option.pack(side="left", padx=(0, 12))
+            self._theme_option_indicators[value] = (
+                indicator, ring, dot,
+            )
+            choose = lambda _event=None, selected=value: (
+                self._select_theme_option(selected)
+            )
+            for control in (option, indicator, label):
+                control.bind("<Button-1>", choose)
+            indicator.bind("<space>", choose)
+            indicator.bind("<Return>", choose)
+            for key, direction in (
+                ("<Left>", -1), ("<Up>", -1),
+                ("<Right>", 1), ("<Down>", 1),
+            ):
+                indicator.bind(
+                    key,
+                    lambda _event, selected=value, step=direction: (
+                        self._move_theme_option(selected, step)
+                    ),
+                )
+        self._update_theme_options()
         self._row(appearance, 0, "Theme", theme_controls)
+
+    def _select_theme_option(self, value):
+        self.vars["theme"].set(value)
+        self._update_theme_options()
+        return "break"
+
+    def _move_theme_option(self, value, direction):
+        options = tuple(self._theme_option_indicators)
+        index = (options.index(value) + direction) % len(options)
+        selected = options[index]
+        self._theme_option_indicators[selected][0].focus_set()
+        return self._select_theme_option(selected)
+
+    def _update_theme_options(self, palette=None):
+        palette = palette or self.app.pal
+        selected = self.vars["theme"].get()
+        for value, (indicator, ring, dot) in (
+            self._theme_option_indicators.items()
+        ):
+            is_selected = value == selected
+            indicator.configure(background=palette["bg"])
+            indicator.itemconfigure(
+                ring,
+                outline=(
+                    palette["accent"] if is_selected
+                    else palette["header_border_hi"]
+                ),
+            )
+            indicator.itemconfigure(
+                dot,
+                fill=palette["accent"],
+                state="normal" if is_selected else "hidden",
+            )
 
     def _build_api_key_help(self, parent):
         text = tk.Text(

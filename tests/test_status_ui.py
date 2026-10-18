@@ -1,8 +1,11 @@
+import base64
 import queue
-import tkinter as tk
+import struct
 import tempfile
 import threading
+import tkinter as tk
 import unittest
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -17,7 +20,118 @@ from moviq.ui.design import (
     STATUS_TEXT,
 )
 from moviq.ui.popups import MatchProgressPopup, apply_titlebar_theme
+from moviq.ui.settings.general import GeneralTabMixin
 from moviq.ui.settings import SettingsView
+from moviq.ui.theme import (
+    _configure_scale_style,
+    _configure_switch_style,
+    _scale_thumb_png,
+    _switch_indicator_png,
+)
+
+
+class SwitchThemeTests(unittest.TestCase):
+    @staticmethod
+    def _pixels(encoded_image):
+        image = base64.b64decode(encoded_image)
+        width, height = struct.unpack(">II", image[16:24])
+        offset = 8
+        compressed = bytearray()
+        while offset < len(image):
+            size = struct.unpack(">I", image[offset:offset + 4])[0]
+            kind = image[offset + 4:offset + 8]
+            if kind == b"IDAT":
+                compressed.extend(image[offset + 8:offset + 8 + size])
+            offset += size + 12
+        return width, height, zlib.decompress(compressed)
+
+    def test_switch_indicator_uses_the_theme_accent(self):
+        width, height, pixels = self._pixels(
+            _switch_indicator_png("#0faaa0", "#04201d", active=True),
+        )
+        self.assertEqual((width, height), (40, 20))
+        accent_pixel = pixels[
+            10 * (1 + width * 4) + 1 + 20 * 4:
+            10 * (1 + width * 4) + 1 + 21 * 4
+        ]
+        self.assertEqual(tuple(accent_pixel), (15, 170, 160, 255))
+
+    def test_scale_thumb_uses_theme_accent(self):
+        width, height, pixels = self._pixels(
+            _scale_thumb_png("#0faaa0", "#1c1c1c"),
+        )
+        center = 10 * (1 + width * 4) + 1 + 10 * 4
+
+        self.assertEqual((width, height), (20, 20))
+        self.assertEqual(tuple(pixels[center:center + 4]), (15, 170, 160, 255))
+
+    def test_scale_style_replaces_sun_valley_slider_element(self):
+        class Style:
+            def __init__(self):
+                self.layouts = {
+                    "Horizontal.TScale": [
+                        ("Horizontal.Scale.trough", {"children": [
+                            ("Scale.slider", {"side": "top"}),
+                        ]}),
+                    ],
+                }
+
+            def element_names(self):
+                return []
+
+            def element_create(self, *args, **kwargs):
+                pass
+
+            def layout(self, name, layout=None):
+                if layout is not None:
+                    self.layouts[name] = layout
+                return self.layouts[name]
+
+        style = Style()
+        app = SimpleNamespace(
+            mode="dark",
+            root=object(),
+            _moviq_scale_images={},
+        )
+        with (
+            patch("moviq.ui.theme.HAVE_SV", True),
+            patch("moviq.ui.theme.tk.PhotoImage", return_value=object()),
+        ):
+            _configure_scale_style(app, style, PALETTES["dark"])
+
+        slider = style.layouts["Moviq.Horizontal.TScale"][0][1]["children"][0]
+        self.assertEqual(slider[0], "Moviq.Dark.Scale.slider")
+
+    def test_theme_options_redraw_with_selected_theme_and_palette(self):
+        light = Mock()
+        light_indicator = Mock()
+        dark_indicator = Mock()
+        view = SimpleNamespace(
+            app=SimpleNamespace(pal=PALETTES["dark"]),
+            vars={"theme": Mock(get=Mock(return_value="dark"))},
+            _theme_option_indicators={
+                "light": (light_indicator, "light-ring", "light-dot"),
+                "dark": (dark_indicator, "dark-ring", "dark-dot"),
+            },
+        )
+
+        GeneralTabMixin._update_theme_options(view, PALETTES["dark"])
+
+        light_indicator.configure.assert_called_once_with(
+            background=PALETTES["dark"]["bg"],
+        )
+        light_indicator.itemconfigure.assert_any_call(
+            "light-ring", outline=PALETTES["dark"]["header_border_hi"],
+        )
+        light_indicator.itemconfigure.assert_any_call(
+            "light-dot", fill=PALETTES["dark"]["accent"], state="hidden",
+        )
+        dark_indicator.itemconfigure.assert_any_call(
+            "dark-ring", outline=PALETTES["dark"]["accent"],
+        )
+        dark_indicator.itemconfigure.assert_any_call(
+            "dark-dot", fill=PALETTES["dark"]["accent"], state="normal",
+        )
 
 
 class MissingSourceTests(unittest.TestCase):
@@ -275,6 +389,7 @@ class FormatPresetLayoutTests(unittest.TestCase):
         view.app = SimpleNamespace(pal=PALETTES["light"])
         view._configure_settings_styles = Mock()
         view.content_canvas = Mock()
+        view._update_theme_options = Mock()
         view._set_format_selector_theme = Mock()
         view._set_library_selector_theme = Mock()
         view._recolor_styled_entries = Mock()

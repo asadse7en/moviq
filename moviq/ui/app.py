@@ -1,3 +1,4 @@
+import contextlib
 import errno
 import copy
 import logging
@@ -8,6 +9,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import traceback
@@ -174,7 +176,10 @@ class App:
         self.root = root
         root.title("Moviq")
         self.UI_SCALE = float(root.winfo_fpixels("1i")) / 96
-        self.settings_store = SettingsStore(on_change=self._setting_changed)
+        self.settings_store = SettingsStore(
+            on_change=self._setting_changed,
+            on_batch_done=self._flush_pending_refresh,
+        )
         self.cfg = self.settings_store.data
         self._restore_window_geometry(
             self.cfg.get("window_geometry"),
@@ -446,7 +451,20 @@ class App:
             or "{title} - S{season:00}E{episode:00} - {episode_title}"
         )
         NAMING["tag_id"] = False
-        self.refresh_all()
+        self._refresh_all_or_defer()
+
+    def _refresh_all_or_defer(self):
+        """Refresh every row now, or once after a multi-key settings update."""
+        store = getattr(self, "settings_store", None)
+        if getattr(store, "batching", False):
+            self._refresh_pending = True
+        else:
+            self.refresh_all()
+
+    def _flush_pending_refresh(self):
+        if getattr(self, "_refresh_pending", False):
+            self._refresh_pending = False
+            self.refresh_all()
 
     def _setting_changed(self, key, value):
         if key in (
@@ -456,13 +474,13 @@ class App:
         ):
             self.sync_settings()
         elif key == "movie_create_folder":
-            self.refresh_all()
+            self._refresh_all_or_defer()
         elif key in ("tv_create_show_folder", "tv_create_season_folder"):
-            self.refresh_all()
+            self._refresh_all_or_defer()
         elif key in (
             "library_mode", "movies_library", "tv_library",
         ):
-            self.refresh_all()
+            self._refresh_all_or_defer()
         elif key == "theme":
             self.theme_preference = value
             if hasattr(self, "settings_view"):
@@ -477,7 +495,9 @@ class App:
     # ---- pages --------------------------------------------------------------
     def build_ui(self):
         self.setup_fonts()
-        self.sw = "Switch.TCheckbutton" if HAVE_SV else "TCheckbutton"
+        self.sw = (
+            "Moviq.Switch.TCheckbutton" if HAVE_SV else "TCheckbutton"
+        )
         c = self.cfg
         self.key_var = tk.StringVar(value=c.get("key", ""))
         self.show_key = tk.BooleanVar(value=False)
@@ -626,9 +646,10 @@ class App:
 
     def _reclip_table_rows(self):
         self._table_clip_after = None
-        for item in self.items:
-            if self.tree.exists(item.iid):
-                self.refresh_row(item)
+        with self._bulk_refresh():
+            for item in self.items:
+                if self.tree.exists(item.iid):
+                    self.refresh_row(item)
 
     def _begin_table_resize(self, event):
         if self.tree.identify_region(event.x, event.y) == "separator":
@@ -772,6 +793,12 @@ class App:
                 return (
                     f"Absolute episode number {item.episode_number} "
                     "couldn't be mapped. Check it with Manual Match."
+                )
+            if reason == "episode_title":
+                return (
+                    f"Episode title \"{item.episode_title}\" isn't unique "
+                    f"for {item.query}. Add the season and episode number "
+                    "to the filename."
                 )
             if reason == "year":
                 explanation = "The year differs from the file name"
@@ -1187,13 +1214,20 @@ class App:
                 (item.query or "").casefold(),
                 item.season_number or 0,
                 item.episode_number or 0,
-                Path(item.orig_path).name.casefold(),
+                self._sort_name(item),
             ))
         else:
             self.items.sort(key=lambda item: (
                 (item.query or "").casefold(),
-                Path(item.orig_path).name.casefold(),
+                self._sort_name(item),
             ))
+        filtered_out = self._filtered_out
+        expected = [
+            item.iid for item in self.items if item.iid not in filtered_out
+        ]
+        get_children = getattr(self.tree, "get_children", None)
+        if get_children is not None and expected == list(get_children("")):
+            return
         visible_index = 0
         for item in self.items:
             if (
@@ -1202,6 +1236,14 @@ class App:
             ):
                 self.tree.move(item.iid, "", visible_index)
                 visible_index += 1
+
+    def _sort_name(self, item):
+        cache = self.__dict__.setdefault("_sort_name_cache", {})
+        path = item.orig_path
+        name = cache.get(path)
+        if name is None:
+            name = cache[path] = Path(path).name.casefold()
+        return name
 
     def _clear_review_filter(self):
         self._status_filter = None
@@ -1851,7 +1893,10 @@ class App:
         self.schedule_summary()
         self._hide_tree_tooltip()
         self._update_no_change_status(item)
-        mark = "\u2611" if item.iid in self.tree.selection() else "\u2610"
+        selected = getattr(self, "_bulk_selection", None)
+        if selected is None:
+            selected = self.tree.selection()
+        mark = "\u2611" if item.iid in selected else "\u2610"
         new = ""
         new_path = ""
         output_match = item.match
@@ -1962,9 +2007,23 @@ class App:
         self._hover_iid = None
         self._schedule_status_cells()
 
+    @contextlib.contextmanager
+    def _bulk_refresh(self):
+        """Cache the tree selection while many rows are refreshed at once."""
+        previous = getattr(self, "_bulk_selection", None)
+        tree = getattr(self, "tree", None)
+        self._bulk_selection = (
+            set(tree.selection()) if tree is not None else None
+        )
+        try:
+            yield
+        finally:
+            self._bulk_selection = previous
+
     def refresh_all(self):
-        for it in self.items:
-            self.refresh_row(it)
+        with self._bulk_refresh():
+            for it in self.items:
+                self.refresh_row(it)
         self._restore_visible_row_order()
         self._schedule_status_cells()
 
@@ -2075,22 +2134,28 @@ class App:
 
         added = False
         added_items = []
-        for it in items:
-            if it in run["items"] or it.status == "matching":
-                continue
-            run["originals"][it] = (
-                it.status, it.match, it.error, it.error_code,
-                getattr(it, "review_reason", None),
-            )
-            run["history_before"][it] = self._capture_record(it)
-            it.status, it.error = "matching", ""
-            it.error_code = None
-            self.refresh_row(it)
-            added_items.append(it)
-            run["items"].append(it)
-            run["total"] += 1
-            self.job_total += 1
-            added = True
+        run_item_ids = {id(queued) for queued in run["items"]}
+        positions = {id(row): index for index, row in enumerate(self.items)}
+        with self._bulk_refresh():
+            for it in items:
+                if id(it) in run_item_ids or it.status == "matching":
+                    continue
+                run["originals"][it] = (
+                    it.status, it.match, it.error, it.error_code,
+                    getattr(it, "review_reason", None),
+                )
+                run["history_before"][it] = self._capture_record(
+                    it, positions.get(id(it), len(self.items)),
+                )
+                it.status, it.error = "matching", ""
+                it.error_code = None
+                self.refresh_row(it)
+                added_items.append(it)
+                run["items"].append(it)
+                run_item_ids.add(id(it))
+                run["total"] += 1
+                self.job_total += 1
+                added = True
         for _group_key, group in group_match_items(added_items):
             self.jobs.put((
                 run["id"], run["cancel_event"], group, key,
@@ -2180,54 +2245,79 @@ class App:
 
     def poll(self):
         self._process_match_events()
-        self.root.after(100, self.poll)
+        self.root.after(10 if not self.results.empty() else 100, self.poll)
 
-    def _process_match_events(self):
-        try:
-            while True:
-                event = self.results.get_nowait()
-                kind, run_id, item, *result = event
-                run = self._matching_run
-                if not run or run["id"] != run_id:
-                    continue
-                if kind == "started":
-                    run["current"] = item
-                    self._update_match_progress()
-                    continue
-                if kind == "auth_error":
-                    self._stop_matching_for_auth(run, result[0])
-                    continue
-                status, match, err, *details = result
-                if status == "auto" and match:
-                    confidence = (
-                        tv_score(match, item.query)
-                        if item.media_type == "tv"
-                        else score(match, item.query)
-                    )
-                    if confidence < self.threshold():
-                        status = "review"
-                review_match = match if status == "review" else None
-                if status == "review":
-                    match = None
-                if item in self.items:
-                    item.review_match = review_match
-                    item.status, item.match, item.error = status, match, err
-                    item.error = self._safe_exception_message(item.error)
-                    item.error_code = (
-                        "tmdb_unavailable" if status == "error" else None
-                    )
-                    item.review_reason = details[0] if details else None
-                    self.refresh_row(item)
-                    self._restore_visible_row_order()
-                run["completed"].add(item)
-                run["done"] = len(run["completed"])
-                self.job_done = run["done"]
-                run["current"] = None
+    def _process_match_events(self, budget=0.03):
+        """Handle queued matching events for at most `budget` seconds.
+
+        The window stays responsive because poll() calls this repeatedly
+        instead of draining thousands of events in one go.
+        """
+        deadline = time.perf_counter() + budget
+        pending = {"order": False, "progress": False}
+        item_ids = None
+
+        def flush():
+            if pending["order"]:
+                pending["order"] = False
+                self._restore_visible_row_order()
+            if pending["progress"]:
+                pending["progress"] = False
                 self._update_match_progress()
-                if run["done"] >= run["total"]:
-                    self._finish_match_run(run)
+
+        try:
+            with self._bulk_refresh():
+                while time.perf_counter() < deadline:
+                    event = self.results.get_nowait()
+                    kind, run_id, item, *result = event
+                    run = self._matching_run
+                    if not run or run["id"] != run_id:
+                        continue
+                    if kind == "started":
+                        run["current"] = item
+                        pending["progress"] = True
+                        continue
+                    if kind == "auth_error":
+                        flush()
+                        self._stop_matching_for_auth(run, result[0])
+                        continue
+                    status, match, err, *details = result
+                    if status == "auto" and match:
+                        confidence = (
+                            tv_score(match, item.query)
+                            if item.media_type == "tv"
+                            else score(match, item.query)
+                        )
+                        if confidence < self.threshold():
+                            status = "review"
+                    review_match = match if status == "review" else None
+                    if status == "review":
+                        match = None
+                    if item_ids is None:
+                        item_ids = {id(row) for row in self.items}
+                    if id(item) in item_ids:
+                        item.review_match = review_match
+                        item.status, item.match, item.error = (
+                            status, match, err,
+                        )
+                        item.error = self._safe_exception_message(item.error)
+                        item.error_code = (
+                            "tmdb_unavailable" if status == "error" else None
+                        )
+                        item.review_reason = details[0] if details else None
+                        self.refresh_row(item)
+                        pending["order"] = True
+                    run["completed"].add(item)
+                    run["done"] = len(run["completed"])
+                    self.job_done = run["done"]
+                    run["current"] = None
+                    pending["progress"] = True
+                    if run["done"] >= run["total"]:
+                        flush()
+                        self._finish_match_run(run)
         except queue.Empty:
             pass
+        flush()
 
     def _stop_matching_for_auth(self, run, message):
         run["cancel_event"].set()

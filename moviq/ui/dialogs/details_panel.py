@@ -198,22 +198,17 @@ class DetailsPanelMixin:
                 self.search_status_var.set(result["_episode_error"])
             elif not episode_title:
                 self.search_status_var.set("Loading episode details…")
-            self.update_button.configure(
-                state=(
-                    "normal"
-                    if (
-                        result.get("id")
-                        and self.item.season_number is not None
-                        and self.item.episode_number is not None
-                        and not result.get("_absolute_unmapped")
-                    )
-                    else "disabled"
+            self._set_match_button_state(
+                bool(
+                    result.get("id")
+                    and self.item.season_number is not None
+                    and self.item.episode_number is not None
+                    and not result.get("_episode_mapping_pending")
+                    and not result.get("_absolute_unmapped")
                 ),
             )
         else:
-            self.update_button.configure(
-                state="normal" if result.get("id") else "disabled",
-            )
+            self._set_match_button_state(bool(result.get("id")))
 
     def _clear_details(self):
         self.details_title_var.set("Select a result")

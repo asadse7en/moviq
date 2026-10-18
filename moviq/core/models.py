@@ -90,8 +90,10 @@ class Item:
                 (show_title, show_year, season or 1, episode)
                 if episode is not None and show_title else None
             )
-            self.is_tv_episode = tv_episode is not None
             self.episode_title = parse_tv_episode_title(self.path.stem)
+            self.is_tv_episode = bool(
+                tv_episode or (show_title and self.episode_title)
+            )
         else:
             self.is_tv_episode = False
             self.episode_title = None

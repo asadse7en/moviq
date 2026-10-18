@@ -135,20 +135,48 @@ def _useful_tv_title(value):
     )
 
 
+def _untagged_episode_parts(stem):
+    stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem)
+    stem = FILE_NUMBER_RE.sub("", stem)
+    stem = stem.replace(".", " ").replace("_", " ")
+    release = TV_RELEASE_TAG_RE.search(stem)
+    if release and release.start() > 0:
+        stem = stem[:release.start()]
+    parts = re.split(r"\s+-\s+", stem.strip(), maxsplit=1)
+    if len(parts) != 2:
+        return None
+    show_title = _clean_tv_title(parts[0])
+    episode_title = _clean_tv_title(parts[1])
+    if not (
+        _useful_tv_title(show_title)
+        and _useful_tv_title(episode_title)
+    ):
+        return None
+    return show_title, episode_title
+
+
 def parse_tv_name(path):
     """Return (show title, year, season, episode) from an episode path."""
     path = Path(path)
     stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", path.stem)
     stem = FILE_NUMBER_RE.sub("", stem).replace(".", " ").replace("_", " ")
 
-    marker = TV_NAME_MARKER_RE.search(stem)
-    number_match = NUMBERED_EPISODE_RE.fullmatch(stem.strip())
-    trailing_number = TRAILING_EPISODE_RE.search(stem)
+    release_match = TV_RELEASE_TAG_RE.search(stem)
+    episode_stem = stem
+    if release_match and release_match.start() > 0:
+        episode_stem = stem[:release_match.start()]
+    episode_stem = episode_stem.rstrip(" \t.([{_-")
+
+    marker = TV_NAME_MARKER_RE.search(episode_stem)
+    number_match = NUMBERED_EPISODE_RE.fullmatch(episode_stem.strip())
+    trailing_number = TRAILING_EPISODE_RE.search(episode_stem)
     year_match = next(
-        (match for match in YEAR_RE.finditer(stem) if match.start() > 0),
+        (
+            match for match in YEAR_RE.finditer(episode_stem)
+            if match.start() > 0
+        ),
         None,
     )
-    release_match = TV_RELEASE_TAG_RE.search(stem)
 
     boundary = len(stem)
     if marker:
@@ -198,6 +226,11 @@ def parse_tv_name(path):
     if episode is not None and season is None:
         season = 1
 
+    if episode is None:
+        untagged_parts = _untagged_episode_parts(path.stem)
+        if untagged_parts:
+            title = untagged_parts[0]
+
     if not _useful_tv_title(title):
         title = ""
         for parent in path.parents:
@@ -243,14 +276,19 @@ def tv_season_is_explicit(path):
 
 def parse_tv_episode(stem):
     """Return (show title, year, season, episode) for standard episode names."""
-    match = TV_EPISODE_RE.search(stem)
+    parse_stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem)
+    release_match = TV_RELEASE_TAG_RE.search(parse_stem)
+    if release_match and release_match.start() > 0:
+        parse_stem = parse_stem[:release_match.start()]
+    parse_stem = parse_stem.rstrip(" \t.([{_-")
+    match = TV_EPISODE_RE.search(parse_stem)
     if not match:
-        number = NUMBERED_EPISODE_RE.fullmatch(stem.strip())
-        trailing = TRAILING_EPISODE_RE.search(stem)
+        number = NUMBERED_EPISODE_RE.fullmatch(parse_stem.strip())
+        trailing = TRAILING_EPISODE_RE.search(parse_stem)
         if number:
             return "", None, 1, int(number.group("episode"))
         if trailing:
-            title, year = parse_name(stem[:trailing.start(1)])
+            title, year = parse_name(parse_stem[:trailing.start(1)])
             if not YEAR_RE.fullmatch(trailing.group("episode")):
                 return title, year, 1, int(trailing.group("episode"))
         return None
@@ -262,7 +300,7 @@ def parse_tv_episode(stem):
         match.group("episode") or match.group("episode_x")
         or match.group("episode_word")
     )
-    title, year = parse_name(stem[:match.start()])
+    title, year = parse_name(parse_stem[:match.start()])
     title = re.sub(r"\s+(?:US|UK)$", "", title, flags=re.IGNORECASE)
     if episode < 1:
         return None
@@ -288,7 +326,8 @@ def parse_tv_episode_title(stem):
     """Return the optional episode title following the season and episode."""
     match = TV_EPISODE_RE.search(stem)
     if not match:
-        return None
+        parts = _untagged_episode_parts(stem)
+        return parts[1] if parts else None
     title, _year = parse_name(stem[match.end():])
     return title or None
 

@@ -98,6 +98,7 @@ class SettingsStore:
         on_error=None,
         defaults=None,
         save_delay: float = 0.5,
+        on_batch_done=None,
     ):
         self.path = Path(path)
         self.legacy_path = Path(legacy_path)
@@ -109,6 +110,10 @@ class SettingsStore:
         self.on_error: Callable[[Exception], None] = (
             on_error or (lambda _error: None)
         )
+        self.on_batch_done: Callable[[], None] = (
+            on_batch_done or (lambda: None)
+        )
+        self.batching = False
         self.defaults = dict(defaults or DEFAULTS)
         self.save_delay = save_delay
         self._lock = threading.RLock()
@@ -206,12 +211,22 @@ class SettingsStore:
     def update(self, values: Dict[str, object]) -> None:
         """Update related settings as one debounced write."""
         with self._lock:
+            missing = object()
+            changed = {
+                key: value for key, value in values.items()
+                if self.data.get(key, missing) != value
+            }
             self.data.update(values)
             if not self.data.get("remember", True):
                 self.data.pop("key", None)
             self._schedule_save()
-        for key, value in values.items():
-            self.on_change(key, value)
+        self.batching = True
+        try:
+            for key, value in changed.items():
+                self.on_change(key, value)
+        finally:
+            self.batching = False
+        self.on_batch_done()
 
     def _schedule_save(self):
         if self._timer:

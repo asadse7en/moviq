@@ -461,7 +461,7 @@ class SearchDialog(
         self.update_button = self._action_button(
             footer, "Match", self.update_match, "primary",
         )
-        self.update_button.configure(state="disabled")
+        self._set_match_button_state(False)
         self.update_button.grid(row=0, column=2, sticky="ew", padx=(8, 0))
         self.cancel_button.bind(
             "<Tab>", lambda _event: self._focus_widget(self.skip_button),
@@ -498,7 +498,9 @@ class SearchDialog(
             fg=foreground,
             activebackground=hover_background,
             activeforeground=foreground,
-            disabledforeground=foreground,
+            disabledforeground=(
+                palette["muted"] if is_primary else foreground
+            ),
             relief="flat",
             overrelief="flat",
             borderwidth=0,
@@ -517,9 +519,21 @@ class SearchDialog(
         )
         button.bind(
             "<Leave>",
-            lambda _event: button.configure(bg=background),
+            lambda _event: button.configure(
+                bg=background,
+            ) if str(button.cget("state")) != "disabled" else None,
         )
         return button
+
+    def _set_match_button_state(self, enabled):
+        palette = self.app.pal
+        self.update_button.configure(
+            state="normal" if enabled else "disabled",
+            bg=palette["accent"] if enabled else palette["btn"],
+            fg="#ffffff" if enabled else palette["muted"],
+            disabledforeground=palette["muted"],
+            cursor="hand2" if enabled else "arrow",
+        )
 
     def _center(self):
         self.app.root.update_idletasks()
@@ -609,7 +623,7 @@ class SearchDialog(
         self.results = []
         self._clear_result_cards()
         self.result_count_var.set("")
-        self.update_button.configure(state="disabled")
+        self._set_match_button_state(False)
         self._clear_details()
         query = self.query_var.get().strip()
         if not query:
@@ -768,6 +782,9 @@ class SearchDialog(
                         continue
                     self.selected_details["episode_title"] = episode_title
                     self.selected_details["_episode_error"] = error
+                    self.selected_details[
+                        "_episode_mapping_pending"
+                    ] = False
                     self.selected_details["_absolute_unmapped"] = bool(
                         error
                         and error.startswith("Absolute episode number")
@@ -802,7 +819,7 @@ class SearchDialog(
                         for key in (
                             "_episode_season_number", "_episode_number",
                             "_episode_end_number", "_absolute_unmapped",
-                            "_episode_error",
+                            "_episode_error", "_episode_mapping_pending",
                         ):
                             if key in self.selected_details:
                                 details[key] = self.selected_details[key]

@@ -220,7 +220,7 @@ class FormattingTabMixin:
                 checkbox = self._switch(
                     field_row, create_variable, "Create folder",
                     style=(
-                        "Formatting.Switch.TCheckbutton"
+                        "Moviq.Formatting.Switch.TCheckbutton"
                         if self.app.have_sv else "Formatting.TCheckbutton"
                     ),
                 )

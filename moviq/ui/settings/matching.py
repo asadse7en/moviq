@@ -16,6 +16,7 @@ class MatchingTabMixin:
         scale = ttk.Scale(
             scale_wrap, from_=50, to=100, variable=self.vars["threshold"],
             command=self._threshold_moved, length=300,
+            style="Moviq.Horizontal.TScale",
         )
         scale.pack(side="left")
         self.threshold_label_var = tk.StringVar()

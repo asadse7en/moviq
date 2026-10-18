@@ -1,4 +1,8 @@
+import base64
+import struct
+import tkinter as tk
 import tkinter.font as tkfont
+import zlib
 from tkinter import ttk
 
 from .design import PALETTES
@@ -10,6 +14,284 @@ try:
 except ImportError:
     sv_ttk = None
     HAVE_SV = False
+
+
+def _switch_indicator_png(track_color, knob_color, active=False):
+    width, height, scale = 40, 20, 4
+    track = tuple(
+        int(track_color[index:index + 2], 16)
+        for index in (1, 3, 5)
+    )
+    knob = tuple(
+        int(knob_color[index:index + 2], 16)
+        for index in (1, 3, 5)
+    )
+    knob_x = 29.5 if active else 10.5
+    pixels = bytearray()
+    for y in range(height):
+        pixels.append(0)
+        for x in range(width):
+            red = green = blue = alpha = 0
+            for sample_y in range(scale):
+                for sample_x in range(scale):
+                    point_x = x + (sample_x + 0.5) / scale
+                    point_y = y + (sample_y + 0.5) / scale
+                    track_center_x = min(max(point_x, 9), 31)
+                    on_track = (
+                        (point_x - track_center_x) ** 2
+                        + (point_y - 10) ** 2 <= 8 ** 2
+                    )
+                    on_knob = (
+                        (point_x - knob_x) ** 2
+                        + (point_y - 10) ** 2 <= 6.25 ** 2
+                    )
+                    if on_track or on_knob:
+                        color = knob if on_knob else track
+                        red += color[0]
+                        green += color[1]
+                        blue += color[2]
+                        alpha += 255
+            samples = scale ** 2
+            coverage = alpha // 255
+            pixels.extend((
+                round(red / coverage) if coverage else 0,
+                round(green / coverage) if coverage else 0,
+                round(blue / coverage) if coverage else 0,
+                round(alpha / samples),
+            ))
+    return _encode_png_rgba(width, height, pixels)
+
+
+def _scale_thumb_png(accent_color, outline_color):
+    size = 20
+    scale = 4
+    accent = tuple(
+        int(accent_color[index:index + 2], 16)
+        for index in (1, 3, 5)
+    )
+    outline = tuple(
+        int(outline_color[index:index + 2], 16)
+        for index in (1, 3, 5)
+    )
+    pixels = bytearray()
+    for y in range(size):
+        pixels.append(0)
+        for x in range(size):
+            red = green = blue = alpha = 0
+            for sample_y in range(scale):
+                for sample_x in range(scale):
+                    point_x = x + (sample_x + 0.5) / scale
+                    point_y = y + (sample_y + 0.5) / scale
+                    distance = (point_x - 10) ** 2 + (point_y - 10) ** 2
+                    color = (
+                        accent if distance <= 6.5 ** 2
+                        else outline if distance <= 8.5 ** 2
+                        else None
+                    )
+                    if color is not None:
+                        red += color[0]
+                        green += color[1]
+                        blue += color[2]
+                        alpha += 255
+            samples = scale ** 2
+            coverage = alpha // 255
+            pixels.extend((
+                round(red / coverage) if coverage else 0,
+                round(green / coverage) if coverage else 0,
+                round(blue / coverage) if coverage else 0,
+                round(alpha / samples),
+            ))
+    return _encode_png_rgba(size, size, pixels)
+
+
+def _encode_png_rgba(width, height, pixels):
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+
+    def chunk(name, data):
+        return (
+            struct.pack(">I", len(data)) + name + data
+            + struct.pack(">I", zlib.crc32(name + data) & 0xffffffff)
+        )
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(pixels))
+        + chunk(b"IEND", b"")
+    )
+    return base64.b64encode(png)
+
+
+def _configure_switch_style(app, style, palette):
+    if not HAVE_SV:
+        style.configure(
+            "TCheckbutton",
+            background=palette["preset_surface"],
+            foreground=palette["fg"],
+        )
+        style.map(
+            "TCheckbutton",
+            indicatorcolor=[
+                ("selected", palette["accent"]),
+                ("!selected", palette["header_border_hi"]),
+            ],
+            background=[
+                ("active", palette["preset_surface"]),
+                ("!active", palette["preset_surface"]),
+            ],
+        )
+        return
+
+    mode = app.mode
+    image_sets = getattr(app, "_moviq_switch_images", None)
+    if image_sets is None:
+        image_sets = {}
+        app._moviq_switch_images = image_sets
+    if mode not in image_sets:
+        root = app.root
+        element_prefix = f"Moviq.{mode.title()}"
+        active_color = palette["accent"]
+        active_hover = palette["accent_hi"]
+        knob_color = palette["accent_text"]
+        off_color = palette["header_border_hi"]
+        image_sets[mode] = {
+            "switch_element": f"{element_prefix}.Switch.indicator",
+            "off": _tk_photoimage(
+                root, off_color, palette["fg"], active=False,
+            ),
+            "off_hover": _tk_photoimage(
+                root, palette["btn_hi"], palette["fg"], active=False,
+            ),
+            "off_pressed": _tk_photoimage(
+                root, off_color, palette["fg"], active=False,
+            ),
+            "on": _tk_photoimage(
+                root, active_color, knob_color, active=True,
+            ),
+            "on_hover": _tk_photoimage(
+                root, active_hover, knob_color, active=True,
+            ),
+            "on_pressed": _tk_photoimage(
+                root, active_color, knob_color, active=True,
+            ),
+            "disabled": _tk_photoimage(
+                root, palette["btn"], palette["muted"], active=False,
+            ),
+            "on_disabled": _tk_photoimage(
+                root, palette["btn"], palette["muted"], active=True,
+            ),
+        }
+    images = image_sets[mode]
+    if images["switch_element"] not in style.element_names():
+        style.element_create(
+            images["switch_element"],
+            "image",
+            images["off"],
+            ("selected", "disabled", images["on_disabled"]),
+            ("disabled", images["disabled"]),
+            ("pressed", "selected", images["on_pressed"]),
+            ("active", "selected", images["on_hover"]),
+            ("focus", "selected", images["on_hover"]),
+            ("selected", images["on"]),
+            ("pressed", images["off_pressed"]),
+            ("active", images["off_hover"]),
+            ("focus", images["off_hover"]),
+            width=40,
+            sticky="",
+        )
+    layout = [
+        (images["switch_element"], {"side": "left"}),
+        ("Switch.label", {"side": "right", "expand": 1}),
+    ]
+    for switch_style in (
+        "Moviq.Switch.TCheckbutton",
+        "Moviq.Formatting.Switch.TCheckbutton",
+    ):
+        style.layout(switch_style, layout)
+def _replace_scale_slider(layout, slider_element):
+    replaced = []
+    for element_name, options in layout:
+        updated_options = dict(options)
+        if "children" in updated_options:
+            updated_options["children"] = _replace_scale_slider(
+                updated_options["children"], slider_element,
+            )
+        if element_name.endswith("Scale.slider"):
+            element_name = slider_element
+        replaced.append((element_name, updated_options))
+    return replaced
+
+
+def _configure_scale_style(app, style, palette):
+    if not HAVE_SV:
+        style.configure(
+            "Moviq.Horizontal.TScale",
+            background=palette["accent"],
+            troughcolor=palette["preset_border"],
+        )
+        style.map(
+            "Moviq.Horizontal.TScale",
+            background=[
+                ("disabled", palette["muted"]),
+                ("active", palette["accent_hi"]),
+            ],
+        )
+        return
+
+    mode = app.mode
+    image_sets = getattr(app, "_moviq_scale_images", None)
+    if image_sets is None:
+        image_sets = {}
+        app._moviq_scale_images = image_sets
+    if mode not in image_sets:
+        root = app.root
+        element_name = f"Moviq.{mode.title()}.Scale.slider"
+        image_sets[mode] = {
+            "element": element_name,
+            "normal": tk.PhotoImage(
+                master=root,
+                data=_scale_thumb_png(
+                    palette["accent"], palette["card"],
+                ),
+            ),
+            "hover": tk.PhotoImage(
+                master=root,
+                data=_scale_thumb_png(
+                    palette["accent_hi"], palette["card"],
+                ),
+            ),
+            "disabled": tk.PhotoImage(
+                master=root,
+                data=_scale_thumb_png(
+                    palette["muted"], palette["card"],
+                ),
+            ),
+        }
+    images = image_sets[mode]
+    if images["element"] not in style.element_names():
+        style.element_create(
+            images["element"],
+            "image",
+            images["normal"],
+            ("disabled", images["disabled"]),
+            ("pressed", images["hover"]),
+            ("active", images["hover"]),
+            sticky="",
+        )
+    default_layout = style.layout("Horizontal.TScale")
+    style.layout(
+        "Moviq.Horizontal.TScale",
+        _replace_scale_slider(default_layout, images["element"]),
+    )
+
+
+def _tk_photoimage(root, track_color, knob_color, active):
+    return tk.PhotoImage(
+        master=root,
+        data=_switch_indicator_png(
+            track_color, knob_color, active=active,
+        ),
+    )
 
 
 def apply_theme(app, mode):
@@ -42,10 +324,12 @@ def apply_theme(app, mode):
                         borderwidth=0)
     style.configure(".", font="TkDefaultFont")
     for style_name in (
-        "TLabel", "TButton", "TCheckbutton", "TRadiobutton",
+        "TLabel", "TButton", "TCheckbutton",
         "TEntry", "TCombobox", "TSpinbox",
     ):
         style.configure(style_name, font="TkDefaultFont")
+    _configure_switch_style(app, style, pal)
+    _configure_scale_style(app, style, pal)
     if not HAVE_SV:
         style.configure(
             "Treeview.Heading", background=pal["btn"],

@@ -154,7 +154,7 @@ class SettingsView(
             font=("TkDefaultFont", 11, "bold"),
         )
         format_switch_style = (
-            "Formatting.Switch.TCheckbutton" if self.app.have_sv
+            "Moviq.Formatting.Switch.TCheckbutton" if self.app.have_sv
             else "Formatting.TCheckbutton"
         )
         style.configure(
@@ -297,7 +297,8 @@ class SettingsView(
 
     def _switch(self, parent, variable, text="", style=None):
         style = style or (
-            "Switch.TCheckbutton" if self.app.have_sv else "TCheckbutton"
+            "Moviq.Switch.TCheckbutton"
+            if self.app.have_sv else "TCheckbutton"
         )
         return ttk.Checkbutton(parent, text=text, variable=variable, style=style)
 
@@ -463,6 +464,8 @@ class SettingsView(
             self._key_generation += 1
             self._set_key_status("Not checked")
             self._schedule_key_check(800)
+        elif key == "theme":
+            self._update_theme_options()
         elif key == "threshold":
             value = min(100, max(50, int(round(float(value) / 5) * 5)))
             if variable.get() != value:
@@ -528,6 +531,7 @@ class SettingsView(
     def recolor(self, palette):
         self._configure_settings_styles(palette)
         self.content_canvas.configure(background=palette["bg"])
+        self._update_theme_options(palette)
         self._set_format_selector_theme(palette)
         self._set_library_selector_theme(palette)
         self._recolor_styled_entries(palette)

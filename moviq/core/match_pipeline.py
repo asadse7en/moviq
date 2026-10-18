@@ -1,5 +1,6 @@
 from .matching import is_confident, rank, score, to_choice
 from .matching import to_tv_choice
+from .naming import norm, similarity
 from .show_resolver import ShowState
 
 
@@ -75,6 +76,54 @@ def match_tv_items(
         show_id = resolved.tmdb_id
         season_number = item.season_number
         episode_numbers = item.episode_numbers
+        if item.episode_number is None and item.episode_title:
+            show_details = tmdb.tv(show_id) or {}
+            title_matches = []
+            for season in show_details.get("seasons") or []:
+                season_number_for_match = season.get("season_number")
+                if not isinstance(season_number_for_match, int):
+                    continue
+                season_data = get_season(
+                    show_id, season_number_for_match,
+                )
+                for episode in season_data.get("episodes") or []:
+                    episode_name = episode.get("name")
+                    if (
+                        episode_name
+                        and (
+                            norm(episode_name) == norm(item.episode_title)
+                            or similarity(
+                                episode_name, item.episode_title,
+                            ) >= 0.92
+                        )
+                    ):
+                        episode = dict(episode)
+                        episode.setdefault(
+                            "season_number", season_number_for_match,
+                        )
+                        title_matches.append(episode)
+            if len(title_matches) != 1:
+                results.append((
+                    "review", None, "",
+                    "episode_title",
+                ))
+                continue
+            matched_episode = title_matches[0]
+            season_number = matched_episode["season_number"]
+            episode_numbers = (matched_episode["episode_number"],)
+            episodes = [matched_episode]
+            mapped_numbers = list(episode_numbers)
+            episode_title = matched_episode.get("name")
+            choice = to_tv_choice(
+                show, season_number, mapped_numbers[0], episode_title,
+            )
+            confident = resolved.confidence >= threshold
+            status = "auto" if confident else "review"
+            reason = review_reason(
+                choice, item.query, item.year, [choice], threshold, True,
+            )
+            results.append((status, choice, "", reason))
+            continue
         absolute_needed = not item.season_was_explicit
         if not absolute_needed:
             season_data = get_season(

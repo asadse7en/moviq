@@ -182,9 +182,27 @@ class ResultsListMixin:
     def _select_result(self, index, focus=True, details=None):
         if not 0 <= index < len(self.results):
             return
+        previous_details = self.selected_details
+        same_result = (
+            self.selected_result
+            and self.selected_result.get("id") == self.results[index].get("id")
+        )
         self.selected_index = index
         self.selected_result = self.results[index]
         self.selected_details = dict(details or self.selected_result)
+        if self.is_tv and not self.selected_details.get("episode_title"):
+            self.selected_details["_episode_mapping_pending"] = True
+        if self.is_tv and same_result and previous_details:
+            for key in (
+                "episode_title", "_episode_error",
+                "_episode_mapping_pending",
+                "_absolute_unmapped", "_episode_season_number",
+                "_episode_number", "_episode_end_number",
+            ):
+                if key in previous_details:
+                    self.selected_details.setdefault(
+                        key, previous_details[key],
+                    )
         if self.is_tv and not self.selected_details.get("episode_title"):
             episode_title = self._known_episode_title(self.selected_result)
             if episode_title:

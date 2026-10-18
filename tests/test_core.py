@@ -19,10 +19,11 @@ from moviq.core.matching import (
     to_tv_choice, tv_episode_candidates, tv_match_is_applicable,
     match_tv_episode_title,
 )
+from moviq.core.match_pipeline import match_tv_items
 from moviq.core.models import Item
 from moviq.core.naming import (
     folder_name_for, parse_name, parse_tv_episode, parse_tv_episode_title,
-    tv_episode_name_for,
+    parse_tv_name, tv_episode_name_for,
 )
 from moviq.core.show_resolver import ShowResult, ShowState
 from moviq.core.tmdb import TMDB, TMDBCancelled
@@ -91,10 +92,40 @@ class NamingTests(unittest.TestCase):
             "One.Piece.Season.1.Episode.1000.mkv": (
                 "One Piece", None, 1, 1000,
             ),
+            "[SubsPlease] Jujutsu Kaisen - 01 (1080p) [A1B2E2C3]": (
+                "Jujutsu Kaisen", None, 1, 1,
+            ),
+            "[SubsPlease] Jujutsu Kaisen - 02 (1080p) [A1B301B2]": (
+                "Jujutsu Kaisen", None, 1, 2,
+            ),
         }
         for filename, expected in cases.items():
             with self.subTest(filename=filename):
                 self.assertEqual(parse_tv_episode(Path(filename).stem), expected)
+
+    def test_parses_episode_only_names_before_release_metadata(self):
+        self.assertEqual(
+            parse_tv_name(
+                Path(
+                    "[SubsPlease] Jujutsu Kaisen - 01 "
+                    "(1080p) [A1B2E2C3].mkv",
+                ),
+            ),
+            ("Jujutsu Kaisen", None, 1, 1),
+        )
+        item = Item(
+            Path(
+                "[SubsPlease] Jujutsu Kaisen - 02 "
+                "(1080p) [A1B301B2].mkv",
+            ),
+            Path("TV"),
+            "tv",
+        )
+        self.assertTrue(item.is_tv_episode)
+        self.assertEqual(
+            (item.query, item.season_number, item.episode_number),
+            ("Jujutsu Kaisen", 1, 2),
+        )
 
     def test_parses_tv_episode_title_before_release_metadata(self):
         self.assertEqual(
@@ -159,6 +190,17 @@ class NamingTests(unittest.TestCase):
         self.assertTrue(forced_tv.is_tv_episode)
         self.assertIsNone(forced_tv.episode_title)
         self.assertEqual(forced_movie.media_type, "movie")
+
+    def test_item_recognizes_show_and_episode_title_without_episode_number(self):
+        item = Item(
+            Path("Breaking Bad - Pilot.mkv"), Path("TV"), "tv",
+        )
+
+        self.assertEqual(item.query, "Breaking Bad")
+        self.assertEqual(item.episode_title, "Pilot")
+        self.assertIsNone(item.season_number)
+        self.assertIsNone(item.episode_number)
+        self.assertTrue(item.is_tv_episode)
 
     def test_infers_short_tv_episode_names_from_the_show_folder(self):
         show = Path("Library") / "Ms Marvel"
@@ -244,6 +286,90 @@ class NamingTests(unittest.TestCase):
 
 
 class MatchingTests(unittest.TestCase):
+    def test_matches_tv_episode_by_unique_filename_episode_title(self):
+        item = Item(
+            Path("Breaking Bad - Pilot.mkv"), Path("TV"), "tv",
+        )
+        show = {
+            "id": 1396,
+            "name": "Breaking Bad",
+            "first_air_date": "2008-01-20",
+        }
+        resolver = SimpleNamespace(
+            resolve_show=lambda query, year, _cache: ShowResult(
+                ShowState.RESOLVED, 1396, "Breaking Bad", 2008, 1.0,
+                candidate=show,
+            ),
+        )
+
+        class FakeTMDB:
+            def tv(self, show_id):
+                self.assert_show_id = show_id
+                return {"seasons": [
+                    {"season_number": 1},
+                    {"season_number": 2},
+                ]}
+
+            def season(self, show_id, season_number):
+                self.assert_show_id = show_id
+                return {"episodes": [{
+                    "season_number": season_number,
+                    "episode_number": 1,
+                    "name": (
+                        "Pilot" if season_number == 1 else "Seven Thirty-Seven"
+                    ),
+                }]}
+
+        results = match_tv_items(
+            FakeTMDB(), resolver, [item], None, 0.9,
+            lambda *_args: "partial",
+        )
+
+        self.assertEqual(results[0][0], "auto")
+        self.assertEqual(results[0][1]["season_number"], 1)
+        self.assertEqual(results[0][1]["episode_number"], 1)
+        self.assertEqual(results[0][1]["episode_title"], "Pilot")
+        self.assertTrue(tv_match_is_applicable(*results[0][:2]))
+
+    def test_episode_title_matching_requires_a_unique_tmdb_episode(self):
+        item = Item(
+            Path("Breaking Bad - Pilot.mkv"), Path("TV"), "tv",
+        )
+        show = {
+            "id": 1396,
+            "name": "Breaking Bad",
+            "first_air_date": "2008-01-20",
+        }
+        resolver = SimpleNamespace(
+            resolve_show=lambda *_args: ShowResult(
+                ShowState.RESOLVED, 1396, "Breaking Bad", 2008, 1.0,
+                candidate=show,
+            ),
+        )
+
+        class FakeTMDB:
+            def tv(self, _show_id):
+                return {"seasons": [
+                    {"season_number": 1},
+                    {"season_number": 2},
+                ]}
+
+            def season(self, _show_id, season_number):
+                return {"episodes": [{
+                    "season_number": season_number,
+                    "episode_number": 1,
+                    "name": "Pilot",
+                }]}
+
+        result = match_tv_items(
+            FakeTMDB(), resolver, [item], None, 0.9,
+            lambda *_args: "partial",
+        )[0]
+
+        self.assertEqual(result[0], "review")
+        self.assertIsNone(result[1])
+        self.assertEqual(result[3], "episode_title")
+
     def test_normalizes_release_metadata_before_search(self):
         self.assertEqual(
             normalize_search_title(
@@ -912,6 +1038,40 @@ class SearchDialogInputTests(unittest.TestCase):
         self.assertEqual(result, {"id": 27205, "title": "Inception"})
         self.assertEqual(dialog._result_widgets, [(card, title)])
 
+    def test_reselecting_tv_result_preserves_absolute_episode_error(self):
+        result = {"id": 37854, "name": "One Piece"}
+        selected_details = {
+            "id": 37854,
+            "name": "One Piece",
+            "_episode_error": "Absolute episode number 1185 couldn't be mapped.",
+            "_absolute_unmapped": True,
+        }
+        dialog = SimpleNamespace(
+            results=[result],
+            is_tv=True,
+            selected_result=result,
+            selected_details=selected_details,
+            selected_index=0,
+            item=SimpleNamespace(match=None),
+            _set_card_selection=Mock(),
+            _show_selected_details=Mock(),
+            _result_widgets=[],
+            _requested_episode_id=37854,
+            _requested_details_id=37854,
+            _known_episode_title=lambda _result: None,
+        )
+
+        SearchDialog._select_result(dialog, 0, focus=False)
+
+        self.assertTrue(dialog.selected_details["_absolute_unmapped"])
+        self.assertEqual(
+            dialog.selected_details["_episode_error"],
+            "Absolute episode number 1185 couldn't be mapped.",
+        )
+        dialog._show_selected_details.assert_called_once_with(
+            dialog.selected_details,
+        )
+
     def test_current_match_similarity_uses_the_filename_title(self):
         current_match_var = SimpleNamespace(value="")
         item = Item(
@@ -962,6 +1122,7 @@ class SearchDialogInputTests(unittest.TestCase):
             overview_var=FakeVar(),
             details_poster=details_poster,
             update_button=SimpleNamespace(configure=lambda **_kwargs: None),
+            _set_match_button_state=lambda _enabled: None,
             selected_index=None,
             _title=SearchDialog._title,
             _year=lambda _result: None,
@@ -1149,6 +1310,9 @@ class SearchDialogInputTests(unittest.TestCase):
             details_poster=SimpleNamespace(configure=lambda **_kwargs: None),
             selected_index=None,
             update_button=button,
+            _set_match_button_state=lambda enabled: setattr(
+                button, "state", "normal" if enabled else "disabled",
+            ),
             _title=SearchDialog._title,
             _year=lambda _result: None,
             _score=lambda _result, _query: 0.5,
@@ -1162,6 +1326,15 @@ class SearchDialogInputTests(unittest.TestCase):
 
         self.assertEqual(button.state, "normal")
         self.assertEqual(dialog.tv_info_var.value, "S01E04")
+        SearchDialog._show_selected_details(dialog, {
+            "id": 95350,
+            "name": "Lanterns",
+            "_episode_error": (
+                "Absolute episode number 1185 couldn't be mapped."
+            ),
+            "_absolute_unmapped": True,
+        })
+        self.assertEqual(button.state, "disabled")
 
     def test_confirm_tv_match_uses_filename_episode_title_if_available(self):
         item = SimpleNamespace(
