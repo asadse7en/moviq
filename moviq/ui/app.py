@@ -16,9 +16,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from PIL import Image, ImageTk
-
-from .. import resource
 from ..core.config import (
     ERROR_LOG_FILE, VIDEO_EXT, remove_legacy_cache_files,
 )
@@ -47,7 +44,7 @@ from ..core.show_resolver import (
 )
 from .design import LANGUAGES, PALETTES
 from .controls import (
-    RoundedButton, SegmentedModeToggle, TableTooltip, ToolTip,
+    TableTooltip,
 )
 from .dialogs import SearchDialog
 from .popups import (
@@ -57,6 +54,9 @@ from .popups import (
 from .settings import SettingsStore, SettingsView, resolve_system_theme
 from .table_layout import (
     target_name_display, tv_target_name_display,
+)
+from .main_page import (
+    MAIN_SHORTCUTS, build_main_page as build_app_main_page,
 )
 
 try:
@@ -71,14 +71,6 @@ from .theme import HAVE_SV, apply_theme as apply_app_theme
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
-MAIN_SHORTCUTS = {
-    "<Control-a>": "select_all",
-    "<Control-A>": "select_all",
-    "<Delete>": "remove_selected",
-    "<Control-z>": "undo",
-    "<Control-Z>": "undo",
-    "<Return>": "match_manually",
-}
 ERROR_STATUS_DETAILS = {
     "wrong_mode_movie_in_tv": (
         "This file looks like a movie (no season or episode in the name), "
@@ -571,325 +563,7 @@ class App:
         self.show_page("main")
 
     def build_main_page(self, page):
-        self.match_btn_var = tk.StringVar(value="Auto Match")
-        self.manual_match_btn_var = tk.StringVar(value="Manual Match")
-        self.apply_btn_var = tk.StringVar(value="Rename All")
-        head = ttk.Frame(page, style="Header.TFrame")
-        head.pack(fill="x", pady=(2, 12))
-        logo = tk.Canvas(
-            head, width=round(40 * self.UI_SCALE),
-            height=round(40 * self.UI_SCALE),
-            background=self.pal["header_bg"],
-            highlightthickness=0, bd=0, takefocus=0,
-        )
-        logo.ui_scale = self.UI_SCALE
-        self.logo_canvas = logo
-        logo.pack(side="left")
-        logo_size = round(40 * self.UI_SCALE)
-        with Image.open(resource("assets/moviq-icon.png")) as icon:
-            resized_icon = icon.resize(
-                (logo_size, logo_size), Image.Resampling.LANCZOS,
-            )
-            self.logo_image = ImageTk.PhotoImage(resized_icon)
-        logo.create_image(
-            round(20 * self.UI_SCALE), round(20 * self.UI_SCALE),
-            image=self.logo_image,
-        )
-        titles = ttk.Frame(head, style="Header.TFrame")
-        titles.pack(side="left", padx=(12, 0), pady=1)
-        ttk.Label(titles, text="Moviq",
-                  style="Title.TLabel").pack(anchor="w")
-        ttk.Label(titles, style="HeaderSubtitle.TLabel",
-                  text="Match, review, and organize your media files."
-                  ).pack(anchor="w", pady=(2, 0))
-        header_actions = ttk.Frame(head, style="Header.TFrame")
-        header_actions.pack(side="right", padx=(12, 0))
-        self.rename_all_button = RoundedButton(
-            header_actions,
-            self.apply_btn_var, self.apply, font="TkHeadingFont",
-            ui_scale=self.UI_SCALE,
-            bold=True, variant="accent", padx=18, pady=9, radius=6,
-            background=self.pal["header_bg"],
-        )
-        self.rename_all_button.pack()
-        ttk.Separator(
-            page, orient="horizontal", style="HeaderDivider.TSeparator",
-        ).pack(fill="x", pady=(0, 10))
-
-        bar = ttk.Frame(page, style="Toolbar.TFrame")
-        bar.pack(fill="x", pady=(0, 8))
-        bar.columnconfigure(0, weight=1)
-        left_controls = ttk.Frame(bar, style="Toolbar.TFrame")
-        left_controls.grid(row=0, column=0, sticky="w")
-        self.add_files_button = RoundedButton(
-            left_controls, tk.StringVar(value="Add files"), self.add_files,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.add_files_button.pack(side="left", padx=(0, 6))
-        self.add_folder_button = RoundedButton(
-            left_controls, tk.StringVar(value="Add folder"), self.add_folder,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.add_folder_button.pack(side="left", padx=(0, 8))
-        self.media_mode_selector = SegmentedModeToggle(
-            left_controls,
-            self.media_mode.get(),
-            self.switch_media_mode,
-            font="TkDefaultFont",
-            background=self.pal["header_bg"],
-            ui_scale=self.UI_SCALE,
-        )
-        self.media_mode_selector.pack(side="left")
-        self.update_media_mode_selector()
-
-        match_actions = ttk.Frame(bar, style="Toolbar.TFrame")
-        self.match_actions = match_actions
-        match_actions.grid(row=0, column=1, sticky="e")
-        self.auto_match_button = RoundedButton(
-            match_actions, self.match_btn_var, self.match_run,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.auto_match_button.pack(side="left", padx=(0, 6))
-        self.manual_match_button = RoundedButton(
-            match_actions, self.manual_match_btn_var, self.match_manually,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.manual_match_button.pack(side="left", padx=(0, 8))
-        self.undo_button = RoundedButton(
-            match_actions, tk.StringVar(value="Undo"), self.undo,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.undo_button.pack(side="left", padx=(0, 6))
-        self.clear_list_button = RoundedButton(
-            match_actions, tk.StringVar(value="Clear"), self.clear,
-            font="TkDefaultFont", ui_scale=self.UI_SCALE,
-            padx=12, background=self.pal["header_bg"],
-        )
-        self.clear_list_button.pack(side="left", padx=(0, 6))
-        settings_button = RoundedButton(
-            match_actions, tk.StringVar(value="\u2699\ufe0f"),
-            lambda: self.show_page("settings"),             font="TkDefaultFont",
-            ui_scale=self.UI_SCALE, padx=10,
-            background=self.pal["header_bg"],
-        )
-        self.settings_button = settings_button
-        settings_button.pack(side="left")
-        ToolTip(
-            settings_button, "Settings", self.pal["card"], self.pal["fg"],
-        )
-        self.toolbar_buttons = (
-            self.add_files_button, self.add_folder_button,
-            self.auto_match_button, self.manual_match_button,
-            self.undo_button, self.clear_list_button,
-        )
-        for widget, text in (
-            (self.add_files_button, "Add files"),
-            (self.add_folder_button, "Add folder"),
-            (self.auto_match_button, "Automatically match files"),
-            (
-                self.manual_match_button,
-                "Manually match selected files, or all files if none are selected",
-            ),
-            (self.undo_button, "Undo"),
-            (self.clear_list_button, "Clear the file list"),
-        ):
-            tooltip = ToolTip(widget, text, self.pal["card"], self.pal["fg"])
-            if widget is self.undo_button:
-                self._undo_tooltip = tooltip
-
-        self.filter_row = ttk.Frame(page, style="Toolbar.TFrame")
-        self.filter_row.pack(fill="x", pady=(6, 12))
-        self.filter_vars = {
-            key: tk.StringVar(value=f"{label} 0")
-            for key, label in (
-                ("all", "All"), ("ready", "Ready"),
-                ("review", "Review"), ("nomatch", "No match"),
-                ("done", "Done"),
-            )
-        }
-        self.filter_chips = {}
-        for key in self.filter_vars:
-            base_color = {
-                "all": self.pal["fg"],
-                "ready": self.pal["status_text"]["matched"],
-                "review": self.pal["status_text"]["review"],
-                "nomatch": self.pal["status_text"]["nomatch"],
-                "done": self.pal["status_text"]["done"],
-            }[key]
-            chip = RoundedButton(
-                self.filter_row, self.filter_vars[key],
-                lambda selected=key: self.set_status_filter(selected),
-                font="TkDefaultFont", padx=9, pady=6, radius=8,
-                ui_scale=self.UI_SCALE,
-                background=self.pal["header_bg"],
-            )
-            chip.filter_key = key
-            chip.filter_color = base_color
-            chip.pack(side="left", padx=(0, 6))
-            self.filter_chips[key] = chip
-        self.reset_columns_button = ttk.Button(
-            self.filter_row, text="Reset columns",
-            command=self._reset_table_widths,
-            style="ResetColumns.TButton",
-        )
-        self.reset_columns_button.pack(side="right")
-        self.reset_columns_button.pack_forget()
-        self.root.bind("<Configure>", self._update_toolbar_responsive, add="+")
-
-        # Bottom bars are packed BEFORE the list so they are never pushed
-        # out of view when the window is small.
-        sb = ttk.Frame(page)
-        sb.pack(side="bottom", fill="x", pady=(2, 0))
-        self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(sb, textvariable=self.status_var, style="Muted.TLabel"
-                  ).pack(side="left")
-
-        self.detail_var = tk.StringVar(value="")
-        ttk.Label(
-            page, textvariable=self.detail_var, style="Muted.TLabel",
-            wraplength=1100, justify="left",
-        ).pack(side="bottom", fill="x", pady=(8, 6))
-
-        frame = ttk.Frame(page, style="Table.TFrame", padding=1)
-        frame.pack(fill="both", expand=True)
-        table_content = ttk.Frame(frame, style="TableContent.TFrame")
-        table_content.pack(fill="both", expand=True)
-        cols = ("status", "new")
-        self.tree = ttk.Treeview(table_content, columns=cols, show=("tree", "headings"),
-                                 selectmode="extended")
-        self.status_column_width = self._status_column_width()
-        self.table_min_widths = {
-            "#0": 178, "status": self.status_column_width, "new": 150,
-        }
-        self._table_widths = {"#0": 240, "status": 100, "new": 150}
-        self._table_columns_initialized = False
-        self._table_columns_customized = False
-        self.tree.heading(
-            "#0", text="\u2610  Original name", anchor="w",
-        )
-        self.tree.column("#0", width=240, minwidth=178, anchor="w",
-                         stretch=False)
-        self._table_widths["status"] = self.status_column_width
-        for c, text, w, anc in (("status", "Status", self.status_column_width, "w"),
-                                ("new", "New Name", 150, "w")):
-            self.tree.heading(c, text=text, anchor=anc)
-            self.tree.column(
-                c, width=w, minwidth=self.table_min_widths[c],
-                anchor=anc, stretch=False,
-            )
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        table_content.rowconfigure(0, weight=1)
-        table_content.columnconfigure(0, weight=1)
-        self.tree.bind("<Configure>", self.fit_table_columns, add="+")
-        self.tree.bind("<Configure>", self._schedule_status_cells, add="+")
-        self.tree.bind(
-            "<ButtonPress-1>", self._hide_tree_tooltip, add="+",
-        )
-        self.tree.bind("<ButtonPress-1>", self._begin_table_resize, add="+")
-        self.tree.bind(
-            "<ButtonRelease-1>",
-            lambda _event: self.root.after_idle(self._finish_table_resize),
-            add="+",
-        )
-        self.tree.bind("<Motion>", self.on_tree_hover, add="+")
-        self.tree.bind("<Leave>", self.clear_tree_hover, add="+")
-        self.tree.bind("<MouseWheel>", self.on_mousewheel, add="+")
-        self.tree.bind("<Button-4>", lambda _event: self.scroll_rows(-1), add="+")
-        self.tree.bind("<Button-5>", lambda _event: self.scroll_rows(1), add="+")
-        self.tree.bind("<KeyPress>", self._hide_tooltip_on_scroll_key, add="+")
-        self._status_cell_labels = {}
-        self.empty_state = ttk.Frame(
-            table_content, style="EmptyState.TFrame", padding=(24, 18),
-        )
-        self.empty_icon = tk.Canvas(
-            self.empty_state, width=64, height=54,
-            bg=self.pal["card"], highlightthickness=0,
-        )
-        self.empty_icon.pack(pady=(0, 10))
-        self.empty_icon.create_line(
-            10, 17, 10, 12, 30, 12, 37, 19, 53, 19, 53, 41,
-            10, 41, 10, 17,
-            fill=self.pal["muted"], width=3, capstyle="round",
-            joinstyle="round",
-        )
-        self.empty_icon.create_oval(
-            38, 30, 58, 50, fill=self.pal["card"],
-            outline=self.pal["accent"], width=2,
-        )
-        self.empty_icon.create_line(
-            48, 34, 48, 46, fill=self.pal["accent"], width=2,
-            capstyle="round",
-        )
-        self.empty_icon.create_line(
-            42, 40, 54, 40, fill=self.pal["accent"], width=2,
-            capstyle="round",
-        )
-        self.empty_title_var = tk.StringVar(value="No files added yet")
-        ttk.Label(
-            self.empty_state, textvariable=self.empty_title_var,
-            style="EmptyTitle.TLabel", anchor="center",
-        ).pack(pady=(0, 6))
-        self.empty_lbl = ttk.Label(
-            self.empty_state,
-            text="Click ‘Add Files’ or ‘Add Folder’ or Drag & Drop files here "
-                 "to get started.",
-            style="EmptyHint.TLabel", anchor="center", justify="center",
-            wraplength=520,
-        )
-        self.empty_lbl.pack()
-        self.empty_state.place(relx=0.5, rely=0.5, anchor="center")
-
-        self.tree.bind("<Button-1>", self.on_click, add="+")
-        self.tree.bind("<Double-1>", self.on_double)
-        self.tree.bind("<<TreeviewSelect>>", self.on_select)
-        self.root.bind("<Escape>", lambda _e: self.deselect())
-        for sequence, action in MAIN_SHORTCUTS.items():
-            self.root.bind_all(
-                sequence,
-                lambda event, target=action: self._run_main_shortcut(
-                    event, target,
-                ),
-                add="+",
-            )
-        for sequence, action in (
-            ("<Control-y>", "redo"),
-            ("<Control-Y>", "redo"),
-            ("<Control-Shift-z>", "redo"),
-            ("<Control-Shift-Z>", "redo"),
-        ):
-            self.root.bind_all(
-                sequence,
-                lambda event, target=action: self._run_main_shortcut(
-                    event, target,
-                ),
-                add="+",
-            )
-        self._update_undo_button()
-        self.tree.bind("<Motion>", self._schedule_tree_tooltip, add="+")
-        self.tree.bind("<Leave>", self._hide_tree_tooltip, add="+")
-        self.tree.bind("<Button-3>", self.show_menu, add="+")
-        for b in ("<Button-2>", "<Control-Button-1>"):
-            self.tree.bind(b, self.show_menu, add="+")
-        self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(
-            label="Show file in Explorer", command=self.open_selected_file,
-        )
-        self.menu.add_separator()
-        self.menu.add_command(label="Search / fix match...", command=self.fix_selected)
-        self.menu.add_command(label="Accept this match", command=self.accept_selected)
-        self.menu.add_command(label="Re-match automatically", command=self.rematch_selected)
-        self.menu.add_command(label="Apply to selected now", command=self.apply)
-        self.menu.add_separator()
-        self.menu.add_command(label="Remove from list", command=self.remove_selected)
-        self.column_menu = tk.Menu(self.root, tearoff=0)
-        self.column_menu.add_command(
-            label="Reset column widths", command=self._reset_table_widths,
-        )
+        return build_app_main_page(self, page)
 
     def fit_table_columns(self, _event=None):
         if not hasattr(self, "_table_widths"):
