@@ -27,17 +27,14 @@ from ..core.formatting import (
     format_component, format_pattern,
 )
 from ..core.tmdb import MAX_WORKERS, TMDB, TMDBAuthError, TMDBError
+from ..core.updater import (
+    GITHUB_OWNER, GITHUB_REPO, LATEST_RELEASE_API_URL, RELEASES_URL, REPO,
+    _version_tuple, check_latest_release,
+)
 from .controls import SegmentedModeToggle
 from .design import LANGUAGES
 
 
-GITHUB_OWNER = "asadse7en"
-GITHUB_REPO = "Moviq"
-REPO = f"{GITHUB_OWNER}/{GITHUB_REPO}"
-RELEASES_URL = f"https://github.com/{REPO}/releases"
-LATEST_RELEASE_API_URL = (
-    f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-)
 ISSUES_URL = f"https://github.com/{REPO}/issues"
 LICENSE_URL = f"https://github.com/{REPO}/community/license"
 TMDB_KEY_URL = "https://www.themoviedb.org/settings/api"
@@ -112,13 +109,6 @@ DEFAULTS = {
     "tv_custom_file_pattern": "",
 }
 log = logging.getLogger(__name__)
-
-
-def _version_tuple(version):
-    version = version.removeprefix("v")
-    if not re.fullmatch(r"\d+(?:\.\d+)*", version):
-        raise ValueError(f"Invalid version: {version}")
-    return tuple(int(part) for part in version.split("."))
 
 
 class SettingsStore:
@@ -2073,38 +2063,7 @@ class SettingsView(ttk.Frame):
         self._executor.submit(self._check_for_updates_worker)
 
     def _check_for_updates_worker(self):
-        try:
-            response = requests.get(
-                LATEST_RELEASE_API_URL,
-                timeout=8,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": f"Moviq/{APP_VERSION}",
-                },
-            )
-            response.raise_for_status()
-            release = response.json()
-            latest = release["tag_name"]
-            release_url = release["html_url"]
-            if not isinstance(latest, str) or not isinstance(release_url, str):
-                raise ValueError("GitHub release response is missing valid fields.")
-            if not release_url.startswith("https://github.com/"):
-                raise ValueError("GitHub release response contains an invalid URL.")
-            current_version = _version_tuple(APP_VERSION)
-            latest_version = _version_tuple(latest)
-            width = max(len(current_version), len(latest_version))
-            current_version += (0,) * (width - len(current_version))
-            latest_version += (0,) * (width - len(latest_version))
-            result = (
-                "available" if latest_version > current_version else "current",
-                latest,
-                release_url,
-            )
-        except (
-            requests.RequestException, ValueError, KeyError, TypeError,
-        ) as error:
-            log.warning("Could not check for updates: %s", error)
-            result = ("error", None, None)
+        result = check_latest_release(APP_VERSION)
         self._queue.put(("update", *result))
 
     def _set_key_status(self, status):
