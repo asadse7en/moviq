@@ -582,9 +582,12 @@ class SearchDialog(
 
     @staticmethod
     def _split_query(query):
-        year_match = re.search(r"(?<!\d)(?:18|19|20|21)\d{2}(?!\d)", query)
-        if not year_match:
+        year_matches = list(
+            re.finditer(r"(?<!\d)(?:18|19|20|21)\d{2}(?!\d)", query)
+        )
+        if not year_matches:
             return query.strip(), None
+        year_match = year_matches[-1]  # "1917 2019" -> title 1917, year 2019
         title = (
             query[:year_match.start()] + " " + query[year_match.end():]
         ).strip(" \t-–—,.:()[]{}")
@@ -594,8 +597,17 @@ class SearchDialog(
 
     @staticmethod
     def _parse_tmdb_id(query):
-        match = ID_RE.fullmatch(query.strip())
-        return int(match.group(1)) if match else None
+        text = query.strip()
+        match = ID_RE.fullmatch(text)
+        if not match:
+            return None
+        digits = match.group(1)
+        if (
+            not text.lower().startswith("tmdb")
+            and re.fullmatch(r"(?:18|19|20|21)\d{2}", digits)
+        ):
+            return None  # 1917, 2020, 1883: search as a title; use "tmdb:1917" for the ID
+        return int(digits)
 
     def _update_placeholder(self):
         if self.query_var.get():
