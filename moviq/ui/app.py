@@ -825,9 +825,19 @@ class App:
                 str(match.get("title") or item.query or "Unknown").split()
             )
             year = match.get("year") or "????"
+            needs_check = reason in ("year_title", "year", "similar")
+            if not needs_check and confidence >= 90:
+                needs_check = True
+                explanation = (
+                    "The title matches, but Moviq isn't sure enough "
+                    "to rename it automatically"
+                )
+            if needs_check:
+                headline = f"Needs a check: {title} ({year}). "
+            else:
+                headline = f"Low confidence ({confidence}%): {title} ({year}). "
             return (
-                f"Low confidence ({confidence}%): {title} ({year}). "
-                f"{explanation}.\nCheck it with Manual Match."
+                f"{headline}{explanation}.\nCheck it with Manual Match."
             )
         if status_key == "nomatch":
             title = " ".join(str(item.query or "unknown title").split())
@@ -1963,7 +1973,12 @@ class App:
                 if item.media_type == "tv"
                 else score(output_match, item.query)
             )
-            status_tooltip = f"Confidence: {confidence:.0%}"
+            if confidence >= 0.9 or getattr(item, "review_reason", None) in (
+                "year_title", "year", "similar",
+            ):
+                status_tooltip = "Needs a check"
+            else:
+                status_tooltip = f"Confidence: {confidence:.0%}"
         self._row_tooltip_paths[item.iid] = {
             "#0": str(Path(item.orig_path).absolute()),
             "#1": status_tooltip,
