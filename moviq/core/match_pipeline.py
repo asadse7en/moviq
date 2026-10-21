@@ -1,25 +1,31 @@
-from .matching import is_confident, rank, score, to_choice
-from .matching import to_tv_choice
+from .matching import NO_MATCH_FLOOR, _is_generic_title
+from .matching import is_confident, is_year_like_title, rank, score
+from .matching import to_choice, to_tv_choice, year_of
 from .naming import norm, similarity
 from .show_resolver import ShowState
 
 
 def match_movie_items(tmdb, items, threshold, search_query):
+    if _is_generic_title(items[0].query):
+        return [("nomatch", None, "") for _item in items]
     search_results = tmdb.search(search_query, items[0].year)
     results = []
     for item in items:
-        ranked = rank(search_results, item.query)
-        if not ranked:
+        ranked = rank(search_results, item.query, item.year)
+        if not ranked or score(ranked[0], item.query) < NO_MATCH_FLOOR:
             results.append(("nomatch", None, ""))
             continue
         confident = is_confident(
             ranked, item.query, item.year, threshold,
         )
-        status = "auto" if confident else "review"
+        year_title = not item.year and is_year_like_title(item.query)
+        status = "auto" if confident and not year_title else "review"
         match = ranked[0]
         choice = to_choice(match)
-        match_year = match.get("year")
-        if item.year and match_year != item.year:
+        match_year = year_of(match)
+        if year_title:
+            review_reason = "year_title"
+        elif item.year and match_year != item.year:
             review_reason = "year"
         else:
             candidate_scores = [
@@ -50,6 +56,27 @@ def match_tv_items(
                 episode = dict(episode)
                 episode.setdefault("season_number", season_number)
                 return episode
+        return None
+
+    def cumulative_episode(show_id, number):
+        """Map an absolute number by adding up the season lengths."""
+        details = tmdb.tv(show_id) or {}
+        seasons = sorted(
+            (
+                season for season in details.get("seasons") or []
+                if isinstance(season.get("season_number"), int)
+                and season["season_number"] >= 1
+            ),
+            key=lambda season: season["season_number"],
+        )
+        remaining = number
+        for season in seasons:
+            count = season.get("episode_count") or 0
+            if 0 < remaining <= count:
+                return get_season_episode(
+                    show_id, season["season_number"], remaining,
+                )
+            remaining -= count
         return None
 
     results = []
@@ -88,6 +115,7 @@ def match_tv_items(
                 )
                 for episode in season_data.get("episodes") or []:
                     episode_name = episode.get("name")
+                    code = getattr(item, "production_code", None)
                     if (
                         episode_name
                         and (
@@ -95,6 +123,12 @@ def match_tv_items(
                             or similarity(
                                 episode_name, item.episode_title,
                             ) >= 0.92
+                            or (
+                                code
+                                and str(
+                                    episode.get("production_code") or "",
+                                ).upper() == code
+                            )
                         )
                     ):
                         episode = dict(episode)
@@ -129,14 +163,20 @@ def match_tv_items(
             season_data = get_season(
                 show_id, season_number,
             )
+            item.season_episode_count = len(
+                season_data.get("episodes") or []
+            )
             absolute_needed = (
-                item.episode_number
-                > len(season_data.get("episodes") or [])
+                item.episode_number > item.season_episode_count
             )
         episodes = []
         if absolute_needed:
             episodes = [
                 tmdb.absolute_episode(show_id, number)
+                or (
+                    None if item.season_was_explicit
+                    else cumulative_episode(show_id, number)
+                )
                 for number in episode_numbers
             ]
             mapped = (
@@ -162,7 +202,9 @@ def match_tv_items(
                     show, None, None,
                 )
                 results.append((
-                    "review", choice, "", "absolute",
+                    "review", choice, "",
+                    "episode_missing" if item.season_was_explicit
+                    else "absolute",
                 ))
                 continue
             season_number = episodes[0]["season_number"]

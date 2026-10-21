@@ -37,7 +37,7 @@ from ..core.matching import (
 from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
 from ..core.naming import (
-    NAMING, parse_name, parse_tv_name,
+    NAMING, has_explicit_episode_marker, parse_name, parse_tv_name,
 )
 from ..core.tmdb import (
     MAX_WORKERS, TMDB, TMDBAuthError, TMDBCancelled,
@@ -160,7 +160,10 @@ def _detect_media_mode(paths, current_mode):
     movies = 0
     for path in files:
         parsed_tv = parse_tv_name(path)
-        if parsed_tv[2] is not None and parsed_tv[3] is not None:
+        if (
+            has_explicit_episode_marker(path)
+            and parsed_tv[2] is not None and parsed_tv[3] is not None
+        ):
             episodes += 1
         elif parse_name(path.stem)[1]:
             movies += 1
@@ -801,7 +804,18 @@ class App:
                     f"for {item.query}. Add the season and episode number "
                     "to the filename."
                 )
-            if reason == "year":
+            if reason == "episode_missing":
+                count = getattr(item, "season_episode_count", 0)
+                return (
+                    f"Season {item.season_number} has only {count} "
+                    f"episode(s) on TMDB, so episode {item.episode_number} "
+                    "doesn't exist there. Check it with Manual Match."
+                )
+            if reason == "year_title":
+                explanation = (
+                    "The file name is only a number, so the title is a guess"
+                )
+            elif reason == "year":
                 explanation = "The year differs from the file name"
             elif reason == "similar":
                 explanation = "Several results are similar"
@@ -1637,7 +1651,11 @@ class App:
                             invalid_tv += 1
                         elif media_type == "movie":
                             _title, _year, season, episode = parse_tv_name(f)
-                            if season is not None and episode is not None:
+                            if (
+                                has_explicit_episode_marker(f)
+                                and season is not None
+                                and episode is not None
+                            ):
                                 item.status = "error"
                                 item.error_code = "wrong_mode_tv_in_movies"
                                 item.episode_code = (
@@ -1661,7 +1679,10 @@ class App:
                     invalid_tv += 1
                 elif media_type == "movie":
                     _title, _year, season, episode = parse_tv_name(p)
-                    if season is not None and episode is not None:
+                    if (
+                        has_explicit_episode_marker(p)
+                        and season is not None and episode is not None
+                    ):
                         item.status = "error"
                         item.error_code = "wrong_mode_tv_in_movies"
                         item.episode_code = f"S{season:02d}E{episode:02d}"
@@ -1677,6 +1698,11 @@ class App:
         self._restore_visible_row_order()
         self._vcount.clear()
         status_message = f"Added {len(new)} video file(s)."
+        if not new and any(Path(raw).is_dir() for raw in paths):
+            status_message += (
+                " No video files found in the folder (small files named "
+                "sample or trailer are skipped)."
+            )
         if missing:
             status_message += f" Removed {len(missing)} missing source file(s)."
         if unavailable:
@@ -1903,7 +1929,16 @@ class App:
         output_match = item.match
         if not output_match and item.status == "review":
             output_match = getattr(item, "review_match", None)
-        if output_match:
+        preview_match = output_match
+        if (
+            preview_match and not item.match and item.media_type == "tv"
+            and not (
+                isinstance(preview_match.get("season_number"), int)
+                and isinstance(preview_match.get("episode_number"), int)
+            )
+        ):
+            preview_match = None
+        if preview_match:
             try:
                 if item.match:
                     target = (
@@ -1911,7 +1946,7 @@ class App:
                         else self.plan_for(item).dest
                     )
                 else:
-                    target = self.plan_for(item, output_match).dest
+                    target = self.plan_for(item, preview_match).dest
             except ValueError:
                 pass
             else:

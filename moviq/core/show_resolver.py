@@ -66,10 +66,28 @@ def _popularity(candidate):
         return 0.0
 
 
+_ACRONYMS = {
+    "svu": "Special Victims Unit",
+    "himym": "How I Met Your Mother",
+    "tbbt": "The Big Bang Theory",
+    "twd": "The Walking Dead",
+    "b99": "Brooklyn Nine-Nine",
+}
+
+
+def _expand_acronyms(title):
+    words = title.split()
+    expanded = [_ACRONYMS.get(word.lower(), word) for word in words]
+    return " ".join(expanded) if expanded != words else None
+
+
 def _query_variants(title, year):
     variants = []
     seen = set()
     candidates = [(title, year)]
+    expanded = _expand_acronyms(title)
+    if expanded:
+        candidates.append((expanded, year))
     without_country = _COUNTRY_SUFFIX_RE.sub("", title).strip()
     candidates.append((without_country or title, None))
     without_article = _LEADING_ARTICLE_RE.sub("", without_country or title)

@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -39,11 +40,22 @@ TV_NAME_MARKER_RE = re.compile(
 TV_SEASON_MARKER_RE = re.compile(
     r"(?i)(?<![a-z0-9])(?:season[ ._-]*|s)(\d{1,2})(?!\d)",
 )
+CJK_EPISODE_RE = re.compile(
+    r"第\s*(?P<episode_cjk>\d{1,4})\s*[話话集回]"
+    r"|(?<!\d)(?P<episode_ko>\d{1,4})\s*[화회]"
+)
+OCR_MARKER_RE = re.compile(
+    r"(?<![A-Za-z0-9])S([0-9OIl]{2})[ ._-]?E([0-9OIl]{2,3})(?![A-Za-z0-9])"
+)
+PRODUCTION_CODE_RE = re.compile(
+    r"^(?P<code>\d[A-Za-z]{2,4}\d{2,3})(?:\s*[-:]\s*|\s+)(?P<title>.+)$"
+)
+SPECIALS_DIR_RE = re.compile(r"(?i)^(?:specials?)$")
 TV_GENERIC_TITLES = {
     "episode", "episodes", "season", "series", "show", "the show",
     "show name", "example", "download", "downloads", "folder", "library",
     "media", "movies", "new folder", "shows", "tv", "tv shows", "video",
-    "videos",
+    "videos", "special", "specials",
 }
 TV_GENERIC_WORDS = {
     "the", "show", "name", "example", "episode", "episodes", "season",
@@ -80,6 +92,19 @@ NAMING = {
     "tv_template": "{title} - S{season:02d}E{episode:02d} - {episode_title}",
     "tag_id": False,
 }
+
+
+def _fix_ocr_markers(text):
+    """Repair S01E01 markers typed with letters: SOI EOI -> S01E01."""
+    table = str.maketrans({"O": "0", "I": "1", "l": "1"})
+
+    def repair(match):
+        season, episode = match.group(1), match.group(2)
+        if season.isdigit() and episode.isdigit():
+            return match.group(0)
+        return "S%sE%s" % (season.translate(table), episode.translate(table))
+
+    return OCR_MARKER_RE.sub(repair, text or "")
 
 
 _OCR_YEAR_RE = re.compile(r"(?<![A-Za-z0-9])([12][09OoIl][0-9OoIl]{2})(?![A-Za-z0-9])")
@@ -163,6 +188,9 @@ def _untagged_episode_parts(stem):
     if len(parts) != 2:
         return None
     show_title = _clean_tv_title(parts[0])
+    code_match = PRODUCTION_CODE_RE.match(parts[1].strip())
+    if code_match:
+        parts[1] = code_match.group("title")
     episode_title = _clean_tv_title(parts[1])
     if not (
         _useful_tv_title(show_title)
@@ -175,7 +203,9 @@ def _untagged_episode_parts(stem):
 def parse_tv_name(path):
     """Return (show title, year, season, episode) from an episode path."""
     path = Path(path)
-    stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", path.stem)
+    stem = re.sub(
+        r"\[[^\]]*\]|\{[^}]*\}", " ", _fix_ocr_markers(path.stem),
+    )
     stem = FILE_NUMBER_RE.sub("", stem).replace(".", " ").replace("_", " ")
 
     release_match = TV_RELEASE_TAG_RE.search(stem)
@@ -185,6 +215,7 @@ def parse_tv_name(path):
     episode_stem = episode_stem.rstrip(" \t.([{_-")
 
     marker = TV_NAME_MARKER_RE.search(episode_stem)
+    cjk_marker = None if marker else CJK_EPISODE_RE.search(episode_stem)
     number_match = NUMBERED_EPISODE_RE.fullmatch(episode_stem.strip())
     trailing_number = TRAILING_EPISODE_RE.search(episode_stem)
     year_match = next(
@@ -198,6 +229,8 @@ def parse_tv_name(path):
     boundary = len(stem)
     if marker:
         boundary = min(boundary, marker.start())
+    elif cjk_marker:
+        boundary = min(boundary, cjk_marker.start())
     if trailing_number and not number_match and not (
         year_match and year_match.start() == trailing_number.start(1)
     ):
@@ -222,6 +255,10 @@ def parse_tv_name(path):
         )
         season = int(season_value) if season_value else None
         episode = int(episode_value) if episode_value else None
+    elif cjk_marker:
+        episode = int(
+            cjk_marker.group("episode_cjk") or cjk_marker.group("episode_ko")
+        )
     elif number_match:
         episode = int(number_match.group("episode"))
     elif trailing_number and not (
@@ -235,9 +272,14 @@ def parse_tv_name(path):
             season = int(filename_season.group(1))
 
     for parent in path.parents:
+        if SPECIALS_DIR_RE.fullmatch(parent.name.strip()):
+            if season is None:
+                season = 0
+            break
         season_match = TV_SEASON_MARKER_RE.search(parent.name)
         if season_match:
-            season = season or int(season_match.group(1))
+            if season is None:
+                season = int(season_match.group(1))
             break
 
     if episode is not None and season is None:
@@ -269,9 +311,30 @@ def parse_tv_name(path):
     return title, year, season, episode
 
 
+def has_explicit_episode_marker(path):
+    """True only for SxxExx, 1x02 or Season/Episode markers, not bare numbers."""
+    match = TV_NAME_MARKER_RE.search(
+        _fix_ocr_markers(Path(path).stem).replace(".", " ").replace("_", " "),
+    )
+    return bool(match and any(
+        match.group(name) for name in ("season", "season_x", "season_word")
+    ))
+
+
+def parse_production_code(stem):
+    """Return a production code like 3ACV01 from 'Show - 3ACV01 - Title'."""
+    stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem or "")
+    stem = FILE_NUMBER_RE.sub("", stem).replace(".", " ").replace("_", " ")
+    parts = re.split(r"\s+-\s+", stem.strip(), maxsplit=1)
+    if len(parts) != 2:
+        return None
+    match = PRODUCTION_CODE_RE.match(parts[1].strip())
+    return match.group("code").upper() if match else None
+
+
 def parse_tv_episode_end(path):
     """Return a multi-episode range end, if the filename contains one."""
-    match = TV_EPISODE_RE.search(Path(path).stem)
+    match = TV_EPISODE_RE.search(_fix_ocr_markers(Path(path).stem))
     if not match:
         return None
     end = match.group("episode_end") or match.group("episode_end_x")
@@ -281,7 +344,7 @@ def parse_tv_episode_end(path):
 def tv_season_is_explicit(path):
     """Whether a season number came from the filename or its folders."""
     path = Path(path)
-    match = TV_NAME_MARKER_RE.search(path.stem)
+    match = TV_NAME_MARKER_RE.search(_fix_ocr_markers(path.stem))
     if match and any(
         match.group(name) for name in ("season", "season_x", "season_word")
     ):
@@ -293,13 +356,21 @@ def tv_season_is_explicit(path):
 
 def parse_tv_episode(stem):
     """Return (show title, year, season, episode) for standard episode names."""
-    parse_stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem)
+    parse_stem = re.sub(
+        r"\[[^\]]*\]|\{[^}]*\}", " ", _fix_ocr_markers(stem),
+    )
     release_match = TV_RELEASE_TAG_RE.search(parse_stem)
     if release_match and release_match.start() > 0:
         parse_stem = parse_stem[:release_match.start()]
     parse_stem = parse_stem.rstrip(" \t.([{_-")
     match = TV_EPISODE_RE.search(parse_stem)
     if not match:
+        cjk = CJK_EPISODE_RE.search(parse_stem)
+        if cjk:
+            title, year = parse_name(parse_stem[:cjk.start()])
+            return title, year, 1, int(
+                cjk.group("episode_cjk") or cjk.group("episode_ko")
+            )
         number = NUMBERED_EPISODE_RE.fullmatch(parse_stem.strip())
         trailing = TRAILING_EPISODE_RE.search(parse_stem)
         if number:
@@ -341,6 +412,7 @@ def parse_tv_episode_in_context(stem, show_title, season_number=1):
 
 def parse_tv_episode_title(stem):
     """Return the optional episode title following the season and episode."""
+    stem = _fix_ocr_markers(stem)
     match = TV_EPISODE_RE.search(stem)
     if not match:
         parts = _untagged_episode_parts(stem)
@@ -450,8 +522,9 @@ def tv_episode_name_for(choice, max_length=200):
 
 
 def norm(value):
-    value = (value or "").lower().replace("&", "and")
-    value = re.sub(r"[^a-z0-9 ]", "", value)
+    value = unicodedata.normalize("NFKC", value or "").casefold()
+    value = value.replace("&", "and")
+    value = re.sub(r"[^\w ]|_", "", value)
     return re.sub(r"\s+", " ", value).strip()
 
 

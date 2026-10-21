@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .naming import fold_diacritics, similarity, tv_episode_name_for
@@ -19,12 +20,21 @@ _RELEASE_TAG_RE = re.compile(
 )
 _RELEASE_GROUP_RE = re.compile(r"[-_.][A-Z0-9][A-Z0-9._-]*$")
 _GENERIC_TITLE_WORDS = {"a", "an", "film", "movie", "part", "the", "video"}
+_PLACEHOLDER_WORD_RE = re.compile(
+    r"^(?:title|sample|test|untitled|placeholder|dummy|final|copy|temp|"
+    r"new|unknown|clip|file|name|movies|films)\d*$"
+)
+_SYMBOL_RE = re.compile(r"[@#$%^*+=~|<>\\/]+")
+_YEAR_ONLY_RE = re.compile(r"^(?:19|20)\d{2}$")
+NO_MATCH_FLOOR = 0.5
 MatchGroupKey = Tuple[str, str, Optional[int]]
 
 
 def normalize_search_title(title: str) -> str:
     """Strip release metadata while preserving the title's display casing."""
     title = _BRACKETED_TAG_RE.sub(" ", title or "")
+    title = _SYMBOL_RE.sub(" ", title)
+    year_only = " ".join(title.replace(".", " ").replace("_", " ").split())
     title = _YEAR_TAG_RE.sub(" ", title)
     release = _RELEASE_TAG_RE.search(title)
     if release and release.start() > 0:
@@ -34,7 +44,10 @@ def normalize_search_title(title: str) -> str:
         if release_group and release_group.start() > 0:
             title = title[:release_group.start()]
     title = re.sub(r"[._]+", " ", title)
-    return " ".join(title.split()).strip(" -")
+    cleaned = " ".join(title.split()).strip(" -")
+    if not cleaned and _YEAR_ONLY_RE.match(year_only):
+        return year_only
+    return cleaned
 
 
 def search_group_key(
@@ -62,23 +75,46 @@ def group_match_items(
 
 
 def _normalized_match_title(value):
+    original = value
     value = _BRACKETED_TAG_RE.sub(" ", value or "")
-    value = value.lower().replace("&", " and ")
-    value = re.sub(r"[^a-z0-9]+", " ", value)
+    value = fold_diacritics(unicodedata.normalize("NFKC", value).casefold())
+    value = value.replace("&", " and ")
+    value = re.sub(r"[\W_]+", " ", value)
     value = _YEAR_TAG_RE.sub(" ", value)
     value = _RELEASE_TAG_RE.sub(" ", value)
-    return " ".join(value.split())
+    return " ".join(value.split()) or " ".join(_title_words(original))
+
+
+def _title_words(value):
+    value = _BRACKETED_TAG_RE.sub(" ", value or "")
+    value = unicodedata.normalize("NFKC", value).casefold()
+    return re.sub(r"[\W_]+", " ", value.replace("&", " and ")).split()
+
+
+def _is_placeholder_word(word):
+    return word in _GENERIC_TITLE_WORDS or bool(
+        _PLACEHOLDER_WORD_RE.match(word)
+    )
 
 
 def _is_generic_title(value):
-    words = [
-        word for word in _normalized_match_title(value).split()
-        if (
-            word not in _GENERIC_TITLE_WORDS
-            and any(char.isalpha() for char in word)
-        )
-    ]
-    return sum(len(word) for word in words) < 3
+    """True for empty, placeholder-only or too-short titles."""
+    words = _title_words(value)
+    meaningful = [word for word in words if not _is_placeholder_word(word)]
+    if not meaningful:
+        return True
+    if all(word.isdigit() for word in meaningful):
+        # "007" or "300" are real titles; "Movie 202" is a placeholder.
+        return len(meaningful) != len(words)
+    return sum(
+        len(word) * (1 if word.isascii() else 2)
+        for word in meaningful if any(char.isalpha() for char in word)
+    ) < 3
+
+
+def is_year_like_title(value):
+    """A title that is only a year, e.g. 1917 or 2020, is a weak signal."""
+    return bool(_YEAR_ONLY_RE.match(" ".join(_title_words(value))))
 
 
 def year_of(result):
@@ -96,10 +132,22 @@ def score(result, query):
     )
 
 
-def rank(results, query):
+def _year_closeness(result, year):
+    result_year = year_of(result)
+    if not year or result_year is None:
+        return 0
+    gap = abs(result_year - year)
+    return 2 if gap == 0 else 1 if gap == 1 else 0
+
+
+def rank(results, query, year=None):
     return sorted(
         results,
-        key=lambda result: (score(result, query), result.get("popularity", 0)),
+        key=lambda result: (
+            round(score(result, query), 2),
+            _year_closeness(result, year),
+            result.get("popularity", 0),
+        ),
         reverse=True,
     )
 

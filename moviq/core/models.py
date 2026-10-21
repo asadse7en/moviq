@@ -2,9 +2,9 @@ from pathlib import Path
 import re
 
 from .naming import (
-    norm, parse_name, parse_tv_episode, parse_tv_episode_in_context,
-    parse_tv_episode_end, parse_tv_episode_title, parse_tv_name,
-    tv_season_is_explicit,
+    norm, parse_name, parse_production_code, parse_tv_episode,
+    parse_tv_episode_in_context, parse_tv_episode_end,
+    parse_tv_episode_title, parse_tv_name, tv_season_is_explicit,
 )
 
 
@@ -13,8 +13,8 @@ _SEASON_DIR_RE = re.compile(
 )
 _GENERIC_DIRS = {
     "download", "downloads", "episode", "episodes", "folder", "library",
-    "media", "movies", "new folder", "season", "series", "shows", "tv",
-    "tv shows", "video", "videos",
+    "media", "movies", "new folder", "season", "series", "shows", "special",
+    "specials", "tv", "tv shows", "video", "videos",
 }
 _LIBRARY_DIRS = {
     "downloads", "library", "media", "movies", "shows", "tv", "tv shows",
@@ -56,6 +56,8 @@ def _season_context(path, root):
         match = _SEASON_DIR_RE.fullmatch(parent.name.strip())
         if match:
             return int(match.group(1))
+        if norm(parent.name) in ("special", "specials"):
+            return 0
         if show_title and norm(parent.name) == norm(show_title):
             break
     return 1
@@ -91,12 +93,17 @@ class Item:
                 if episode is not None and show_title else None
             )
             self.episode_title = parse_tv_episode_title(self.path.stem)
+            self.production_code = (
+                parse_production_code(self.path.stem)
+                if episode is None else None
+            )
             self.is_tv_episode = bool(
                 tv_episode or (show_title and self.episode_title)
             )
         else:
             self.is_tv_episode = False
             self.episode_title = None
+            self.production_code = None
             self.season_was_explicit = False
             self.episode_end_number = None
         if self.media_type == "tv":

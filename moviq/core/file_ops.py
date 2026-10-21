@@ -42,10 +42,25 @@ def is_hidden_path(path):
     hidden_attribute = getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 0x2)
     return bool(attributes & hidden_attribute)
 
+_SAMPLE_WORD_RE = re.compile(r"(?<![a-z0-9])(?:sample|trailer)(?![a-z0-9])")
+SAMPLE_MAX_BYTES = 300 * 1024 * 1024
+
+
+def _looks_like_sample(p):
+    """Skip only small files whose name has a sample/trailer word."""
+    words = [w for w in re.split(r"[\s._\-\[\]()]+", p.stem.lower()) if w]
+    if not words or words[-1] not in ("sample", "trailer"):
+        return False
+    try:
+        size = p.stat().st_size
+    except OSError:
+        return True
+    return 0 < size <= SAMPLE_MAX_BYTES
+
+
 def is_movie_file(p):
-    low = p.name.lower()
     return (not is_hidden_path(p) and p.suffix.lower() in VIDEO_EXT
-            and "sample" not in low and "trailer" not in low)
+            and not _looks_like_sample(p))
 
 def count_videos(folder):
     try:
