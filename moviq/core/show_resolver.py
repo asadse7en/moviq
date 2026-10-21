@@ -8,6 +8,7 @@ import threading
 from typing import Optional
 
 from .config import SHOW_OVERRIDES_FILE, migrate_user_data
+from .naming import fold_diacritics
 from .tmdb import TMDB, TMDBError
 
 
@@ -44,7 +45,9 @@ def normalize_show_key(title, year=None):
 
 def _similarity(left, right):
     return SequenceMatcher(
-        None, normalize_show_title(left), normalize_show_title(right),
+        None,
+        fold_diacritics(normalize_show_title(left)),
+        fold_diacritics(normalize_show_title(right)),
     ).ratio()
 
 

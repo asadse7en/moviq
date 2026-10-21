@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from .naming import similarity, tv_episode_name_for
+from .naming import fold_diacritics, similarity, tv_episode_name_for
 
 
 _BRACKETED_TAG_RE = re.compile(r"[\[\(\{].*?[\]\)\}]")

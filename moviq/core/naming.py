@@ -82,9 +82,26 @@ NAMING = {
 }
 
 
+_OCR_YEAR_RE = re.compile(r"(?<![A-Za-z0-9])([12][09OoIl][0-9OoIl]{2})(?![A-Za-z0-9])")
+
+
+def _fix_ocr_year(text):
+    """Repair years typed with letters: 20O0 -> 2000 (only when it becomes 19xx/20xx)."""
+    table = str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1"})
+
+    def repair(match):
+        token = match.group(1)
+        if token.isdigit():
+            return token
+        fixed = token.translate(table)
+        return fixed if re.fullmatch(r"(?:19|20)\d{2}", fixed) else token
+
+    return _OCR_YEAR_RE.sub(repair, text)
+
+
 def parse_name(stem):
     """'The.Dark.Knight.2008.1080p.BluRay' -> ('The Dark Knight', 2008)"""
-    stem = FILE_NUMBER_RE.sub("", stem)
+    stem = _fix_ocr_year(FILE_NUMBER_RE.sub("", stem))
     s = re.sub(r"[\[\{].*?[\]\}]", " ", stem)
     s = s.replace("_", " ").replace(".", " ")
     year = None
@@ -438,5 +455,22 @@ def norm(value):
     return re.sub(r"\s+", " ", value).strip()
 
 
+def fold_diacritics(value):
+    """Drop accents from Latin letters only (Amelie == Amélie); keep kana/hangul marks."""
+    out = []
+    for char in unicodedata.normalize("NFC", value or ""):
+        parts = unicodedata.normalize("NFD", char)
+        if (
+            len(parts) > 1 and ord(parts[0]) < 0x250
+            and all(unicodedata.combining(mark) for mark in parts[1:])
+        ):
+            out.append(parts[0])
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 def similarity(a, b):
-    return SequenceMatcher(None, norm(a), norm(b)).ratio()
+    return SequenceMatcher(
+        None, fold_diacritics(norm(a)), fold_diacritics(norm(b)),
+    ).ratio()
