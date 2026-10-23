@@ -37,7 +37,7 @@ from ..core.matching import (
 )
 from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
-from ..core.providers.ids import display_id
+from ..core.providers.ids import display_id, provider_of
 from ..core.naming import (
     NAMING, has_explicit_episode_marker, parse_name, parse_tv_name,
 )
@@ -134,8 +134,8 @@ ERROR_STATUS_DETAILS = {
         "The new path is too long or has characters Windows doesn't allow."
     ),
     "tmdb_unavailable": (
-        "Couldn't reach TMDB (no connection, bad API key, or rate limit). "
-        "Check your key in Settings and try again."
+        "Couldn't reach the metadata source (no connection, bad API key, "
+        "or rate limit). Check Settings and try again."
     ),
 }
 
@@ -881,6 +881,8 @@ class App:
             return "Renamed this session. Undo the rename to change its match."
         if status_key == "error":
             reason = getattr(item, "error_code", None) or "unknown"
+            if reason == "source_mode":
+                return item.error or "The selected source does not cover this mode."
             message = ERROR_STATUS_DETAILS.get(reason)
             if message:
                 return message.format(
@@ -2624,12 +2626,22 @@ class App:
 
     # ---- matching (background thread) -------------------------------------
     @staticmethod
-    def _auto_match_eligible(item):
+    def _auto_match_eligible(item, selected_source="automatic"):
         media_type = getattr(item, "media_type", "movie")
+        match = getattr(item, "match", None) or {}
+        match_id = match.get("id")
+        selected_source_mismatch = (
+            selected_source != "automatic"
+            and item.status in ("auto", "no_change")
+            and isinstance(match_id, int)
+            and not isinstance(match_id, bool)
+            and provider_of(match_id) != selected_source
+        )
         return (
             getattr(item, "match_source", None) != "manual"
-            and item.status not in (
-                "done", "auto", "manual", "no_change",
+            and (
+                item.status not in ("done", "auto", "manual", "no_change")
+                or selected_source_mismatch
             )
             and item.error_code not in (
                 "wrong_mode_movie_in_tv", "wrong_mode_tv_in_movies",
@@ -2664,7 +2676,12 @@ class App:
         )
         if manual_kept:
             self.status(f"{manual_kept} manual matches kept.")
-        items = [item for item in items if self._auto_match_eligible(item)]
+        items = [
+            item for item in items
+            if self._auto_match_eligible(
+                item, self.provider_settings.selected,
+            )
+        ]
         key = self.key_var.get().strip()
         self._configure_resolver()
         if not items:
@@ -2778,7 +2795,29 @@ class App:
 
                 first_item = items[0]
                 search_query = normalize_search_title(first_item.query)
-                if first_item.media_type == "tv":
+                selected_source = self.provider_settings.selected
+                selected_provider = (
+                    tmdb._provider(selected_source)
+                    if selected_source != "automatic" else None
+                )
+                if (
+                    selected_provider is not None
+                    and first_item.media_type not in selected_provider.kinds
+                ):
+                    source_name = PROVIDER_INFO[selected_source]["label"]
+                    coverage = (
+                        "TV" if "tv" in selected_provider.kinds
+                        else "movies"
+                    )
+                    message = (
+                        f"{source_name} only covers {coverage}. "
+                        "Pick another source in General."
+                    )
+                    results = [
+                        ("error", None, message, "source_mode")
+                        for _item in items
+                    ]
+                elif first_item.media_type == "tv":
                     results = match_tv_items(
                         tmdb, self.show_resolver, items, operation_cache,
                         thr, self._review_reason,
@@ -2865,9 +2904,16 @@ class App:
                         )
                         item.error = self._safe_exception_message(item.error)
                         item.error_code = (
-                            "tmdb_unavailable" if status == "error" else None
+                            details[0]
+                            if status == "error" and details
+                            and details[0] == "source_mode"
+                            else "tmdb_unavailable" if status == "error"
+                            else None
                         )
-                        item.review_reason = details[0] if details else None
+                        item.review_reason = (
+                            details[0] if status == "review" and details
+                            else None
+                        )
                         self.refresh_row(item)
                         pending["order"] = True
                     run["completed"].add(item)

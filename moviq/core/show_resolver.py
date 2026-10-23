@@ -9,7 +9,7 @@ from typing import Optional
 
 from .config import SHOW_OVERRIDES_FILE, migrate_user_data
 from .naming import fold_diacritics
-from .providers.ids import is_volatile
+from .providers.ids import is_volatile, provider_of
 from .tmdb import TMDB, TMDBError
 
 
@@ -221,6 +221,12 @@ class ShowResolver:
         normalized = normalize_show_title(title)
         with self._lock:
             override_id = self._overrides.get(normalized)
+        if (
+            override_id and providers
+            and providers.selected != "automatic"
+            and provider_of(override_id) != providers.selected
+        ):
+            override_id = None
         if self.client_factory is not None:
             tmdb = self.client_factory(
                 api_key, language, providers, operation_cache,
