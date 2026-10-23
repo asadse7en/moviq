@@ -9,6 +9,7 @@ from typing import Optional
 
 from .config import SHOW_OVERRIDES_FILE, migrate_user_data
 from .naming import fold_diacritics
+from .providers.ids import is_volatile
 from .tmdb import TMDB, TMDBError
 
 
@@ -101,10 +102,15 @@ def _query_variants(title, year):
 
 
 class ShowResolver:
-    def __init__(self, key, language, overrides_path=None):
+    def __init__(
+        self, key, language, overrides_path=None, client_factory=None,
+        providers=None,
+    ):
         if overrides_path is None:
             migrate_user_data()
-        self._config = (key.strip(), language)
+        self._config = (key.strip(), language, providers)
+        # client_factory(key, language, providers, operation_cache) -> client
+        self.client_factory = client_factory
         self._overrides_path = (
             Path(overrides_path) if overrides_path
             else SHOW_OVERRIDES_FILE
@@ -117,9 +123,9 @@ class ShowResolver:
             self._overrides = {}
             self.load_error = error
 
-    def configure(self, key, language):
+    def configure(self, key, language, providers=None):
         with self._lock:
-            self._config = (key.strip(), language)
+            self._config = (key.strip(), language, providers)
 
     @property
     def configuration(self):
@@ -164,6 +170,8 @@ class ShowResolver:
             1.0,
             candidate=candidate,
         )
+        if is_volatile(tmdb_id):
+            return result  # offline guesses have no stable id to remember
         with self._lock:
             overrides = dict(self._overrides)
             overrides[key] = tmdb_id
@@ -205,39 +213,39 @@ class ShowResolver:
         )
 
     def _resolve(self, title, year, config, operation_cache=None):
-        api_key, language = config
-        if not api_key:
+        api_key, language, providers = config
+        if not api_key and self.client_factory is None:
             return ShowResult(
                 ShowState.ERROR, error="A TMDB API key is required.",
             )
         normalized = normalize_show_title(title)
         with self._lock:
             override_id = self._overrides.get(normalized)
-        tmdb = TMDB(
-            api_key, language, operation_cache=operation_cache,
-        )
+        if self.client_factory is not None:
+            tmdb = self.client_factory(
+                api_key, language, providers, operation_cache,
+            )
+        else:
+            tmdb = TMDB(
+                api_key, language, operation_cache=operation_cache,
+            )
         if override_id:
             details = tmdb.tv(override_id)
-            if not details:
+            if not details and not is_volatile(override_id):
                 return ShowResult(
                     ShowState.ERROR,
                     error=f"TMDB show {override_id} could not be loaded.",
                 )
-            name = details.get("name") or title
-            return ShowResult(
-                ShowState.RESOLVED, override_id, name,
-                _year_of(details), 1.0, candidate=details,
-            )
+            if details:
+                name = details.get("name") or title
+                return ShowResult(
+                    ShowState.RESOLVED, override_id, name,
+                    _year_of(details), 1.0, candidate=details,
+                )
 
         generic = set(normalized.split()).issubset(_GENERIC_WORDS)
         for query, search_year in _query_variants(title, year):
-            response = tmdb.get(
-                "/search/tv",
-                query=query,
-                first_air_date_year=search_year,
-                include_adult="false",
-            )
-            candidates = (response or {}).get("results", [])
+            candidates = tmdb.search_tv_strict(query, search_year)
             ranked = []
             for candidate in candidates:
                 name = candidate.get("name") or candidate.get("title")

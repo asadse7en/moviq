@@ -190,6 +190,7 @@ class SettingsStore:
             merged["window_state"] = self.defaults["window_state"]
         if not merged["remember"]:
             merged.pop("key", None)
+            merged.pop("provider_keys", None)
         if (
             (source == self.legacy_path and config)
             or removed_setting_found
@@ -205,6 +206,7 @@ class SettingsStore:
             self.data[key] = value
             if key == "remember" and not value:
                 self.data.pop("key", None)
+                self.data.pop("provider_keys", None)
             self._schedule_save()
         self.on_change(key, value)
 
@@ -219,6 +221,7 @@ class SettingsStore:
             self.data.update(values)
             if not self.data.get("remember", True):
                 self.data.pop("key", None)
+                self.data.pop("provider_keys", None)
             self._schedule_save()
         self.batching = True
         try:
@@ -242,6 +245,7 @@ class SettingsStore:
                 data.pop(key, None)
         if not data.get("remember", True):
             data.pop("key", None)
+            data.pop("provider_keys", None)
         return data
 
     def _save_in_background(self):

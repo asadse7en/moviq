@@ -6,6 +6,8 @@ from .show_resolver import ShowState
 
 
 def match_movie_items(tmdb, items, threshold, search_query):
+    for item in items:
+        item.match_method = "title only"
     if _is_generic_title(items[0].query):
         return [("nomatch", None, "") for _item in items]
     search_results = tmdb.search(search_query, items[0].year)
@@ -19,11 +21,17 @@ def match_movie_items(tmdb, items, threshold, search_query):
             ranked, item.query, item.year, threshold,
         )
         year_title = not item.year and is_year_like_title(item.query)
-        status = "auto" if confident and not year_title else "review"
         match = ranked[0]
+        offline = bool(match.get("offline"))
+        status = (
+            "auto" if confident and not year_title and not offline
+            else "review"
+        )
         choice = to_choice(match)
         match_year = year_of(match)
-        if year_title:
+        if offline:
+            review_reason = "offline"
+        elif year_title:
             review_reason = "year_title"
         elif item.year and match_year != item.year:
             review_reason = "year"
@@ -81,6 +89,7 @@ def match_tv_items(
 
     results = []
     for item in items:
+        item.match_method = None
         resolved = show_resolver.resolve_show(
             item.query, item.year, operation_cache,
         )
@@ -104,6 +113,7 @@ def match_tv_items(
         season_number = item.season_number
         episode_numbers = item.episode_numbers
         if item.episode_number is None and item.episode_title:
+            item.match_method = "episode title"
             show_details = tmdb.tv(show_id) or {}
             title_matches = []
             for season in show_details.get("seasons") or []:
@@ -116,6 +126,12 @@ def match_tv_items(
                 for episode in season_data.get("episodes") or []:
                     episode_name = episode.get("name")
                     code = getattr(item, "production_code", None)
+                    code_matches = bool(
+                        code
+                        and str(
+                            episode.get("production_code") or "",
+                        ).upper() == code
+                    )
                     if (
                         episode_name
                         and (
@@ -123,18 +139,15 @@ def match_tv_items(
                             or similarity(
                                 episode_name, item.episode_title,
                             ) >= 0.92
-                            or (
-                                code
-                                and str(
-                                    episode.get("production_code") or "",
-                                ).upper() == code
-                            )
+                            or code_matches
                         )
                     ):
                         episode = dict(episode)
                         episode.setdefault(
                             "season_number", season_number_for_match,
                         )
+                        if code_matches:
+                            episode["_matched_by_code"] = True
                         title_matches.append(episode)
             if len(title_matches) != 1:
                 results.append((
@@ -143,6 +156,8 @@ def match_tv_items(
                 ))
                 continue
             matched_episode = title_matches[0]
+            if matched_episode.get("_matched_by_code"):
+                item.match_method = "production code"
             season_number = matched_episode["season_number"]
             episode_numbers = (matched_episode["episode_number"],)
             episodes = [matched_episode]
@@ -156,6 +171,8 @@ def match_tv_items(
             reason = review_reason(
                 choice, item.query, item.year, [choice], threshold, True,
             )
+            if show.get("offline"):
+                status, reason = "review", "offline"
             results.append((status, choice, "", reason))
             continue
         absolute_needed = not item.season_was_explicit
@@ -169,6 +186,10 @@ def match_tv_items(
             absolute_needed = (
                 item.episode_number > item.season_episode_count
             )
+        item.match_method = (
+            "absolute number" if absolute_needed
+            else "season and episode in file name"
+        )
         episodes = []
         if absolute_needed:
             episodes = [
@@ -253,6 +274,8 @@ def match_tv_items(
         reason = review_reason(
             choice, item.query, item.year, [choice], threshold, True,
         )
+        if show.get("offline"):
+            status, reason, error = "review", "offline", ""
         results.append((
             status, choice, error, reason,
         ))

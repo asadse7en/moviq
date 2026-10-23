@@ -127,6 +127,9 @@ class Item:
             self.query = self.path.parent.name
         self.match = None
         self.match_source = None
+        self.match_method = None
+        self.tried_sources = []
+        self.title_score = 0.0
         self.status = "pending"
         self._pending_manual_show = None
         self.status_detail = ""

@@ -11,6 +11,7 @@ from ...core.matching import (
 )
 from ...core.naming import similarity
 from ...core.show_resolver import ShowState
+from ...core.providers.ids import display_id, parse_typed_id
 from ...core.tmdb import MAX_WORKERS, TMDBOperationCache
 from ..popups import apply_titlebar_theme, set_window_icon
 from ._common import ID_RE, _match_dialog_sizes
@@ -216,7 +217,7 @@ class SearchDialog(
         self.search_entry.pack(fill="both", expand=True, padx=(10, 4), pady=7)
         self.placeholder_label = tk.Label(
             search_input,
-            text="Search TMDB ID, movie, show, or season/episode...",
+            text="Search title, ID (tvdb:81189), or season/episode...",
             bg=palette["card"],
             fg=palette["muted"],
             font="TkTextFont",
@@ -598,6 +599,9 @@ class SearchDialog(
     @staticmethod
     def _parse_tmdb_id(query):
         text = query.strip()
+        typed = parse_typed_id(text)  # tvdb:81189, imdb:tt0111161, ...
+        if typed is not None:
+            return typed
         match = ID_RE.fullmatch(text)
         if not match:
             return None
@@ -663,7 +667,7 @@ class SearchDialog(
         tmdb_id = self._parse_tmdb_id(query)
         if tmdb_id is not None:
             self._direct_id_search = True
-            self.search_status_var.set(f"Looking up TMDb ID {tmdb_id}…")
+            self.search_status_var.set(f"Looking up {display_id(tmdb_id)}…")
             self._executor.submit(
                 self._load_by_id, generation, tmdb_id, self.is_tv,
             )
@@ -673,7 +677,7 @@ class SearchDialog(
         if not title:
             self.search_status_var.set("Type a title to search.")
             return
-        self.search_status_var.set("Searching TMDb…")
+        self.search_status_var.set("Searching…")
         self._executor.submit(
             self._load_search, generation, title, year, self.is_tv,
         )

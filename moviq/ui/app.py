@@ -20,7 +20,8 @@ from tkinter import filedialog, ttk
 
 from .. import __version__ as APP_VERSION
 from ..core.config import (
-    ERROR_LOG_FILE, VIDEO_EXT, remove_legacy_cache_files,
+    ERROR_LOG_FILE, IMAGE_EXT, SIDECAR_EXT, VIDEO_EXT,
+    remove_legacy_cache_files,
 )
 from ..core.file_ops import (
     count_videos, is_hidden_path, make_plan, make_tv_plan, rebase, scan_dir,
@@ -31,11 +32,12 @@ from ..core.formatting import (
     MOVIE_DEFAULT_ID, TV_DEFAULT_ID, format_pattern,
 )
 from ..core.matching import (
-    group_match_items, normalize_search_title, score, tv_match_is_applicable,
-    tv_score,
+    _is_generic_title, group_match_items, normalize_search_title, score,
+    tv_match_is_applicable, tv_score,
 )
 from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
+from ..core.providers.ids import display_id
 from ..core.naming import (
     NAMING, has_explicit_episode_marker, parse_name, parse_tv_name,
 )
@@ -43,6 +45,8 @@ from ..core.tmdb import (
     MAX_WORKERS, TMDB, TMDBAuthError, TMDBCancelled,
     TMDBOperationCache,
 )
+from ..core.providers.router import ProviderRouter
+from ..core.providers.settings import PROVIDER_INFO, ProviderSettings
 from ..core.show_resolver import (
     ShowResolver,
 )
@@ -155,7 +159,10 @@ def _detect_media_mode(paths, current_mode):
             files.extend(scan_dir(path))
         elif path.suffix.lower() in VIDEO_EXT:
             files.append(path)
+    return _detect_mode_from_files(files, current_mode)
 
+
+def _detect_mode_from_files(files, current_mode):
     episodes = 0
     movies = 0
     for path in files:
@@ -173,6 +180,13 @@ def _detect_media_mode(paths, current_mode):
     if current_mode == "tv" and movies > episodes:
         return "movie"
     return None
+
+
+def _resolver_client(key, language, providers, operation_cache):
+    return ProviderRouter(
+        providers or ProviderSettings(), key, language,
+        operation_cache=operation_cache,
+    )
 
 
 class App:
@@ -235,18 +249,26 @@ class App:
         self.pal = PALETTES[self.mode]
         self._status_tooltip = TableTooltip(
             root, self.pal["card"], self.pal["fg"], self.pal["chip_border"],
+            self.pal["muted"],
         )
         self.have_sv = HAVE_SV
         self._toolbar_compact = False
         self._sum_pending = False
         self.anchor = None
         self._row_tooltip_paths = {}
+        self._status_card_cache_key = None
+        self._status_card_cache = None
 
         remove_legacy_cache_files()
 
+        self.provider_settings = ProviderSettings.from_config(
+            self.settings_store.data,
+        )
         self.build_ui()
         self.show_resolver = ShowResolver(
             self.key_var.get().strip(), self.language(),
+            client_factory=_resolver_client,
+            providers=self.provider_settings,
         )
         if self.show_resolver.load_error:
             show_error(
@@ -819,13 +841,20 @@ class App:
                 explanation = "The year differs from the file name"
             elif reason == "similar":
                 explanation = "Several results are similar"
+            elif reason == "offline":
+                explanation = (
+                    "Guessed from the file name only; nothing was "
+                    "looked up online"
+                )
             else:
                 explanation = "The title is only a partial match"
             title = " ".join(
                 str(match.get("title") or item.query or "Unknown").split()
             )
             year = match.get("year") or "????"
-            needs_check = reason in ("year_title", "year", "similar")
+            needs_check = reason in (
+                "year_title", "year", "similar", "offline",
+            )
             if not needs_check and confidence >= 90:
                 needs_check = True
                 explanation = (
@@ -861,6 +890,275 @@ class App:
             )
             return f"Something went wrong: {exception_message}."
         return "Matching is in progress."
+
+    @staticmethod
+    def _status_match_title(item, match):
+        title = " ".join(
+            str(match.get("title") or item.query or "").split()
+        )
+        if not title:
+            return ""
+        year = match.get("year") or "????"
+        result = f"{title} ({year})"
+        season = match.get("season_number")
+        episode = match.get("episode_number")
+        if item.media_type == "tv" and isinstance(season, int) and isinstance(
+            episode, int,
+        ):
+            code = f"S{season:02d}E{episode:02d}"
+            episode_end = match.get("episode_end_number")
+            if isinstance(episode_end, int) and episode_end > episode:
+                code += f"-E{episode_end:02d}"
+            episode_title = match.get("episode_title")
+            details = code
+            if episode_title:
+                details += f" \u00b7 {episode_title}"
+            result += f" [{details}]"
+        return result
+
+    @staticmethod
+    def _status_source(match):
+        composite_id = match.get("id")
+        if composite_id is None:
+            return ""
+        try:
+            return display_id(composite_id)
+        except (KeyError, TypeError, ValueError):
+            return ""
+
+    @staticmethod
+    def _status_title_score(item, match):
+        if not match:
+            return 0.0
+        return (
+            tv_score(match, item.query)
+            if item.media_type == "tv"
+            else score(match, item.query)
+        )
+
+    @staticmethod
+    def _attached_asset_count(path):
+        path = Path(path)
+        if not path.parent.is_dir():
+            return 0
+        extensions = SIDECAR_EXT | IMAGE_EXT
+        prefix = path.stem.lower()
+        try:
+            return sum(
+                candidate.is_file()
+                and candidate != path
+                and candidate.suffix.lower() in extensions
+                and candidate.name.lower().startswith(prefix)
+                and candidate.name[len(path.stem):].startswith(
+                    (".", "-", "_", " "),
+                )
+                for candidate in path.parent.iterdir()
+            )
+        except OSError:
+            logging.getLogger(__name__).warning(
+                "Could not inspect attached files for status card: %s",
+                path,
+                exc_info=True,
+            )
+            return 0
+
+    def _status_card(self, item):
+        status_key = self._table_status_key(item.status, bool(item.error))
+        match = item.match or getattr(item, "review_match", None) or {}
+        lines = []
+
+        def add(label, value):
+            if value is not None and str(value).strip():
+                lines.append((label, str(value)))
+
+        def source_text(candidate):
+            return self._status_source(candidate)
+
+        def add_warning():
+            error_code = getattr(item, "error_code", None)
+            if error_code == "name_conflict":
+                add("Warning", "Destination already exists.")
+                return
+            if error_code == "bad_path":
+                add("Warning", "The target path is too long or invalid.")
+                return
+            target = self._row_tooltip_paths.get(
+                item.iid, {},
+            ).get("#2", "")
+            if target and Path(target).exists() and (
+                self._normalized_path(target)
+                != self._normalized_path(item.path)
+            ):
+                add("Warning", "Destination already exists.")
+                return
+            if status_key == "done":
+                original = Path(item.orig_path)
+                current_original = Path(item.path).parent / original.name
+                if not current_original.parent.is_dir():
+                    return
+                remaining = self._attached_asset_count(current_original)
+                if remaining:
+                    noun = "file" if remaining == 1 else "files"
+                    add(
+                        "Warning",
+                        f"{remaining} subtitle/artwork {noun} left behind.",
+                    )
+
+        if status_key in ("matched", "no_change"):
+            title = self._status_match_title(item, match)
+            add("Match", title)
+            add("Source", source_text(match))
+            add("How", getattr(item, "match_method", None))
+            if match:
+                add("Title match", f"{item.title_score:.0%}")
+            if item.year and match.get("year"):
+                add(
+                    "Year",
+                    "agrees" if item.year == match.get("year") else "differs",
+                )
+            target = self._row_tooltip_paths.get(
+                item.iid, {},
+            ).get("#2", "")
+            if not target:
+                target = str(item.path)
+            add("Will become", Path(target).name)
+            attached_count = self._attached_asset_count(item.orig_path)
+            if attached_count:
+                add(
+                    "Moves with it",
+                    f"{attached_count} subtitle/artwork files",
+                )
+        elif status_key == "manual":
+            title = self._status_match_title(item, match)
+            if title and source_text(match):
+                title = f"{title} \u00b7 {source_text(match)}"
+            add("Match", title)
+            add("Picked", "You chose this in Manual Match")
+        elif status_key == "review":
+            reason = getattr(item, "review_reason", None)
+            why = {
+                "absolute": (
+                    f"Absolute episode number {item.episode_number} "
+                    "couldn't be mapped."
+                ),
+                "episode_title": (
+                    f'Episode title "{item.episode_title}" isn\'t unique '
+                    f"for {item.query}."
+                ),
+                "episode_missing": (
+                    f"Season {item.season_number} has only "
+                    f"{getattr(item, 'season_episode_count', 0)} "
+                    f"episode(s) on TMDB, so episode {item.episode_number} "
+                    "doesn't exist there."
+                ),
+                "year_title": (
+                    "The file name is only a number, so the title is a guess."
+                ),
+                "year": "The year differs from the file name.",
+                "similar": "Several results are similar.",
+                "offline": (
+                    "Guessed from the file name only; nothing was looked "
+                    "up online."
+                ),
+            }.get(reason, "The title is only a partial match.")
+            if reason == "absolute":
+                do_this = "Check the episode number with Manual Match."
+            elif reason == "episode_title":
+                do_this = (
+                    "Add the season and episode number to the filename."
+                )
+            elif reason == "episode_missing":
+                do_this = "Check the episode number with Manual Match."
+            elif reason not in (
+                "year_title", "year", "similar", "offline",
+            ) and item.title_score >= 0.9:
+                why = (
+                    "The title matches, but Moviq isn't sure enough "
+                    "to rename it automatically."
+                )
+                do_this = "Press Manual Match."
+            else:
+                do_this = "Press Manual Match."
+            add("Why", why)
+            add("Do this", do_this)
+            suggested_title = self._status_match_title(item, match)
+            source = source_text(match)
+            if suggested_title and source:
+                suggested_title += f" \u00b7 {source}"
+            add("Match", suggested_title)
+            if match:
+                add("Title match", f"{item.title_score:.0%}")
+        elif status_key == "nomatch":
+            add("Searched", item.query)
+            tried = getattr(item, "tried_sources", None) or ()
+            add("Tried", ", ".join(str(name) for name in tried))
+            if _is_generic_title(item.query):
+                why = "Placeholder title."
+                do_this = "Press Manual Match."
+            else:
+                settings = self.provider_settings
+                names = (
+                    settings.order
+                    if settings.selected == "automatic"
+                    else (settings.selected,)
+                )
+                if settings.selected == "automatic":
+                    names = tuple(
+                        name for name in names if name in settings.enabled
+                    )
+                usable_source = False
+                missing_key = False
+                for name in names:
+                    info = PROVIDER_INFO.get(name)
+                    if not info:
+                        continue
+                    has_key = (
+                        bool(self.key_var.get().strip())
+                        if name == "tmdb"
+                        else bool(settings.key(name))
+                    )
+                    if info["needs_key"] and not has_key:
+                        missing_key = True
+                    elif not info["needs_key"] or has_key:
+                        usable_source = True
+                if not usable_source and missing_key:
+                    why = "Needs a key."
+                    do_this = "Add a source in Settings > Sources."
+                else:
+                    why = "Nothing found."
+                    do_this = "Press Manual Match."
+            add("Why", why)
+            add("Do this", do_this)
+        elif status_key == "error":
+            reason = getattr(item, "error_code", None) or "unknown"
+            message = ERROR_STATUS_DETAILS.get(reason)
+            if message:
+                message = message.format(
+                    code=getattr(item, "episode_code", "S??E??"),
+                )
+            else:
+                message = self._safe_exception_message(
+                    item.error or "Unknown error",
+                )
+            add("Problem", message)
+            fix = {
+                "wrong_mode_movie_in_tv": "Switch to the Movies tab.",
+                "wrong_mode_tv_in_movies": "Switch to the TV Shows tab.",
+                "file_missing": "Restore the file or remove it from the list.",
+                "name_conflict": "Resolve the destination name conflict.",
+                "access_denied": "Close programs using the file and retry.",
+                "bad_path": "Shorten the target path or file name.",
+                "tmdb_unavailable": "Check the source key and connection.",
+            }.get(reason, "Review the error and try again.")
+            add("Do this", fix)
+        elif status_key == "done":
+            original = Path(item.orig_path).name
+            current = Path(item.path).name
+            add("Renamed", f"{original} -> {current}")
+            add("Undo", "Available")
+
+        add_warning()
+        return lines
 
     @staticmethod
     def _match_confidence(item, match):
@@ -967,14 +1265,22 @@ class App:
         if not item or column != "#1":
             self._hide_tree_tooltip()
             return
+        cache_key = (row, item.status_detail, item.status, item.error_code)
+        if cache_key != self._status_card_cache_key:
+            card = self._status_card(item)
+            self._status_card_cache = card or item.status_detail
+            self._status_card_cache_key = cache_key
+        content = self._status_card_cache
         self._status_tooltip.schedule(
-            (row, column, item.status_detail), item.status_detail,
+            (row, column, repr(content)), content,
             event.x_root, event.y_root,
             delay=400,
         )
 
     def _hide_tree_tooltip(self, _event=None):
         self._status_tooltip.hide()
+        self._status_card_cache_key = None
+        self._status_card_cache = None
 
     def on_mousewheel(self, event):
         delta = event.delta
@@ -1008,9 +1314,7 @@ class App:
         if not self.tree.winfo_exists():
             return
         visible = set()
-        for item in self.items:
-            if not self.tree.exists(item.iid):
-                continue
+        for item in self._rows_on_screen():
             bounds = self.tree.bbox(item.iid, "status")
             if not bounds:
                 continue
@@ -1055,12 +1359,28 @@ class App:
                 font=self._status_cell_font,
             )
             label.place(x=x, y=y, width=width, height=height)
-        for iid, label in tuple(self._status_cell_labels.items()):
-            if iid not in visible:
-                label.place_forget()
-                if not self.tree.exists(iid):
-                    label.destroy()
-                    del self._status_cell_labels[iid]
+        hidden = [iid for iid in self._status_cell_labels if iid not in visible]
+        for position, iid in enumerate(hidden):
+            label = self._status_cell_labels[iid]
+            label.place_forget()
+            if position >= 150 or not self.tree.exists(iid):
+                label.destroy()
+                del self._status_cell_labels[iid]
+
+    def _rows_on_screen(self):
+        """Rows in (or just outside) the visible part of the table."""
+        if not self.tree.winfo_viewable():
+            return []
+        children = self.tree.get_children("")
+        total = len(children)
+        if total <= 300:
+            rows = children
+        else:
+            top, bottom = self.tree.yview()
+            first = max(int(top * total) - 5, 0)
+            last = min(int(bottom * total) + 6, total)
+            rows = children[first:min(last, first + 300)]
+        return [self.by_iid[iid] for iid in rows if iid in self.by_iid]
 
     def _forward_status_cell_event(self, event, sequence):
         x = event.x + event.widget.winfo_rootx() - self.tree.winfo_rootx()
@@ -1231,21 +1551,23 @@ class App:
                     self.pal["chip"], self.pal["chip_border"], foreground,
                 )
 
-    def _restore_visible_row_order(self):
-        if not hasattr(self, "tree"):
-            return
+    def _item_sort_key(self):
         if self.media_mode.get() == "tv":
-            self.items.sort(key=lambda item: (
+            return lambda item: (
                 (item.query or "").casefold(),
                 item.season_number or 0,
                 item.episode_number or 0,
                 self._sort_name(item),
-            ))
-        else:
-            self.items.sort(key=lambda item: (
-                (item.query or "").casefold(),
-                self._sort_name(item),
-            ))
+            )
+        return lambda item: (
+            (item.query or "").casefold(),
+            self._sort_name(item),
+        )
+
+    def _restore_visible_row_order(self):
+        if not hasattr(self, "tree"):
+            return
+        self.items.sort(key=self._item_sort_key())
         filtered_out = self._filtered_out
         expected = [
             item.iid for item in self.items if item.iid not in filtered_out
@@ -1331,6 +1653,7 @@ class App:
             "path", "root", "status", "match", "status_detail",
             "error_code", "error", "review_reason", "show_result",
             "_no_change_origin", "match_source", "_pending_manual_show",
+            "match_method", "tried_sources", "title_score",
         )
         state = {}
         for name in fields:
@@ -1354,8 +1677,9 @@ class App:
         }
 
     def _capture_records(self, items):
+        positions = {id(row): n for n, row in enumerate(self.items)}
         return [
-            self._capture_record(item)
+            self._capture_record(item, positions.get(id(item)))
             for item in items
         ]
 
@@ -1389,6 +1713,7 @@ class App:
                 "path", "root", "status", "match", "status_detail",
                 "error_code", "error", "review_reason", "show_result",
                 "_no_change_origin", "match_source", "_pending_manual_show",
+                "match_method", "tried_sources", "title_score",
             ):
                 if name in record["state"]:
                     setattr(item, name, copy.deepcopy(record["state"][name]))
@@ -1491,18 +1816,24 @@ class App:
 
     # ---- API --------------------------------------------------------------
     def tmdb(self, operation_cache=None):
-        key = self.key_var.get().strip()
-        if not key:
-            show_warning(
-                self,
-                "API key needed",
-                "Add your TMDB API key in Settings first.\n"
-                "It's free: themoviedb.org > Settings > API.",
-            )
-            self.show_page("settings")
-            return None
-        return TMDB(
-            key, self.language(), operation_cache=operation_cache,
+        """Return the metadata client using the selected source or priority chain."""
+        return ProviderRouter(
+            self.provider_settings, self.key_var.get().strip(),
+            self.language(), operation_cache=operation_cache,
+        )
+
+    def set_provider_settings(self, settings):
+        """Apply new provider choices (order, on/off, keys) and save them."""
+        self.provider_settings = settings
+        self.settings_store.update(settings.to_config())
+        self._configure_resolver()
+        if hasattr(self, "provider_source_var"):
+            self.provider_source_var.set(f"Source: {settings.selected}")
+
+    def _configure_resolver(self):
+        self.show_resolver.configure(
+            self.key_var.get().strip(), self.language(),
+            self.provider_settings,
         )
 
     def resolve_show(self, title, year=None, operation_cache=None):
@@ -1511,8 +1842,7 @@ class App:
         )
 
     def remember_show(self, item, choice, details):
-        key = self.key_var.get().strip()
-        self.show_resolver.configure(key, self.language())
+        self._configure_resolver()
         title = item.query or choice.get("title")
         result = self.show_resolver.remember(
             title,
@@ -1601,11 +1931,14 @@ class App:
         self.status(f"{mode_name} mode selected.")
 
     def _confirm_detected_media_mode(self, paths):
-        current_mode = self.media_mode.get()
-        detected_mode = _detect_media_mode(paths, current_mode)
+        detected_mode = _detect_media_mode(paths, self.media_mode.get())
         if not detected_mode:
             return
+        self._ask_switch_media_mode(detected_mode)
 
+    def _ask_switch_media_mode(self, detected_mode):
+        """Ask whether to switch to the detected mode; True when switched."""
+        current_mode = self.media_mode.get()
         current_name = "TV Shows" if current_mode == "tv" else "Movies"
         detected_name = "TV Shows" if detected_mode == "tv" else "Movies"
         message = (
@@ -1619,93 +1952,252 @@ class App:
             f"ignore this suggestion and keep {current_name} mode."
         )
         if not ask_yes_no(self, "Check media mode", message):
-            return
+            return False
 
         if self.items:
             self.clear(record=False)
         self.media_mode.set(detected_mode)
         self.update_media_mode_selector()
         self.save_config()
+        return True
 
     def add_paths(self, paths):
+        """Add files/folders without freezing the window.
+
+        Scanning runs in a worker thread; rows are then created in short
+        slices on the Tk thread so the UI keeps repainting.
+        """
         paths = list(paths)
         if paths and self._matching_run:
             self.cancel_matching()
-        if paths:
-            self._confirm_detected_media_mode(paths)
+        if not paths:
+            return
+        if getattr(self, "_import_job", None):
+            self._import_waiting = getattr(self, "_import_waiting", [])
+            self._import_waiting.append(paths)
+            self.status("Still adding files. These will be added next.")
+            return
         missing, unavailable = self._prune_missing_items()
-        known = {i.path for i in self.items}
-        media_type = self.media_mode.get()
-        invalid_tv = 0
-        new = []
-        for raw in paths:
-            p = Path(raw)
-            if is_hidden_path(p):
-                continue
-            if p.is_dir():
-                files = scan_dir(p)
-                item_root = (
-                    tv_root_for_folder(p, files)
-                    if media_type == "tv" else p
-                )
-                for f in files:
-                    if f not in known:
-                        item = Item(f, item_root, media_type)
-                        if media_type == "tv" and not item.is_tv_episode:
-                            item.status = "error"
-                            item.error_code = "wrong_mode_movie_in_tv"
-                            item.error = (
-                                "TV filename does not include a recognized season "
-                                "and episode number."
-                            )
-                            invalid_tv += 1
-                        elif media_type == "movie":
-                            _title, _year, season, episode = parse_tv_name(f)
-                            if (
-                                has_explicit_episode_marker(f)
-                                and season is not None
-                                and episode is not None
-                            ):
-                                item.status = "error"
-                                item.error_code = "wrong_mode_tv_in_movies"
-                                item.episode_code = (
-                                    f"S{season:02d}E{episode:02d}"
-                                )
-                        new.append(item)
-                        known.add(f)
-            elif (
-                p.is_file()
-                and p.suffix.lower() in VIDEO_EXT
-                and p not in known
-            ):
-                item = Item(p, p.parent, media_type)
-                if media_type == "tv" and not item.is_tv_episode:
-                    item.status = "error"
-                    item.error_code = "wrong_mode_movie_in_tv"
-                    item.error = (
-                        "TV filename does not include a recognized season "
-                        "and episode number."
+        job = {
+            "paths": paths,
+            "known": {i.path for i in self.items},
+            "media_type": self.media_mode.get(),
+            "missing": missing,
+            "unavailable": unavailable,
+            "scanned": {},
+            "detect": True,
+            "entries": [],
+            "pos": 0,
+            "built": [],
+            "insert_pos": 0,
+            "new": [],
+            "invalid_tv": 0,
+            "filter_reset": False,
+            "cancel": False,
+        }
+        self._import_job = job
+        self.status("Scanning files...")
+        self._import_start_worker(job)
+
+    def _import_start_worker(self, job):
+        job["done"] = False
+        job["error"] = None
+        thread = threading.Thread(
+            target=self._import_worker, args=(job,), daemon=True,
+        )
+        job["thread"] = thread
+        thread.start()
+        self.root.after(30, self._import_wait_scan, job)
+
+    @staticmethod
+    def _import_worker(job):
+        """Filesystem work only. Never touches Tk widgets or variables."""
+        try:
+            media_type = job["media_type"]
+            scanned = job["scanned"]
+            if job["detect"]:
+                files = []
+                for raw in job["paths"]:
+                    path = Path(raw)
+                    if path.is_dir():
+                        if raw not in scanned:
+                            scanned[raw] = scan_dir(path)
+                        files.extend(scanned[raw])
+                    elif path.suffix.lower() in VIDEO_EXT:
+                        files.append(path)
+                job["detected"] = _detect_mode_from_files(files, media_type)
+                if job["detected"]:
+                    return
+            known = set(job["known"])
+            entries = []
+            for raw in job["paths"]:
+                p = Path(raw)
+                if is_hidden_path(p):
+                    continue
+                if p.is_dir():
+                    if raw not in scanned:
+                        scanned[raw] = scan_dir(p)
+                    files = scanned[raw]
+                    item_root = (
+                        tv_root_for_folder(p, files)
+                        if media_type == "tv" else p
                     )
-                    invalid_tv += 1
-                elif media_type == "movie":
-                    _title, _year, season, episode = parse_tv_name(p)
-                    if (
-                        has_explicit_episode_marker(p)
-                        and season is not None and episode is not None
-                    ):
-                        item.status = "error"
-                        item.error_code = "wrong_mode_tv_in_movies"
-                        item.episode_code = f"S{season:02d}E{episode:02d}"
-                new.append(item)
-                known.add(p)
-        if new:
+                    for f in files:
+                        if f not in known:
+                            entries.append((f, item_root))
+                            known.add(f)
+                elif (
+                    p.is_file()
+                    and p.suffix.lower() in VIDEO_EXT
+                    and p not in known
+                ):
+                    entries.append((p, p.parent))
+                    known.add(p)
+            job["entries"] = entries
+        except Exception as error:  # reported on the Tk thread
+            job["error"] = error
+        finally:
+            job["done"] = True
+
+    def _import_wait_scan(self, job):
+        if self._import_job is not job:
+            return
+        if job["cancel"]:
+            self._import_abort()
+            return
+        if not job["done"]:
+            self.root.after(30, self._import_wait_scan, job)
+            return
+        if job["error"] is not None:
+            error = job["error"]
+            self._import_abort()
+            self.status(f"Could not read the files: {error}")
+            return
+        detected = job.pop("detected", None)
+        if job["detect"] and detected:
+            switched = self._ask_switch_media_mode(detected)
+            if self._import_job is not job:
+                return
+            if switched:
+                job["media_type"] = self.media_mode.get()
+                job["known"] = {i.path for i in self.items}
+            job["detect"] = False
+            self.status("Scanning files...")
+            self._import_start_worker(job)
+            return
+        job["detect"] = False
+        if job["entries"]:
             self.set_status_filter("all")
-        for it in new:
-            it.iid = self.tree.insert("", "end", values=("", ""))
-            self.by_iid[it.iid] = it
-            self.items.append(it)
-            self.refresh_row(it)
-        self._restore_visible_row_order()
+        self._import_build(job)
+
+    def _import_make_item(self, job, f, item_root):
+        media_type = job["media_type"]
+        item = Item(f, item_root, media_type)
+        if media_type == "tv" and not item.is_tv_episode:
+            item.status = "error"
+            item.error_code = "wrong_mode_movie_in_tv"
+            item.error = (
+                "TV filename does not include a recognized season "
+                "and episode number."
+            )
+            job["invalid_tv"] += 1
+        elif media_type == "movie":
+            _title, _year, season, episode = parse_tv_name(f)
+            if (
+                has_explicit_episode_marker(f)
+                and season is not None
+                and episode is not None
+            ):
+                item.status = "error"
+                item.error_code = "wrong_mode_tv_in_movies"
+                item.episode_code = f"S{season:02d}E{episode:02d}"
+        return item
+
+    def _import_build(self, job):
+        """Parse file names in short slices (no Tk work)."""
+        if self._import_job is not job:
+            return
+        if job["cancel"]:
+            self._import_abort()
+            return
+        entries = job["entries"]
+        deadline = time.perf_counter() + 0.012
+        while job["pos"] < len(entries) and time.perf_counter() < deadline:
+            f, item_root = entries[job["pos"]]
+            job["pos"] += 1
+            job["built"].append(self._import_make_item(job, f, item_root))
+        if job["pos"] < len(entries):
+            self.status(
+                f"Reading files... {job['pos']:,} of {len(entries):,}"
+            )
+            self.root.update_idletasks()
+            self.root.after(6, self._import_build, job)
+            return
+        job["built"].sort(key=self._item_sort_key())
+        self._import_insert(job)
+
+    def _import_insert(self, job):
+        """Add rows in final sorted order so nothing has to be moved later."""
+        if self._import_job is not job:
+            return
+        if job["cancel"]:
+            self._import_abort()
+            return
+        built = job["built"]
+        deadline = time.perf_counter() + 0.015
+        with self._bulk_refresh():
+            while job["insert_pos"] < len(built) and time.perf_counter() < deadline:
+                it = built[job["insert_pos"]]
+                job["insert_pos"] += 1
+                it.iid = self.tree.insert("", "end", values=("", ""))
+                self.by_iid[it.iid] = it
+                self.items.append(it)
+                self.refresh_row(it)
+                job["new"].append(it)
+        if job["insert_pos"] < len(built):
+            self.status(
+                f"Adding files... {job['insert_pos']:,} of {len(built):,}"
+            )
+            self.root.update_idletasks()
+            self.root.after(6, self._import_insert, job)
+            return
+        self.items.sort(key=self._item_sort_key())
+        expected = [
+            it.iid for it in self.items if it.iid not in self._filtered_out
+        ]
+        job["reorder_pos"] = 0
+        job["reorder_index"] = 0
+        if expected == list(self.tree.get_children("")):
+            job["reorder_pos"] = len(self.items)
+        self._import_reorder(job)
+
+    def _import_reorder(self, job):
+        """Only needed when new rows interleave with rows added earlier."""
+        if self._import_job is not job:
+            return
+        deadline = time.perf_counter() + 0.015
+        while job["reorder_pos"] < len(self.items) and time.perf_counter() < deadline:
+            it = self.items[job["reorder_pos"]]
+            job["reorder_pos"] += 1
+            if self.tree.exists(it.iid) and it.iid not in self._filtered_out:
+                self.tree.move(it.iid, "", job["reorder_index"])
+                job["reorder_index"] += 1
+        if job["reorder_pos"] < len(self.items):
+            self.root.after(6, self._import_reorder, job)
+            return
+        self._import_finish(job)
+
+    def _import_abort(self):
+        self._import_job = None
+        self._import_waiting = []
+
+    def _import_finish(self, job):
+        paths = job["paths"]
+        new = [it for it in job["new"] if it.iid in self.by_iid]
+        missing = job["missing"]
+        unavailable = job["unavailable"]
+        invalid_tv = job["invalid_tv"]
+        self._schedule_status_cells()
         self._vcount.clear()
         status_message = f"Added {len(new)} video file(s)."
         if not new and any(Path(raw).is_dir() for raw in paths):
@@ -1726,8 +2218,34 @@ class App:
                 "episode numbers."
             )
         self.status(status_message)
+        job["new"] = new
+        job["records"] = []
+        job["positions"] = {id(it): n for n, it in enumerate(self.items)}
+        job["capture_pos"] = 0
+        self._import_capture(job)
+
+    def _import_capture(self, job):
+        """Capture undo records in slices (deep copies are slow in bulk)."""
+        if self._import_job is not job:
+            return
+        new = job["new"]
+        deadline = time.perf_counter() + 0.015
+        while job["capture_pos"] < len(new) and time.perf_counter() < deadline:
+            it = new[job["capture_pos"]]
+            job["capture_pos"] += 1
+            job["records"].append(
+                self._capture_record(it, job["positions"].get(id(it)))
+            )
+        if job["capture_pos"] < len(new):
+            self.root.after(6, self._import_capture, job)
+            return
+        self._import_complete(job)
+
+    def _import_complete(self, job):
+        new = job["new"]
+        self._import_job = None
         if new:
-            added_records = self._capture_records(new)
+            added_records = job["records"]
 
             def undo_add(records=added_records):
                 self._remove_items_from_list(
@@ -1740,7 +2258,6 @@ class App:
             self.push_undo(
                 f"Add files ({len(new)} files)", undo_add, redo_add,
             )
-        key = self.key_var.get().strip()
         matchable = [
             item for item in new
             if (
@@ -1750,13 +2267,11 @@ class App:
                 )
             )
         ]
-        if matchable and key and self.auto_match.get():
+        if matchable and self.auto_match.get():
             self.start_match(matchable)
-        elif new and not key:
-            self.status(
-                "Added files. Add your API key in Settings, then click "
-                "'Auto Match'.",
-            )
+        waiting = getattr(self, "_import_waiting", [])
+        if waiting:
+            self.add_paths(waiting.pop(0))
 
     def _prune_missing_items(self):
         missing = []
@@ -1974,7 +2489,7 @@ class App:
                 else score(output_match, item.query)
             )
             if confidence >= 0.9 or getattr(item, "review_reason", None) in (
-                "year_title", "year", "similar",
+                "year_title", "year", "similar", "offline",
             ):
                 status_tooltip = "Needs a check"
             else:
@@ -2150,10 +2665,7 @@ class App:
             self.status(f"{manual_kept} manual matches kept.")
         items = [item for item in items if self._auto_match_eligible(item)]
         key = self.key_var.get().strip()
-        if items and not key:
-            self.tmdb()
-            return
-        self.show_resolver.configure(key, self.language())
+        self._configure_resolver()
         if not items:
             return
         if items:
@@ -2255,9 +2767,11 @@ class App:
                     or tmdb.language != lang
                     or tmdb.cancel_event is not cancel_event
                     or tmdb.operation_cache is not operation_cache
+                    or tmdb.settings != self.provider_settings
                 ):
-                    tmdb = TMDB(
-                        key, lang, cancel_event=cancel_event,
+                    tmdb = ProviderRouter(
+                        self.provider_settings, key, lang,
+                        cancel_event=cancel_event,
                         operation_cache=operation_cache,
                     )
 
@@ -2296,9 +2810,9 @@ class App:
 
     def poll(self):
         self._process_match_events()
-        self.root.after(10 if not self.results.empty() else 100, self.poll)
+        self.root.after(15 if not self.results.empty() else 100, self.poll)
 
-    def _process_match_events(self, budget=0.03):
+    def _process_match_events(self, budget=0.012):
         """Handle queued matching events for at most `budget` seconds.
 
         The window stays responsive because poll() calls this repeatedly
@@ -2333,12 +2847,9 @@ class App:
                         self._stop_matching_for_auth(run, result[0])
                         continue
                     status, match, err, *details = result
+                    item.title_score = self._status_title_score(item, match)
                     if status == "auto" and match:
-                        confidence = (
-                            tv_score(match, item.query)
-                            if item.media_type == "tv"
-                            else score(match, item.query)
-                        )
+                        confidence = item.title_score
                         if confidence < self.threshold():
                             status = "review"
                     review_match = match if status == "review" else None
@@ -2782,9 +3293,7 @@ class App:
                 "it can be matched or organized.",
             )
             return
-        self.show_resolver.configure(
-            self.key_var.get().strip(), self.language(),
-        )
+        self._configure_resolver()
         self._start_manual_matches([sel[0]])
 
     def match_manually(self):
@@ -2883,12 +3392,6 @@ class App:
                     "No files are available for Manual Match.",
                 )
             return
-        if not self.key_var.get().strip():
-            self._manual_match_early_return(
-                "Manual Match needs a TMDb API key.",
-            )
-            self.tmdb()
-            return
         self._manual_match_queue = [
             item.iid for item in self._manual_match_items
         ]
@@ -2900,9 +3403,7 @@ class App:
                 "Manual Match | queue=%s n=%d",
                 queue_source, len(self._manual_match_queue),
             )
-        self.show_resolver.configure(
-            self.key_var.get().strip(), self.language(),
-        )
+        self._configure_resolver()
         self._manual_match_before = self._capture_records(
             self._manual_match_items,
         )
@@ -3023,6 +3524,11 @@ class App:
         )
 
     def clear(self, record=True):
+        job = getattr(self, "_import_job", None)
+        if job is not None:
+            job["cancel"] = True
+            self._import_job = None
+            self._import_waiting = []
         if self._matching_run:
             self.cancel_matching()
         self.set_status_filter("all")

@@ -1,6 +1,7 @@
 import tkinter as tk
 
 from ...core.matching import rank, rank_tv
+from ...core.providers.ids import display_id
 
 
 class ResultsListMixin:
@@ -52,12 +53,12 @@ class ResultsListMixin:
         if generation != self._search_generation:
             return
         if error:
-            self.search_status_var.set(f"TMDb lookup failed: {error}")
+            self.search_status_var.set(f"Lookup failed: {error}")
             return
         if not details:
             self.search_status_var.set(
                 f"No {'TV show' if self.is_tv else 'movie'} found with "
-                f"TMDb ID {tmdb_id}.",
+                f"{display_id(tmdb_id)}.",
             )
             self.result_count_var.set("0")
             self._clear_details()
@@ -65,7 +66,7 @@ class ResultsListMixin:
         self.results = [details]
         self._direct_id_search = True
         self.result_count_var.set("1")
-        self.search_status_var.set(f"Loaded TMDb ID {tmdb_id}.")
+        self.search_status_var.set(f"Loaded {display_id(tmdb_id)}.")
         self._populate_result_cards()
         self.selected_index = 0
         self.selected_result = details

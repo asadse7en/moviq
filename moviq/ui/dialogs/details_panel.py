@@ -1,4 +1,5 @@
 from ._common import DETAIL_POSTER_SIZE
+from ...core.providers.ids import display_id
 
 
 class DetailsPanelMixin:
@@ -121,7 +122,9 @@ class DetailsPanelMixin:
         self.details_title_var.set(
             f"{title}{f' ({year})' if year else ''}",
         )
-        self.details_id_var.set(f"TMDB ID: {result.get('id', '—')}")
+        self.details_id_var.set(
+            f"ID: {display_id(result['id'])}" if result.get("id") else "ID: —"
+        )
         similarity = round(self._score(result, self.item.query) * 100)
         self.confidence_var.set(f"{similarity}% CONFIDENCE")
         genres = result.get("genres") or []

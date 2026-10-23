@@ -4,6 +4,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from .formatting import _avoid_windows_reserved_name
+from .providers import ids as provider_ids
 
 
 YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
@@ -427,17 +428,32 @@ def sanitize(name):
     return _avoid_windows_reserved_name(name)
 
 
+def _id_for_names(choice):
+    """(value, tag label) of the match id: 603/tmdb, tt0111161/imdb, ..."""
+    composite = choice.get("id")
+    if not isinstance(composite, int) or composite <= 0:
+        return choice.get("id", ""), "tmdb"
+    tag = provider_ids.external_tag(composite)
+    if tag is None:
+        return provider_ids.native_id(composite), None
+    return (tag[1], tag[0])
+
+
 def folder_name_for(choice):
     """Folder / file name for a movie, using the template from Settings."""
     title, year = choice["title"], choice.get("year") or ""
+    id_value, id_label = _id_for_names(choice)
     try:
         name = NAMING["template"].format(
-            title=title, year=year, id=choice.get("id", "")
+            title=title, year=year, id=id_value
         )
     except (KeyError, ValueError, IndexError):
         name = f"{title} ({year})" if year else title
     name = sanitize(re.sub(r"\(\s*\)|\[\s*\]", "", name))
-    tag = f"[tmdbid-{choice['id']}]" if choice.get("id") else ""
+    tag = (
+        f"[{id_label}id-{id_value}]"
+        if choice.get("id") and id_label else ""
+    )
     if NAMING["tag_id"] and tag and tag not in name:
         name = f"{name} {tag}"
     return name or sanitize(title)
@@ -490,7 +506,7 @@ def tv_episode_name_for(choice, max_length=200):
         format_values = dict(
             title=show,
             year=choice.get("year") or "",
-            id=choice["id"],
+            id=_id_for_names(choice)[0],
             season=season,
             episode=episode,
             episode_title=episode_title,

@@ -88,6 +88,13 @@ def build_main_page(app, page):
     )
     app.media_mode_selector.pack(side="left")
     app.update_media_mode_selector()
+    app.provider_source_var = tk.StringVar(
+        value=f"Source: {app.provider_settings.selected}",
+    )
+    ttk.Label(
+        left_controls, textvariable=app.provider_source_var,
+        style="Muted.TLabel",
+    ).pack(side="left", padx=(10, 0))
 
     match_actions = ttk.Frame(bar, style="Toolbar.TFrame")
     app.match_actions = match_actions

@@ -143,6 +143,14 @@ class TMDBOperationCache:
 
 
 class TMDB:
+    provider_id = "tmdb"
+    label = "TMDb"
+    needs_key = True
+    kinds = ("movie", "tv")
+
+    def available(self):
+        return bool(self.key)
+
     def __init__(
         self, key, language=None, cancel_event=None, operation_cache=None,
     ):
@@ -335,6 +343,16 @@ class TMDB:
             )
             results = (data or {}).get("results", [])
         return results
+
+    def search_tv_strict(self, query, year=None):
+        """One search without the retry that drops the year."""
+        response = self.get(
+            "/search/tv",
+            query=query,
+            first_air_date_year=year,
+            include_adult="false",
+        )
+        return (response or {}).get("results", [])
 
     def tv(self, show_id):
         return self.get(

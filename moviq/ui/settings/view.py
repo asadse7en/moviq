@@ -11,16 +11,18 @@ from .about import AboutTabMixin
 from .formatting import FormattingTabMixin
 from .general import GeneralTabMixin
 from .matching import MatchingTabMixin
+from .providers import ProvidersTabMixin
 
 
 class SettingsView(
-    GeneralTabMixin, FormattingTabMixin, MatchingTabMixin, AboutTabMixin,
-    ttk.Frame,
+    GeneralTabMixin, FormattingTabMixin, MatchingTabMixin, ProvidersTabMixin,
+    AboutTabMixin, ttk.Frame,
 ):
     """Tabbed settings layout and asynchronous validation/update status."""
 
     _SECTIONS = (
         ("General", "General"),
+        ("Sources", "Sources"),
         ("Formatting", "Formatting"),
         ("Matching", "Matching"),
         ("Files & Safety", "Files & Safety"),
@@ -115,6 +117,7 @@ class SettingsView(
             frame.columnconfigure(0, weight=1)
             self.section_frames[name] = frame
         self._build_general(self.section_frames["General"])
+        self._build_providers(self.section_frames["Sources"])
         self._build_formatting(self.section_frames["Formatting"])
         self._build_matching(self.section_frames["Matching"])
         self._build_safety(self.section_frames["Files & Safety"])
@@ -511,6 +514,9 @@ class SettingsView(
                     self.update_status_label.configure(
                         foreground=self.app.pal["muted"],
                     )
+                elif message[0] == "provider_status":
+                    _, name, text = message
+                    self._provider_status[name].set(text)
                 elif message[0] == "save_error":
                     self._set_key_status(
                         f"Couldn't save settings: {message[1]}",
@@ -555,6 +561,8 @@ class SettingsView(
                 label.configure(foreground=palette["muted"])
             except tk.TclError:
                 pass
+        for name in self._provider_status:
+            self._style_provider_status(name)
         for kind in ("movie", "tv"):
             self._recolor_format_panel(kind, palette)
             self._refresh_preset_cards(kind)

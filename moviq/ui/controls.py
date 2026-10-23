@@ -438,54 +438,97 @@ class RoundedButton(tk.Canvas):
 
 
 class TableTooltip:
-    def __init__(self, master, background, foreground, border):
+    def __init__(self, master, background, foreground, border, muted=None):
         self.master = master
         self.background = background
         self.foreground = foreground
         self.border = border
+        self.muted = muted or foreground
         self._after_id = None
         self._window = None
         self._key = None
 
-    def set_theme(self, background, foreground, border):
+    def set_theme(self, background, foreground, border, muted=None):
         self.background = background
         self.foreground = foreground
         self.border = border
+        self.muted = muted or foreground
         self.hide()
 
-    def schedule(self, key, text, x, y, delay=400):
+    def schedule(self, key, content, x, y, delay=400):
         if key == self._key:
             return
-        self.hide()
-        if not text:
+        if self._after_id is not None:
+            self.master.after_cancel(self._after_id)
+            self._after_id = None
+        if not content:
+            self.hide()
             return
         self._key = key
         self._after_id = self.master.after(
-            delay, lambda: self._show(key, text, x, y),
+            delay, lambda: self._show(key, content, x, y),
         )
 
-    def _show(self, key, text, x, y):
+    def _show(self, key, content, x, y):
         self._after_id = None
         if key != self._key:
             return
-        window = tk.Toplevel(self.master)
-        set_window_icon(window)
-        window.wm_overrideredirect(True)
-        window.configure(background=self.border)
-        panel = tk.Frame(
-            window, background=self.background, padx=9, pady=7,
-        )
+        window = self._window
+        if window is None:
+            window = tk.Toplevel(self.master)
+            set_window_icon(window)
+            window.wm_overrideredirect(True)
+            window.configure(background=self.border)
+            self._window = window
+        for child in window.winfo_children():
+            child.destroy()
+        panel = tk.Frame(window, background=self.background, padx=9, pady=7)
         panel.pack(padx=1, pady=1)
-        tk.Label(
-            panel, text=text, justify="left", anchor="w",
-            background=self.background, foreground=self.foreground,
-            wraplength=360,
-        ).pack()
+        if isinstance(content, str):
+            tk.Label(
+                panel, text=content, justify="left", anchor="w",
+                background=self.background, foreground=self.foreground,
+                wraplength=400,
+            ).pack()
+        else:
+            normal_font = tkfont.nametofont("TkTextFont")
+            label_font = (
+                normal_font.actual("family"),
+                normal_font.actual("size"),
+                "bold",
+            )
+            panel.grid_columnconfigure(0, minsize=92, weight=0)
+            panel.grid_columnconfigure(1, weight=1)
+            for row, (label, value) in enumerate(content):
+                if not label:
+                    tk.Label(
+                        panel, text=value, justify="left", anchor="w",
+                        background=self.background, foreground=self.muted,
+                        font=normal_font, wraplength=400,
+                    ).grid(
+                        row=row, column=0, columnspan=2, sticky="ew",
+                        pady=(2, 0),
+                    )
+                    continue
+                color = (
+                    self.muted
+                    if label in ("How", "Year", "Moves with it")
+                    else self.foreground
+                )
+                tk.Label(
+                    panel, text=label, justify="left", anchor="nw",
+                    background=self.background, foreground=self.foreground,
+                    font=label_font,
+                ).grid(row=row, column=0, sticky="nw", padx=(0, 8))
+                tk.Label(
+                    panel, text=value, justify="left", anchor="nw",
+                    background=self.background, foreground=color,
+                    font=normal_font, wraplength=300,
+                ).grid(row=row, column=1, sticky="ew")
         window.update_idletasks()
         screen_x = min(x + 12, self.master.winfo_screenwidth() - window.winfo_width() - 8)
         screen_y = min(y + 18, self.master.winfo_screenheight() - window.winfo_height() - 8)
         window.wm_geometry(f"+{max(8, screen_x)}+{max(8, screen_y)}")
-        self._window = window
 
     def hide(self, _event=None):
         if self._after_id is not None:

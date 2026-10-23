@@ -1,5 +1,6 @@
 import re
 
+from .providers import ids as provider_ids
 
 MOVIE_FORMATS = (
     ("title_year", "Title and year", "{title} ({year})", "{title} ({year})"),
@@ -75,10 +76,30 @@ def _avoid_windows_reserved_name(name):
     return name
 
 
+def _provider_aware(pattern, values):
+    """Make {tmdb-{id}} tags honest for ids from other providers."""
+    composite = values.get("id") if isinstance(values, dict) else None
+    if not isinstance(composite, int) or composite < provider_ids.OFFSET:
+        return pattern, values
+    tag = provider_ids.external_tag(composite)
+    if tag:
+        label, value = tag
+        pattern = re.sub(
+            r"tmdb(id)?-\{id\}",
+            lambda match: f"{label}{match.group(1) or ''}-{{id}}",
+            pattern,
+        )
+    else:
+        value = str(provider_ids.native_id(composite))
+        pattern = re.sub(r"\s*[\[{]tmdb(?:id)?-\{id\}[\]}]", "", pattern)
+    return pattern, dict(values, id=value)
+
+
 def format_component(pattern, values):
     """Format known tokens only and sanitize one filesystem path component."""
     if not isinstance(pattern, str):
         return ""
+    pattern, values = _provider_aware(pattern, values)
 
     def replace(match):
         token = match.group(1)

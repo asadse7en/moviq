@@ -26,7 +26,8 @@ class PosterLoaderMixin:
     def _load_poster(self, generation, result_index, poster_path):
         try:
             response = requests.get(
-                f"{IMAGE_BASE}/w185{poster_path}",
+                poster_path if str(poster_path).startswith("https://")
+                else f"{IMAGE_BASE}/w185{poster_path}",
                 headers={"User-Agent": f"Moviq/{APP_VERSION}"},
                 timeout=12,
             )

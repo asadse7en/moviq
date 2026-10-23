@@ -4,89 +4,40 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 
 from ..controls import SegmentedModeToggle
+from ...core.providers.settings import PROVIDER_INFO
 from ._common import TMDB_KEY_URL, TMDB_SIGNUP_URL, check_tmdb_key
 
 
 class GeneralTabMixin:
     def _build_general(self, frame):
         self._section_header(
-            frame, "General", "Manage your TMDB connection and appearance.",
+            frame, "General", "Choose a metadata source and manage appearance.",
         )
-        group = self._group(frame, "TMDB")
-        self.key_status_var = tk.StringVar(value="● Not checked")
-        self.key_entry_var = tk.StringVar(value=self.vars["key"].get())
-        key_row = ttk.Frame(group)
-        key_row.grid(row=0, column=1, sticky="e", pady=5)
-        self.key_entry_wrap, self.key_entry = self.make_styled_entry(
-            key_row, self.key_entry_var, width=30, show="•",
+        source_group = self._group(frame, "Matching source")
+        source_values = ("Automatic",) + tuple(
+            info["label"] for info in PROVIDER_INFO.values()
         )
-        self.key_eye_canvas = tk.Canvas(
-            self.key_entry_wrap, width=28, height=28,
-            background=self.app.pal["preset_surface"],
-            highlightthickness=0, cursor="hand2", takefocus=1,
+        source_labels = {
+            name: info["label"] for name, info in PROVIDER_INFO.items()
+        }
+        selected = self.app.provider_settings.selected
+        source_value = (
+            "Automatic" if selected == "automatic"
+            else source_labels[selected]
         )
-        self.key_eye_canvas.grid(
-            row=0, column=1, sticky="e", padx=(0, 5), pady=2,
+        self.source_selection_var = tk.StringVar(value=source_value)
+        source_selector = ttk.Combobox(
+            source_group, textvariable=self.source_selection_var,
+            values=source_values, state="readonly", width=20,
         )
-        self.key_eye_canvas.create_line(
-            3, 14, 7, 8, 14, 5, 21, 8, 25, 14, 21, 20, 14, 23, 7, 20,
-            smooth=True, splinesteps=20, fill=self.app.pal["muted"],
-            width=2, tags="eye",
-        )
-        self.key_eye_canvas.create_oval(
-            11, 11, 17, 17, fill=self.app.pal["muted"],
-            outline=self.app.pal["muted"], tags="pupil",
-        )
-        self.key_eye_canvas.create_line(
-            5, 23, 23, 5, fill=self.app.pal["muted"], width=2,
-            state="hidden", tags="slash",
-        )
-        self.key_eye_canvas.bind(
-            "<Button-1>", lambda _event: self._toggle_key_visibility(),
-        )
-        self.key_eye_canvas.bind(
-            "<space>", lambda _event: self._toggle_key_visibility(),
-        )
-        self.key_entry.bind("<<Copy>>", self._copy_api_key, add="+")
-        self.key_entry.bind("<Control-z>", self._undo_key_entry)
-        self.key_entry.bind("<Control-y>", self._redo_key_entry)
-        self.key_entry_wrap.pack(side="left")
-        ttk.Button(
-            key_row, text="Test", style="Settings.TButton",
-            command=self.test_key,
-        ).pack(side="left", padx=(6, 0))
-        ttk.Button(
-            key_row, text="Save", style="Settings.TButton",
-            command=self.save_key,
-        ).pack(side="left", padx=(6, 0))
-        self._label(
-            group, "TMDB API Key",
-            font="TkHeadingFont",
-        ).grid(
-            row=0, column=0, sticky="w", padx=(0, 18), pady=5,
-        )
-        self.key_help_text = self._build_api_key_help(group)
-        self.key_status_label = self._label(
-            group, textvariable=self.key_status_var, muted=True,
-        )
-        self._set_key_status("Not checked")
-        self.key_status_label.grid(row=1, column=1, sticky="e", pady=(0, 5))
-        self._link(
-            group, "Get a TMDB API key", TMDB_KEY_URL,
-        ).grid(row=1, column=0, sticky="w", padx=(0, 18), pady=(0, 5))
-        self.key_help_text.grid(
-            row=2, column=0, columnspan=2, sticky="ew",
-            padx=(0, 18), pady=(0, 8),
-        )
-        ttk.Separator(group).grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(2, 8),
+        source_selector.bind(
+            "<<ComboboxSelected>>", self._source_selection_changed,
         )
         self._row(
-            group, 4, "Remember key",
-            self._switch(group, self.vars["remember"]),
-            "When off, the API key is kept only for this session.",
+            source_group, 0, "Source", source_selector,
+            "Automatic uses enabled sources in priority order. "
+            "A selected source is used alone.",
         )
-
         appearance = self._group(frame, "Appearance")
         theme_controls = ttk.Frame(appearance)
         self._theme_option_indicators = {}
@@ -130,6 +81,19 @@ class GeneralTabMixin:
                 )
         self._update_theme_options()
         self._row(appearance, 0, "Theme", theme_controls)
+
+    def _source_selection_changed(self, _event=None):
+        selected_label = self.source_selection_var.get()
+        selected = "automatic"
+        if selected_label != "Automatic":
+            selected = next(
+                name for name, info in PROVIDER_INFO.items()
+                if info["label"] == selected_label
+            )
+        self.app.set_provider_settings(
+            self.app.provider_settings.with_selected(selected),
+        )
+        return "break"
 
     def _select_theme_option(self, value):
         self.vars["theme"].set(value)
@@ -185,10 +149,10 @@ class GeneralTabMixin:
         text.insert("end", "TMDB", ("tmdb_link",))
         text.insert("end", " \u2192 open ")
         text.insert("end", "Settings", ("bold",))
-        text.insert("end", " \u2192 go to the ")
-        text.insert("end", "API", ("api_link",))
-        text.insert("end", " section \u2192 copy your ")
-        text.insert("end", "API Key", ("bold",))
+        text.insert("end", " \u2192 go to ")
+        text.insert("end", "Sources", ("bold",))
+        text.insert("end", " \u2192 copy your ")
+        text.insert("end", "API Key", ("api_link", "bold"))
         text.insert("end", " and paste it here.")
         text.tag_configure("bold", font="TkHeadingFont")
         text.tag_configure(
