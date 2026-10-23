@@ -298,7 +298,8 @@ def apply_theme(app, mode):
     app.mode, app.pal = mode, PALETTES[mode]
     pal = app.pal
     app._status_tooltip.set_theme(
-        pal["card"], pal["fg"], pal["chip_border"],
+        pal.get("hover", "#f1f5f9"), pal["fg"], pal["chip_border"],
+        pal["muted"],
     )
     style = ttk.Style()
     if HAVE_SV:

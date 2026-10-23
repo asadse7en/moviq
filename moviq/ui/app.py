@@ -248,7 +248,8 @@ class App:
         )
         self.pal = PALETTES[self.mode]
         self._status_tooltip = TableTooltip(
-            root, self.pal["card"], self.pal["fg"], self.pal["chip_border"],
+            root, self.pal.get("hover", "#f1f5f9"), self.pal["fg"],
+            self.pal["chip_border"],
             self.pal["muted"],
         )
         self.have_sv = HAVE_SV
@@ -1021,7 +1022,7 @@ class App:
             ).get("#2", "")
             if not target:
                 target = str(item.path)
-            add("Will become", Path(target).name)
+            add("New Name", Path(target).name)
             attached_count = self._attached_asset_count(item.orig_path)
             if attached_count:
                 add(
