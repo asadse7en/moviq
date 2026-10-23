@@ -77,7 +77,7 @@ def _avoid_windows_reserved_name(name):
 
 
 def _provider_aware(pattern, values):
-    """Make {tmdb-{id}} tags honest for ids from other providers."""
+    """Make {tmdb-{id}} tags honest for providers with standard id tags."""
     composite = values.get("id") if isinstance(values, dict) else None
     if not isinstance(composite, int) or composite < provider_ids.OFFSET:
         return pattern, values

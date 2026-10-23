@@ -6,7 +6,6 @@ from moviq.core.providers.anilist import AniListProvider
 from moviq.core.providers.offline import OfflineProvider
 from moviq.core.providers.router import ProviderRouter
 from moviq.core.providers.settings import ProviderSettings
-from moviq.core.providers.tvdb import TVDBProvider, _TOKENS
 from moviq.core.tmdb import TMDBAuthError, TMDBError
 
 
@@ -39,35 +38,6 @@ class FakeSession:
         return self.handler(method, url, params or {}, headers or {}, json)
 
 
-def tvdb_handler(method, url, params, headers, body):
-    if url.endswith("/login"):
-        if body.get("apikey") == "BAD":
-            return Resp({}, 401)
-        return Resp({"data": {"token": "T"}})
-    if url.endswith("/search"):
-        if params["type"] == "series":
-            return Resp({"data": [{
-                "tvdb_id": "81189", "name": "Breaking Bad", "year": "2008",
-                "first_air_time": "2008-01-20", "image_url": "https://a/b.jpg",
-            }]})
-        return Resp({"data": []})
-    if "/series/81189/extended" in url:
-        return Resp({"data": {
-            "id": 81189, "name": "Breaking Bad", "firstAired": "2008-01-20",
-            "genres": [{"name": "Drama"}],
-        }})
-    if "/series/81189/episodes/default" in url:
-        eps = [
-            {"id": 1, "seasonNumber": 1, "number": 1, "name": "Pilot",
-             "aired": "2008-01-20", "absoluteNumber": 1},
-            {"id": 2, "seasonNumber": 1, "number": 2, "name": "Cat's in the Bag",
-             "aired": "2008-01-27", "absoluteNumber": 2},
-            {"id": 3, "seasonNumber": 0, "number": 1, "name": "Special"},
-        ]
-        return Resp({"data": {"episodes": eps}, "links": {"next": None}})
-    return Resp({}, 404)
-
-
 def anilist_handler(method, url, params, headers, body):
     if "Page(" in body["query"]:
         return Resp({"data": {"Page": {"media": [{
@@ -92,47 +62,19 @@ def anilist_handler(method, url, params, headers, body):
 class IdTests(unittest.TestCase):
     def test_round_trip_and_tmdb_unchanged(self):
         self.assertEqual(ids.encode("tmdb", 603), 603)
-        composite = ids.encode("tvdb", 81189)
-        self.assertEqual(ids.decode(composite), ("tvdb", 81189))
         self.assertEqual(ids.decode(603), ("tmdb", 603))
-        self.assertEqual(ids.external_tag(composite), ("tvdb", "81189"))
         self.assertEqual(
             ids.external_tag(ids.encode("omdb", 111161)), ("imdb", "tt0111161"),
         )
         self.assertIsNone(ids.external_tag(ids.encode("tvmaze", 169)))
+        self.assertEqual(ids.decode(ids.encode("anilist", 7)), ("anilist", 7))
+        self.assertEqual(ids.decode(ids.encode("offline", 7)), ("offline", 7))
 
     def test_typed_ids(self):
         self.assertEqual(ids.parse_typed_id("imdb:tt0111161"), ids.encode("omdb", 111161))
-        self.assertEqual(ids.parse_typed_id("tvdb: 81189"), ids.encode("tvdb", 81189))
+        self.assertIsNone(ids.parse_typed_id("tvdb: 81189"))
         self.assertEqual(ids.parse_typed_id("tmdb:603"), 603)
         self.assertIsNone(ids.parse_typed_id("603"))
-
-
-class TVDBTests(unittest.TestCase):
-    def setUp(self):
-        _TOKENS.clear()
-
-    def provider(self, key="K"):
-        return TVDBProvider(key=key, pin="1234", session=FakeSession(tvdb_handler))
-
-    def test_search_details_and_episodes(self):
-        provider = self.provider()
-        result = provider.search_tv("breaking bad", 2008)[0]
-        self.assertEqual((result["id"], result["name"]), (81189, "Breaking Bad"))
-        details = provider.tv(81189)
-        self.assertEqual(details["number_of_seasons"], 1)
-        self.assertEqual(
-            [s["season_number"] for s in details["seasons"]], [0, 1],
-        )
-        self.assertEqual(provider.season(81189, 1)["episodes"][1]["name"], "Cat's in the Bag")
-        self.assertEqual(provider.absolute_episode(81189, 2)["episode_number"], 2)
-        login = [c for c in provider.session.calls if c[1].endswith("/login")]
-        self.assertEqual(len(login), 1)
-        self.assertEqual(login[0][3], {"apikey": "K", "pin": "1234"})
-
-    def test_bad_key_is_an_auth_error(self):
-        with self.assertRaises(TMDBAuthError):
-            self.provider("BAD").search_tv("x")
 
 
 class AniListTests(unittest.TestCase):
@@ -178,7 +120,7 @@ class Stub:
 def router_with(order, stubs, enabled=None):
     settings = ProviderSettings(
         order=tuple(order) + tuple(
-            n for n in ("tmdb", "tvmaze", "anilist", "omdb", "tvdb", "offline")
+            n for n in ("tmdb", "tvmaze", "anilist", "omdb", "offline")
             if n not in order),
         enabled=tuple(enabled if enabled is not None else order),
     )
@@ -276,10 +218,16 @@ class SettingsTests(unittest.TestCase):
                           "enabled": {"tvdb": False, "tmdb": True}},
             "provider_keys": {"omdb": " abc ", "tvdb": "k", "tvdb_pin": ""},
         })
-        self.assertEqual(settings.order[:2], ("tvdb", "tmdb"))
-        self.assertEqual(len(settings.order), 6)
+        self.assertEqual(settings.order[0], "tmdb")
+        self.assertEqual(len(settings.order), 5)
+        self.assertNotIn("tvdb", settings.order)
         self.assertNotIn("tvdb", settings.enabled)
         self.assertEqual(settings.key("omdb"), "abc")
+        saved = settings.to_config()
+        self.assertNotIn("tvdb", saved["providers"]["order"])
+        self.assertNotIn("tvdb", saved["providers"]["enabled"])
+        self.assertNotIn("tvdb", saved["provider_keys"])
+        self.assertNotIn("tvdb_pin", saved["provider_keys"])
         again = ProviderSettings.from_config(settings.to_config())
         self.assertEqual(again, settings)
 

@@ -7,14 +7,12 @@ from ._common import TMDB_KEY_URL
 
 _KEY_FIELDS = {
     "omdb": (("omdb", "API key"),),
-    "tvdb": (("tvdb", "API key"), ("tvdb_pin", "PIN (optional)")),
 }
 _SOURCE_NAMES = {
     "tmdb": "TMDb",
     "tvmaze": "TVmaze",
     "anilist": "AniList",
     "omdb": "OMDb",
-    "tvdb": "TheTVDB",
     "offline": "Offline guess",
 }
 
@@ -160,25 +158,6 @@ class ProvidersTabMixin:
             row += 2
             row = self._provider_separator(group, row)
 
-            if name == "tvdb":
-                pin_field, _caption = fields[1]
-                pin_var = tk.StringVar(value=settings.key(pin_field))
-                self._provider_key_vars[pin_field] = pin_var
-                pin_var.trace_add(
-                    "write",
-                    lambda *_args, field=pin_field: (
-                        self._provider_key_edited(field)
-                    ),
-                )
-                self._label(
-                    group, "PIN (optional)", font="TkHeadingFont",
-                ).grid(
-                    row=row, column=0, sticky="w", padx=(0, 18), pady=5,
-                )
-                pin_wrap, _pin_entry = self.make_styled_entry(
-                    group, pin_var, width=24,
-                )
-                pin_wrap.grid(row=row, column=1, sticky="e", pady=5)
             return
 
         if name in ("tvmaze", "anilist"):
@@ -395,10 +374,9 @@ class ProvidersTabMixin:
         self._layout_providers()
 
     def _provider_key_edited(self, field):
-        name = "tvdb" if field == "tvdb_pin" else field
-        key = self._provider_key_vars[name].get().strip()
+        key = self._provider_key_vars[field].get().strip()
         self._set_provider_status(
-            name, "Needs a key" if not key else "Not checked",
+            field, "Needs a key" if not key else "Not checked",
         )
 
     def _commit_provider_keys(self, name=None):

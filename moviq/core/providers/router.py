@@ -9,12 +9,11 @@ from .anilist import AniListProvider
 from .offline import OfflineProvider
 from .omdb import OMDbProvider
 from .settings import GENERAL, PROVIDER_INFO, ProviderSettings
-from .tvdb import TVDBProvider
 from .tvmaze import TVmazeProvider
 
 ACCEPTABLE_SIMILARITY = 0.75
 _CLASSES = {
-    "tvmaze": TVmazeProvider, "omdb": OMDbProvider, "tvdb": TVDBProvider,
+    "tvmaze": TVmazeProvider, "omdb": OMDbProvider,
     "anilist": AniListProvider, "offline": OfflineProvider,
 }
 
@@ -57,7 +56,6 @@ class ProviderRouter:
                     key=self.settings.key(name), language=self.language,
                     cancel_event=self.cancel_event,
                     operation_cache=self.operation_cache,
-                    pin=self.settings.key("tvdb_pin") if name == "tvdb" else "",
                     session=self._session,
                 )
             self._built[name] = provider

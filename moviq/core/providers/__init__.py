@@ -1,4 +1,4 @@
-"""Metadata providers (TMDB, TVmaze, OMDb, TheTVDB, AniList, offline).
+"""Metadata providers (TMDB, TVmaze, OMDb, AniList, offline).
 
 Every provider returns TMDB-shaped dictionaries so the matching code stays
 provider-agnostic. ``router.ProviderRouter`` tries the enabled providers in

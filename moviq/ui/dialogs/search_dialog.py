@@ -217,7 +217,10 @@ class SearchDialog(
         self.search_entry.pack(fill="both", expand=True, padx=(10, 4), pady=7)
         self.placeholder_label = tk.Label(
             search_input,
-            text="Search title, ID (tvdb:81189), or season/episode...",
+            text=(
+                "Search title, ID (tmdb:603 or imdb:tt0111161), or "
+                "season/episode..."
+            ),
             bg=palette["card"],
             fg=palette["muted"],
             font="TkTextFont",
@@ -599,7 +602,7 @@ class SearchDialog(
     @staticmethod
     def _parse_tmdb_id(query):
         text = query.strip()
-        typed = parse_typed_id(text)  # tvdb:81189, imdb:tt0111161, ...
+        typed = parse_typed_id(text)  # tmdb:603, imdb:tt0111161, ...
         if typed is not None:
             return typed
         match = ID_RE.fullmatch(text)

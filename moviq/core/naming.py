@@ -429,7 +429,7 @@ def sanitize(name):
 
 
 def _id_for_names(choice):
-    """(value, tag label) of the match id: 603/tmdb, tt0111161/imdb, ..."""
+    """(value, tag label) of the match id: 603/tmdb or tt0111161/imdb."""
     composite = choice.get("id")
     if not isinstance(composite, int) or composite <= 0:
         return choice.get("id", ""), "tmdb"

@@ -1,10 +1,10 @@
 """User choices for providers: priority order, on/off, and extra keys."""
 from dataclasses import dataclass
 
-DEFAULT_ORDER = ("tmdb", "tvmaze", "anilist", "omdb", "tvdb", "offline")
-DEFAULT_ENABLED = ("tmdb", "tvmaze", "anilist", "omdb", "tvdb")
+DEFAULT_ORDER = ("tmdb", "tvmaze", "anilist", "omdb", "offline")
+DEFAULT_ENABLED = ("tmdb", "tvmaze", "anilist", "omdb")
 # Providers that work for ordinary movies/shows; AniList is anime-only.
-GENERAL = ("tmdb", "omdb", "tvdb", "tvmaze")
+GENERAL = ("tmdb", "omdb", "tvmaze")
 
 PROVIDER_INFO = {
     "tmdb": {
@@ -26,11 +26,6 @@ PROVIDER_INFO = {
         "label": "OMDb (IMDb)", "needs_key": True, "kinds": "Movies and TV",
         "note": "Free key, 1,000 requests a day.",
         "key_url": "https://www.omdbapi.com/apikey.aspx",
-    },
-    "tvdb": {
-        "label": "TheTVDB", "needs_key": True, "kinds": "Movies and TV",
-        "note": "Your own API key (and PIN if you have one).",
-        "key_url": "https://thetvdb.com/api-information",
     },
     "offline": {
         "label": "Offline guess", "needs_key": False, "kinds": "Movies and TV",
@@ -55,7 +50,7 @@ def _clean_order(order):
 class ProviderSettings:
     order: tuple = DEFAULT_ORDER
     enabled: tuple = DEFAULT_ENABLED
-    keys: tuple = ()          # ((name, value), ...) for omdb, tvdb, tvdb_pin
+    keys: tuple = ()          # ((name, value), ...) for omdb
     selected: str = "automatic"
 
     @classmethod
@@ -76,7 +71,7 @@ class ProviderSettings:
         keys_raw = keys_raw if isinstance(keys_raw, dict) else {}
         keys = tuple(sorted(
             (name, str(keys_raw.get(name) or "").strip())
-            for name in ("omdb", "tvdb", "tvdb_pin")
+            for name in ("omdb",)
         ))
         selected = raw.get("selected", "automatic")
         if not isinstance(selected, str) or selected not in PROVIDER_INFO:
