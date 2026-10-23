@@ -36,11 +36,14 @@ Preview your new filenames and folder structure, review matches, and approve cha
 
 ## Demo
 
+
+
+<!--
 <img width="800" height="450" alt="ezgif-1b0ab9f8f00a7f7c" src="https://github.com/user-attachments/assets/9542ec21-ee61-4715-a16e-d260f3ae6222" />
 
+ -->
 
-
-<!-- https://github.com/user-attachments/assets/3df59574-6288-4681-a905-6f62033c0362 -->
+ https://github.com/user-attachments/assets/3df59574-6288-4681-a905-6f62033c0362
 
 
 
