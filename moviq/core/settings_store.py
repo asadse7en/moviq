@@ -46,7 +46,6 @@ TV_SAMPLE = {
     "episode_title": "Pilot",
 }
 DEFAULTS = {
-    "remember": True,
     "key": "",
     "theme": "system",
     "language": "en-US  English",
@@ -146,17 +145,20 @@ class SettingsStore:
         ]
         removed_setting_found = any(
             key in merged
-            for key in ("keep_undo", "app_language", "check_updates")
+            for key in (
+                "keep_undo", "app_language", "check_updates", "remember",
+            )
         ) or bool(cache_setting_keys)
         merged.pop("keep_undo", None)
         merged.pop("app_language", None)
         merged.pop("check_updates", None)
+        merged.pop("remember", None)
         for key in cache_setting_keys:
             merged.pop(key, None)
         if merged.get("theme") not in ("light", "dark", "system"):
             merged["theme"] = self.defaults["theme"]
         for key in (
-            "remember", "auto_match", "confirm_apply", "tag_id",
+            "auto_match", "confirm_apply", "tag_id",
             "movie_folder", "tv_folder", "rename_subtitles",
             "movie_create_folder", "tv_create_show_folder",
             "tv_create_season_folder",
@@ -188,9 +190,6 @@ class SettingsStore:
             merged["media_mode"] = self.defaults["media_mode"]
         if merged.get("window_state") not in ("normal", "zoomed"):
             merged["window_state"] = self.defaults["window_state"]
-        if not merged["remember"]:
-            merged.pop("key", None)
-            merged.pop("provider_keys", None)
         if (
             (source == self.legacy_path and config)
             or removed_setting_found
@@ -204,9 +203,6 @@ class SettingsStore:
         """Update one preference, notify the app, and schedule persistence."""
         with self._lock:
             self.data[key] = value
-            if key == "remember" and not value:
-                self.data.pop("key", None)
-                self.data.pop("provider_keys", None)
             self._schedule_save()
         self.on_change(key, value)
 
@@ -219,9 +215,6 @@ class SettingsStore:
                 if self.data.get(key, missing) != value
             }
             self.data.update(values)
-            if not self.data.get("remember", True):
-                self.data.pop("key", None)
-                self.data.pop("provider_keys", None)
             self._schedule_save()
         self.batching = True
         try:
@@ -243,9 +236,7 @@ class SettingsStore:
         for key in tuple(data):
             if "cache" in str(key).casefold():
                 data.pop(key, None)
-        if not data.get("remember", True):
-            data.pop("key", None)
-            data.pop("provider_keys", None)
+        data.pop("remember", None)
         return data
 
     def _save_in_background(self):

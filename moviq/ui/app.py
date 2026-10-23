@@ -81,7 +81,6 @@ from .theme import HAVE_SV, apply_theme as apply_app_theme
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
 CONFIG_FIELDS = {
-    "remember": lambda app: app.remember.get(),
     "key": lambda app: app.key_var.get().strip(),
     "theme": lambda app: app.theme_var.get(),
     "language": lambda app: app.lang_var.get(),
@@ -528,7 +527,6 @@ class App:
         c = self.cfg
         self.key_var = tk.StringVar(value=c.get("key", ""))
         self.show_key = tk.BooleanVar(value=False)
-        self.remember = tk.BooleanVar(value=c.get("remember", True))
         self.lang_var = tk.StringVar(value=c.get("language", LANGUAGES[0]))
         self.thr_var = tk.DoubleVar(value=min(
             100, max(50, int(round(float(c.get("threshold", 90)) / 5) * 5)),
@@ -1399,7 +1397,6 @@ class App:
     def build_settings_page(self, page):
         variables = {
             "key": self.key_var,
-            "remember": self.remember,
             "theme": self.theme_var,
             "auto_match": self.auto_match,
             "threshold": self.thr_var,

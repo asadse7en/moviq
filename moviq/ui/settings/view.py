@@ -422,7 +422,6 @@ class SettingsView(
         )
         keys = {
             "key": self.vars["key"],
-            "remember": self.vars["remember"],
             "theme": self.vars["theme"],
             "threshold": self.vars["threshold"],
             "auto_match": self.vars["auto_match"],

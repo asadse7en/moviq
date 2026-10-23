@@ -243,11 +243,6 @@ class ProvidersTabMixin:
             row=row + 3, column=0, columnspan=2, sticky="ew",
             pady=(2, 8),
         )
-        self._row(
-            group, row + 4, "Remember key",
-            self._switch(group, self.vars["remember"]),
-            "When off, the API key is kept only for this session.",
-        )
 
     def _provider_eye_toggle(self, wrap, field):
         eye = tk.Canvas(
