@@ -282,12 +282,12 @@ class SettingsView(
             widget = getattr(widget, "master", None)
         return False
 
-    def _row(self, parent, row, title, control, description=""):
+    def _row(self, parent, row, title, control, description="", style=None):
         self._label(
-            parent, title, font="TkHeadingFont",
+            parent, title, font="TkHeadingFont", style=style,
         ).grid(row=row, column=0, sticky="w", padx=(0, 18), pady=7)
         if description:
-            self._label(parent, description, muted=True).grid(
+            self._label(parent, description, muted=True, style=style).grid(
                 row=row + 1, column=0, sticky="w", padx=(0, 18),
                 pady=(0, 7),
             )
@@ -399,8 +399,8 @@ class SettingsView(
         )
         self.key_eye_canvas.itemconfigure("slash", fill=palette["muted"])
 
-    def _link(self, parent, text, url):
-        link = self._label(parent, text, cursor="hand2")
+    def _link(self, parent, text, url, style=None):
+        link = self._label(parent, text, cursor="hand2", style=style)
         link.configure(foreground=self.app.pal["accent"])
         link.bind("<Button-1>", lambda _event, target=url: webbrowser.open(target))
         return link
@@ -540,6 +540,43 @@ class SettingsView(
         self._set_format_selector_theme(palette)
         self._set_library_selector_theme(palette)
         self._recolor_styled_entries(palette)
+        for row, number, label in self._provider_priority_rows.values():
+            row.configure(background=palette["preset_surface"])
+            number.configure(
+                background=palette["preset_selected"],
+                foreground=palette["muted"],
+            )
+            label.configure(
+                background=palette["preset_surface"],
+                foreground=palette["fg"],
+            )
+        for surface in self._provider_card_surfaces:
+            surface.configure(background=palette["preset_surface"])
+        for eye in self._provider_key_eyes.values():
+            eye.configure(background=palette["preset_surface"])
+            eye.itemconfigure("eye", fill=palette["muted"])
+            eye.itemconfigure(
+                "pupil", fill=palette["muted"], outline=palette["muted"],
+            )
+            eye.itemconfigure("slash", fill=palette["muted"])
+        for card in self._provider_blocks.values():
+            card.configure(
+                highlightbackground=palette["preset_border"],
+                highlightcolor=palette["preset_border"],
+            )
+        for title in self._provider_card_titles:
+            title.configure(
+                background=palette["preset_surface"],
+                foreground=palette["fg"],
+            )
+        for label, muted, accent in self._provider_card_labels:
+            label.configure(
+                background=palette["preset_surface"],
+                foreground=(
+                    palette["accent"] if accent else
+                    palette["muted"] if muted else palette["fg"]
+                ),
+            )
         for text in self._rich_texts:
             text.configure(
                 background=palette["card"],
@@ -548,6 +585,7 @@ class SettingsView(
             for tag in ("tmdb_link", "api_link"):
                 text.tag_configure(tag, foreground=palette["accent"])
             text.tag_configure("bold", foreground=palette["muted"])
+        self.key_help_text.configure(background=palette["preset_surface"])
         for label, muted in self._labels:
             try:
                 label.configure(foreground=(

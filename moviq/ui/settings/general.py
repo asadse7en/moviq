@@ -135,7 +135,7 @@ class GeneralTabMixin:
             height=1,
             wrap="word",
             font="TkDefaultFont",
-            background=self.app.pal["card"],
+            background=self.app.pal["preset_surface"],
             foreground=self.app.pal["muted"],
             relief="flat",
             borderwidth=0,

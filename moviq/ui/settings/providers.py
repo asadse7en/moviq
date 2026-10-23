@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk
+import webbrowser
 
 from ...core.providers.router import test_provider
 from ...core.providers.settings import PROVIDER_INFO
@@ -27,6 +28,49 @@ class ProvidersTabMixin:
             "good match.",
         )
         settings = self.app.provider_settings
+        self._provider_priority_rows = {}
+        self._provider_move_buttons = {}
+        self._provider_card_surfaces = []
+        self._provider_card_titles = []
+        self._provider_card_labels = []
+        priority_group = self._group(frame, "Priority List")
+        priority_group.columnconfigure(0, weight=1)
+        for name in settings.order:
+            row = tk.Frame(
+                priority_group, background=self.app.pal["preset_surface"],
+                padx=8, pady=5,
+            )
+            row.columnconfigure(1, weight=1)
+            number = tk.Label(
+                row, anchor="center", width=2,
+                background=self.app.pal["preset_selected"],
+                foreground=self.app.pal["muted"], font="TkTextFont",
+                padx=5, pady=2,
+            )
+            number.grid(row=0, column=0, sticky="w", padx=(0, 8))
+            label = tk.Label(
+                row, anchor="w", background=self.app.pal["preset_surface"],
+                foreground=self.app.pal["fg"], font="TkTextFont",
+            )
+            label.grid(row=0, column=1, sticky="ew")
+            controls = ttk.Frame(row)
+            controls.grid(row=0, column=2, sticky="e", padx=(8, 0))
+            move_up = ttk.Button(
+                controls, text="↑", width=3, style="Settings.TButton",
+                command=lambda provider=name: self._move_provider(provider, -1),
+            )
+            move_up.pack(side="left", padx=(0, 4))
+            move_down = ttk.Button(
+                controls, text="↓", width=3, style="Settings.TButton",
+                command=lambda provider=name: self._move_provider(provider, 1),
+            )
+            move_down.pack(side="left")
+            self._provider_priority_rows[name] = (row, number, label)
+            self._provider_move_buttons[name] = (move_up, move_down)
+
+        self._label(frame, "Provider Details", font="TkHeadingFont").pack(
+            anchor="w", pady=(18, 10),
+        )
         self._provider_blocks = {}
         self._provider_enabled = {}
         self._provider_key_vars = {}
@@ -34,24 +78,35 @@ class ProvidersTabMixin:
         self._provider_key_eyes = {}
         self._provider_status = {}
         self._provider_status_labels = {}
-        self._provider_position = {}
-        self._provider_move_buttons = {}
 
         for name in settings.order:
             self._build_provider_group(frame, name, settings)
 
-        self.vars["key"].trace_add(
-            "write", lambda *_args: self._refresh_provider_labels(),
-        )
         self._layout_providers()
 
     def _build_provider_group(self, frame, name, settings):
         source = _SOURCE_NAMES[name]
         info = PROVIDER_INFO[name]
-        group = self._group(frame, source)
+        surface = self.app.pal["preset_surface"]
+        card = tk.Frame(
+            frame, background=surface, highlightthickness=1,
+            highlightbackground=self.app.pal["preset_border"],
+            highlightcolor=self.app.pal["preset_border"],
+            padx=12, pady=10,
+        )
+        card.pack(fill="x", pady=(0, 14))
+        title = tk.Label(
+            card, text=source, font="TkHeadingFont",
+            background=surface, foreground=self.app.pal["fg"],
+        )
+        title.pack(anchor="w", pady=(0, 8))
+        group = tk.Frame(card, background=surface)
+        group.pack(fill="x")
         group.columnconfigure(0, weight=1)
         group.columnconfigure(1, weight=0)
-        self._provider_blocks[name] = group
+        self._provider_blocks[name] = card
+        self._provider_card_surfaces.extend((card, group))
+        self._provider_card_titles.append(title)
 
         enabled = tk.BooleanVar(value=name in settings.enabled)
         enabled.trace_add(
@@ -61,13 +116,16 @@ class ProvidersTabMixin:
         )
         self._provider_enabled[name] = enabled
 
-        row = self._row(
-            group, 0, f"Use {source}",
-            self._switch(group, enabled),
+        switch_style = (
+            "Moviq.Formatting.Switch.TCheckbutton"
+            if self.app.have_sv else "Formatting.TCheckbutton"
         )
-        description = ttk.Frame(group)
+        self._switch(
+            group, enabled, style=switch_style,
+        ).grid(row=0, column=1, sticky="e", pady=7)
+        description = tk.Frame(group, background=surface)
         description.grid(
-            row=row, column=0, columnspan=2, sticky="w",
+            row=1, column=0, columnspan=2, sticky="w",
             padx=(0, 18), pady=(0, 7),
         )
         text = (
@@ -79,39 +137,14 @@ class ProvidersTabMixin:
                 f"{'API key required.' if info['needs_key'] else 'No key needed.'}"
             )
         )
-        self._label(description, text, muted=True).pack(side="left")
+        self._provider_label(
+            description, text, muted=True,
+        ).pack(side="left")
         if info["needs_key"]:
-            self._link(description, "Get a key", info["key_url"]).pack(
+            self._provider_link(description, "Get a key", info["key_url"]).pack(
                 side="left", padx=(6, 0),
             )
-        row += 1
-        row = self._provider_separator(group, row)
-
-        position = tk.StringVar()
-        self._provider_position[name] = position
-        self._label(
-            group, "Priority", font="TkHeadingFont",
-        ).grid(row=row, column=0, sticky="w", padx=(0, 18), pady=7)
-        self._label(
-            group, textvariable=position, muted=True,
-        ).grid(
-            row=row + 1, column=0, sticky="w", padx=(0, 18),
-            pady=(0, 7),
-        )
-        buttons = ttk.Frame(group)
-        buttons.grid(row=row, column=1, rowspan=2, sticky="e", pady=7)
-        move_up = ttk.Button(
-            buttons, text="Move up", style="Settings.TButton",
-            command=lambda provider=name: self._move_provider(provider, -1),
-        )
-        move_up.pack(side="left", padx=(0, 6))
-        move_down = ttk.Button(
-            buttons, text="Move down", style="Settings.TButton",
-            command=lambda provider=name: self._move_provider(provider, 1),
-        )
-        move_down.pack(side="left")
-        self._provider_move_buttons[name] = (move_up, move_down)
-        row += 2
+        row = 2
         row = self._provider_separator(group, row)
 
         if name == "tmdb":
@@ -129,11 +162,12 @@ class ProvidersTabMixin:
                     self._provider_key_edited(field)
                 ),
             )
-            controls = ttk.Frame(group)
+            controls = tk.Frame(group, background=surface)
             controls.grid(row=row, column=1, sticky="e", pady=5)
             wrap, entry = self.make_styled_entry(
-                controls, key_var, width=24, show="•",
+                controls, key_var, width=30, show="•",
             )
+            entry.grid_configure(padx=7, pady=3)
             self._provider_key_entries[key_field] = entry
             eye = self._provider_eye_toggle(wrap, key_field)
             self._provider_key_eyes[key_field] = eye
@@ -148,12 +182,13 @@ class ProvidersTabMixin:
                     self._commit_provider_keys(provider)
                 ),
             ).pack(side="left", padx=(6, 0))
-            self._label(
-                group, f"{source} API key", font="TkHeadingFont",
+            self._provider_label(
+                group, "API key", font="TkHeadingFont",
             ).grid(row=row, column=0, sticky="w", padx=(0, 18), pady=5)
             self._add_provider_status(
                 group, name, row + 1,
                 "Needs a key" if not key_var.get().strip() else "Not checked",
+                column=1,
             )
             row += 2
             row = self._provider_separator(group, row)
@@ -161,23 +196,23 @@ class ProvidersTabMixin:
             return
 
         if name in ("tvmaze", "anilist"):
-            self._label(
-                group, "Connection", font="TkHeadingFont",
-            ).grid(row=row, column=0, sticky="w", padx=(0, 18), pady=5)
             ttk.Button(
                 group, text="Test", style="Settings.TButton",
                 command=lambda provider=name: self._test_provider(provider),
             ).grid(row=row, column=1, sticky="e", pady=5)
-            self._add_provider_status(group, name, row + 1, "Not checked")
+            self._add_provider_status(
+                group, name, row + 1, "Not checked", column=1,
+            )
 
     def _build_tmdb_key(self, group, row):
         self.key_status_var = tk.StringVar(value="● Not checked")
         self.key_entry_var = tk.StringVar(value=self.vars["key"].get())
-        key_row = ttk.Frame(group)
+        key_row = tk.Frame(group, background=self.app.pal["preset_surface"])
         key_row.grid(row=row, column=1, sticky="e", pady=5)
         self.key_entry_wrap, self.key_entry = self.make_styled_entry(
             key_row, self.key_entry_var, width=30, show="•",
         )
+        self.key_entry.grid_configure(padx=7, pady=3)
         self.key_eye_canvas = tk.Canvas(
             self.key_entry_wrap, width=28, height=28,
             background=self.app.pal["preset_surface"],
@@ -217,20 +252,20 @@ class ProvidersTabMixin:
             key_row, text="Save", style="Settings.TButton",
             command=self.save_key,
         ).pack(side="left", padx=(6, 0))
-        self._label(
+        self._provider_label(
             group, "API key", font="TkHeadingFont",
         ).grid(
             row=row, column=0, sticky="w", padx=(0, 18), pady=5,
         )
         self.key_help_text = self._build_api_key_help(group)
-        self.key_status_label = self._label(
+        self.key_status_label = self._provider_label(
             group, textvariable=self.key_status_var, muted=True,
         )
         self._set_key_status("Not checked")
         self.key_status_label.grid(
             row=row + 1, column=1, sticky="e", pady=(0, 5),
         )
-        self._link(
+        self._provider_link(
             group, "Get a TMDB API key", TMDB_KEY_URL,
         ).grid(
             row=row + 1, column=0, sticky="w", padx=(0, 18), pady=(0, 5),
@@ -274,13 +309,15 @@ class ProvidersTabMixin:
         )
         return eye
 
-    def _add_provider_status(self, group, name, row, status):
+    def _add_provider_status(
+        self, group, name, row, status, column=1,
+    ):
         variable = tk.StringVar()
-        label = self._label(
+        label = self._provider_label(
             group, textvariable=variable, muted=True,
         )
         label.grid(
-            row=row, column=0, sticky="w", padx=(0, 18), pady=(0, 7),
+            row=row, column=column, sticky="e", pady=(0, 7),
         )
         self._provider_status[name] = variable
         self._provider_status_labels[name] = label
@@ -292,6 +329,27 @@ class ProvidersTabMixin:
         )
         self._set_provider_status(name, status)
 
+    def _provider_label(self, parent, text="", muted=False, accent=False, **kwargs):
+        palette = self.app.pal
+        foreground = (
+            palette["accent"] if accent else
+            palette["muted"] if muted else palette["fg"]
+        )
+        label = tk.Label(
+            parent, text=text, font=kwargs.pop("font", "TkTextFont"),
+            background=palette["preset_surface"],
+            foreground=foreground, bd=0, highlightthickness=0, **kwargs,
+        )
+        self._provider_card_labels.append((label, muted, accent))
+        return label
+
+    def _provider_link(self, parent, text, url):
+        link = self._provider_label(parent, text, accent=True, cursor="hand2")
+        link.bind(
+            "<Button-1>", lambda _event, target=url: webbrowser.open(target),
+        )
+        return link
+
     def _provider_separator(self, group, row):
         ttk.Separator(group).grid(
             row=row, column=0, columnspan=2, sticky="ew", pady=(2, 8),
@@ -300,10 +358,23 @@ class ProvidersTabMixin:
 
     def _layout_providers(self):
         settings = self.app.provider_settings
+        self._provider_detail_order = [
+            name for name in settings.order if name != "tvmaze"
+        ]
+        if "tvmaze" in settings.order:
+            insert_at = (
+                self._provider_detail_order.index("omdb") + 1
+                if "omdb" in self._provider_detail_order
+                else len(self._provider_detail_order)
+            )
+            self._provider_detail_order.insert(insert_at, "tvmaze")
+        for row, _number, _label in self._provider_priority_rows.values():
+            row.pack_forget()
         for group in self._provider_blocks.values():
             group.pack_forget()
         for position, name in enumerate(settings.order):
-            self._provider_blocks[name].pack(fill="x", pady=(0, 14))
+            priority_row, number, label = self._provider_priority_rows[name]
+            priority_row.pack(fill="x", pady=(0, 5))
             move_up, move_down = self._provider_move_buttons[name]
             move_up.configure(
                 state="disabled" if position == 0 else "normal",
@@ -314,14 +385,10 @@ class ProvidersTabMixin:
                     if position == len(settings.order) - 1 else "normal"
                 ),
             )
-        self._refresh_provider_labels()
-
-    def _refresh_provider_labels(self):
-        settings = self.app.provider_settings
-        for position, name in enumerate(settings.order, 1):
-            self._provider_position[name].set(
-                f"Position {position} of {len(settings.order)}",
-            )
+            number.configure(text=str(position + 1))
+            label.configure(text=_SOURCE_NAMES[name])
+        for name in self._provider_detail_order:
+            self._provider_blocks[name].pack(fill="x", pady=(0, 14))
 
     def _set_provider_status(self, name, status):
         self._provider_status[name].set(f"• {status}")
