@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 
 
 class TMDBCache:
-    """Bounded SQLite cache for complete TMDB response data."""
+    """Bounded SQLite cache for complete provider response data."""
 
     def __init__(self, path, clock=time.time):
         self.path = Path(path)
@@ -110,7 +110,7 @@ class TMDBCache:
             try:
                 return True, json.loads(response_json)
             except json.JSONDecodeError:
-                log.warning("Removing invalid TMDB cache entry %s.", key)
+                log.warning("Removing invalid provider cache entry %s.", key)
                 self._connection.execute(
                     "DELETE FROM tmdb_cache WHERE cache_key = ?", (key,),
                 )
@@ -192,7 +192,7 @@ def get_cache():
             if "cache" in locals():
                 cache.close()
             _cache_initialization_failed = True
-            log.warning("TMDB response cache is unavailable: %s", error)
+            log.warning("Provider response cache is unavailable: %s", error)
             return None
         return _cache
 
@@ -200,5 +200,5 @@ def get_cache():
 def clear_tmdb_cache():
     cache = get_cache()
     if cache is None:
-        raise RuntimeError("TMDB response cache is unavailable.")
+        raise RuntimeError("Provider response cache is unavailable.")
     return cache.clear()

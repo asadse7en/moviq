@@ -216,7 +216,7 @@ class TMDB:
                         if found:
                             return cached
                 except (OSError, sqlite3.Error) as error:
-                    log.warning("Could not read TMDB response cache: %s", error)
+                    log.warning("Could not read provider response cache: %s", error)
                     persistent_cache = None
 
             data = self._request(path, dict(params))
@@ -226,7 +226,7 @@ class TMDB:
                 except (
                     OSError, sqlite3.Error, TypeError, ValueError,
                 ) as error:
-                    log.warning("Could not write TMDB response cache: %s", error)
+                    log.warning("Could not write provider response cache: %s", error)
             return data
 
         if self.operation_cache is not None and use_cache:

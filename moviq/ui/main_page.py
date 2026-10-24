@@ -4,6 +4,7 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 
 from .. import resource
+from ..core.providers.settings import provider_source_label
 from .controls import RoundedButton, SegmentedModeToggle, ToolTip
 
 MAIN_SHORTCUTS = {
@@ -89,11 +90,13 @@ def build_main_page(app, page):
     app.media_mode_selector.pack(side="left")
     app.update_media_mode_selector()
     app.provider_source_var = tk.StringVar(
-        value=f"Source: {app.provider_settings.selected}",
+        value=(
+            f"Source: {provider_source_label(app.provider_settings.selected)}"
+        ),
     )
     ttk.Label(
         left_controls, textvariable=app.provider_source_var,
-        style="Muted.TLabel",
+        style="HeaderMuted.TLabel",
     ).pack(side="left", padx=(10, 0))
 
     match_actions = ttk.Frame(bar, style="Toolbar.TFrame")

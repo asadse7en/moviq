@@ -25,6 +25,9 @@ COMPACT_EPISODE_RE = re.compile(
     r"(?i)^[a-z]{1,4}[ ._-]*0*(?P<episode>\d{1,4})$"
 )
 NUMBERED_EPISODE_RE = re.compile(r"^0*(?P<episode>\d{1,4})$")
+CONTEXT_NUMBERED_TITLE_RE = re.compile(
+    r"^\s*(?P<episode>\d{1,3})(?:\s+-\s+|\.\s+|\s+)(?P<title>.+?)\s*$"
+)
 TRAILING_EPISODE_RE = re.compile(
     r"(?:^|[\s._-])(?P<episode>\d{1,4})$",
 )
@@ -400,6 +403,12 @@ def parse_tv_episode_in_context(stem, show_title, season_number=1):
     """Infer an episode number from a simple filename inside a known show."""
     if not show_title:
         return None
+    if not TV_NAME_MARKER_RE.search(_fix_ocr_markers(stem)):
+        match = CONTEXT_NUMBERED_TITLE_RE.fullmatch(stem.strip())
+        if match:
+            episode = int(match.group("episode"))
+            if episode > 0:
+                return show_title, None, season_number, episode
     for pattern in (
         CONTEXT_EPISODE_RE, COMPACT_EPISODE_RE, NUMBERED_EPISODE_RE,
     ):
@@ -409,6 +418,14 @@ def parse_tv_episode_in_context(stem, show_title, season_number=1):
             if episode > 0:
                 return show_title, None, season_number, episode
     return None
+
+
+def parse_tv_episode_title_in_context(stem):
+    """Return the title from a numbered filename inside a known show."""
+    match = CONTEXT_NUMBERED_TITLE_RE.fullmatch(stem.strip())
+    if not match:
+        return None
+    return _clean_tv_title(match.group("title")) or None
 
 
 def parse_tv_episode_title(stem):

@@ -4,7 +4,8 @@ import re
 from .naming import (
     norm, parse_name, parse_production_code, parse_tv_episode,
     parse_tv_episode_in_context, parse_tv_episode_end,
-    parse_tv_episode_title, parse_tv_name, tv_season_is_explicit,
+    parse_tv_episode_title, parse_tv_episode_title_in_context,
+    parse_tv_name, tv_season_is_explicit,
 )
 
 
@@ -73,6 +74,7 @@ class Item:
         self.orig_folder = self.path.parent.name
         tv_episode = parse_tv_episode(self.path.stem)
         self.media_type = media_type or ("tv" if tv_episode else "movie")
+        contextual_episode_title = None
         if self.media_type == "tv":
             show_title, show_year, season, episode = parse_tv_name(self.path)
             self.season_was_explicit = tv_season_is_explicit(self.path)
@@ -88,11 +90,17 @@ class Item:
                         contextual_episode
                     )
                     self.episode_end_number = None
+                    contextual_episode_title = (
+                        parse_tv_episode_title_in_context(self.path.stem)
+                    )
             tv_episode = (
                 (show_title, show_year, season or 1, episode)
                 if episode is not None and show_title else None
             )
-            self.episode_title = parse_tv_episode_title(self.path.stem)
+            self.episode_title = (
+                contextual_episode_title
+                or parse_tv_episode_title(self.path.stem)
+            )
             self.production_code = (
                 parse_production_code(self.path.stem)
                 if episode is None else None

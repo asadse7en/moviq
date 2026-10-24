@@ -9,8 +9,7 @@ from ... import resource
 from ...core.tmdb_cache import clear_tmdb_cache
 from ..popups import show_error, show_info
 from ._common import (
-    APP_VERSION, ISSUES_URL, LICENSE_URL, RELEASES_URL, TMDB_ATTRIBUTION,
-    check_latest_release,
+    APP_VERSION, ISSUES_URL, LICENSE_URL, RELEASES_URL, check_latest_release,
 )
 
 
@@ -66,17 +65,10 @@ class AboutTabMixin:
         self._link(links, "Release notes", RELEASES_URL).pack(side="left", padx=(0, 16))
         self._link(links, "Report a problem", ISSUES_URL).pack(side="left", padx=(0, 16))
         self._link(links, "Open-source licenses", LICENSE_URL).pack(side="left")
-        self._label(
-            group,
-            TMDB_ATTRIBUTION,
-            muted=True,
-            justify="left",
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 4))
-
         cache_group = self._group(frame, "Cache")
         self._label(
             cache_group,
-            "Clear cached TMDB responses when testing with fresh data.",
+            "Clear cached provider responses when testing with fresh data.",
             muted=True,
         ).grid(row=0, column=0, sticky="w", padx=(0, 16), pady=4)
         ttk.Button(
@@ -90,12 +82,12 @@ class AboutTabMixin:
         except (OSError, RuntimeError, sqlite3.Error) as error:
             show_error(
                 self.app, "Couldn't clear cache",
-                f"TMDB response cache could not be cleared: {error}",
+                f"Provider response cache could not be cleared: {error}",
             )
             return
         show_info(
             self.app, "Cache cleared",
-            f"Cleared {count} cached TMDB responses.",
+            f"Cleared {count} cached provider responses.",
         )
 
     def _check_for_updates(self):

@@ -697,3 +697,448 @@ class SegmentedModeToggle(tk.Canvas):
                 font=self.font,
             )
             segment_start += segment_width
+
+
+class SettingsDropdown(tk.Frame):
+    def __init__(
+        self, master, variable, options, command, palette,
+        descriptions=None, width=200, height=34,
+    ):
+        super().__init__(
+            master, width=width, height=height, bd=0, highlightthickness=0,
+        )
+        self.pack_propagate(False)
+        self.variable = variable
+        self.options = tuple(options)
+        self.command = command
+        self.descriptions = descriptions or {}
+        self.palette = palette
+        self._popup = None
+        self._popup_canvas = None
+        self._options_frame = None
+        self._option_rows = []
+        self._active_index = 0
+        self._hover = False
+        self._open = False
+        self._animation_id = None
+        self._chevron_id = None
+        self._chevron_angle = 0.0
+        self._outside_binding = None
+        self._variable_trace = variable.trace_add(
+            "write", self._value_changed,
+        )
+        self._destroying = False
+        self.canvas = tk.Canvas(
+            self, width=width, height=height, bd=0,
+            highlightthickness=0, takefocus=True, cursor="hand2",
+            background=palette["card"],
+        )
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Configure>", self._draw_control)
+        self.canvas.bind("<Enter>", self._on_enter)
+        self.canvas.bind("<Leave>", self._on_leave)
+        self.canvas.bind("<Button-1>", self._toggle)
+        self.canvas.bind("<Return>", self._toggle)
+        self.canvas.bind("<space>", self._toggle)
+        self.canvas.bind("<Down>", self._open_down)
+        self.canvas.bind("<FocusIn>", self._draw_control)
+        self.canvas.bind("<FocusOut>", self._draw_control)
+        self.bind("<Destroy>", self._on_destroy, add="+")
+        self._draw_control()
+
+    def set_palette(self, palette):
+        self.palette = palette
+        self.canvas.configure(background=palette["card"])
+        self._draw_control()
+        if self._popup is not None:
+            self._refresh_popup_palette()
+            self._style_options()
+
+    def _value_changed(self, *_args):
+        self._draw_control()
+        if self._popup is not None:
+            self._style_options()
+
+    def _display_value(self):
+        value = self.variable.get()
+        return next(
+            (label for label, option_value in self.options
+             if option_value == value),
+            value,
+        )
+
+    def _colors(self):
+        palette = self.palette
+        dark = palette["bg"] == "#1c1c1c"
+        return {
+            "background": "#242424" if dark else palette["preset_surface"],
+            "menu": "#242424" if dark else palette["preset_surface"],
+            "hover": "#333333" if dark else palette["preset_hover"],
+            "border": palette["accent"] if (
+                self._hover or self._open
+                or self.canvas == self.canvas.focus_get()
+            ) else palette["preset_border"],
+            "foreground": palette["fg"],
+            "muted": palette["muted"],
+            "accent": palette["accent"],
+            "outline": palette["accent"],
+            "shadow": "#161616" if dark else "#cbd5e1",
+        }
+
+    def _draw_control(self, _event=None):
+        if not self.winfo_exists():
+            return
+        colors = self._colors()
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
+        self.canvas.delete("all")
+        draw_rounded_rectangle(
+            self.canvas, 0, 0, width, height, 6,
+            colors["background"], colors["border"],
+            background=self.canvas.cget("background"),
+        )
+        self.canvas.create_text(
+            12, height / 2, anchor="w", text=self._display_value(),
+            fill=colors["foreground"], font=("TkDefaultFont", 10),
+        )
+        center_x, center_y = width - 16, height / 2
+        base = ((-4, -2), (0, 2), (4, -2))
+        points = []
+        for x, y in base:
+            rotated_x = x * math.cos(self._chevron_angle) - y * math.sin(
+                self._chevron_angle,
+            )
+            rotated_y = x * math.sin(self._chevron_angle) + y * math.cos(
+                self._chevron_angle,
+            )
+            points.extend((center_x + rotated_x, center_y + rotated_y))
+        self.canvas.create_line(
+            points, fill=colors["muted"], width=2, capstyle="round",
+            joinstyle="round",
+        )
+
+    def _on_enter(self, _event):
+        self._hover = True
+        self._draw_control()
+
+    def _on_leave(self, _event):
+        self._hover = False
+        self._draw_control()
+
+    def _toggle(self, _event=None):
+        self.canvas.focus_set()
+        if self._popup is None:
+            self.open()
+        else:
+            self.close()
+        return "break"
+
+    def _open_down(self, _event):
+        self.canvas.focus_set()
+        if self._popup is None:
+            self.open()
+        return "break"
+
+    def open(self):
+        if self._popup is not None:
+            return
+        self._open = True
+        self._active_index = self._selected_index()
+        self._build_popup()
+        self._open_started = time.monotonic()
+        self._animate_chevron(True)
+        self._animate_open()
+        self._outside_binding = self.bind_all(
+            "<Button-1>", self._outside_click, add="+",
+        )
+        self._popup.focus_set()
+
+    def close(self, restore_focus=False):
+        if self._popup is None:
+            return
+        popup = self._popup
+        self._popup = None
+        self._open = False
+        if self._animation_id is not None:
+            self.after_cancel(self._animation_id)
+            self._animation_id = None
+        if hasattr(self, "_open_started"):
+            del self._open_started
+        if self._outside_binding is not None:
+            self._root()._unbind(
+                ("bind", "all", "<Button-1>"), self._outside_binding,
+            )
+            self._outside_binding = None
+        popup.destroy()
+        self._popup_canvas = None
+        self._options_frame = None
+        self._option_rows = []
+        if not self._destroying:
+            self._animate_chevron(False)
+        if restore_focus:
+            self.canvas.focus_set()
+
+    def _build_popup(self):
+        colors = self._colors()
+        popup = tk.Toplevel(self)
+        self._popup = popup
+        popup.withdraw()
+        popup.overrideredirect(True)
+        popup.transient(self.winfo_toplevel())
+        popup.configure(background=colors["shadow"])
+        popup.bind("<Up>", lambda _event: self._move_active(-1))
+        popup.bind("<Down>", lambda _event: self._move_active(1))
+        popup.bind("<Return>", self._choose_active)
+        popup.bind("<space>", self._choose_active)
+        popup.bind("<Escape>", self._close_escape)
+
+        row_heights = [
+            50 if self.descriptions.get(value) else 32
+            for _label, value in self.options
+        ]
+        popup_width = max(200, self.winfo_width())
+        popup_height = sum(row_heights) + len(row_heights) * 4 + 10
+        canvas = tk.Canvas(
+            popup, width=popup_width, height=popup_height,
+            bd=0, highlightthickness=0, background=colors["shadow"],
+        )
+        canvas.pack()
+        self._popup_canvas = canvas
+        draw_rounded_rectangle(
+            canvas, 1, 1, popup_width - 2, popup_height - 2, 8,
+            colors["menu"], self.palette["preset_border"],
+            background=colors["shadow"],
+        )
+        options_frame = tk.Frame(canvas, background=colors["menu"])
+        self._options_frame = options_frame
+        canvas.create_window(
+            5, 5, anchor="nw", width=popup_width - 10,
+            height=popup_height - 10, window=options_frame,
+        )
+        for index, (label, value) in enumerate(self.options):
+            row = tk.Frame(
+                options_frame, height=row_heights[index],
+                background=colors["menu"], highlightthickness=1,
+                highlightbackground=colors["menu"],
+                highlightcolor=colors["menu"],
+            )
+            row.pack(fill="x", padx=2, pady=2)
+            row.pack_propagate(False)
+            text = tk.Frame(row, background=colors["menu"])
+            text.pack(side="left", fill="both", expand=True, padx=(8, 2))
+            title = tk.Label(
+                text, text=label, anchor="w",
+                background=colors["menu"], foreground=colors["foreground"],
+                font=("TkDefaultFont", 10),
+            )
+            title.pack(anchor="w", pady=(2, 0))
+            description = self.descriptions.get(value)
+            detail = None
+            if description:
+                detail = tk.Label(
+                    text, text=description, anchor="w",
+                    background=colors["menu"], foreground=colors["muted"],
+                    font=("TkDefaultFont", 8),
+                )
+                detail.pack(anchor="w")
+            check = tk.Label(
+                row, text="✓" if value == self.variable.get() else "",
+                width=2, anchor="center",
+                background=colors["menu"], foreground=colors["accent"],
+                font=("TkDefaultFont", 10),
+            )
+            check.pack(side="right", padx=(0, 5))
+            widgets = [row, text, title, check]
+            if detail is not None:
+                widgets.append(detail)
+            for widget in widgets:
+                widget.bind(
+                    "<Enter>",
+                    lambda _event, selected=index: self._hover_option(
+                        selected, True,
+                    ),
+                )
+                widget.bind(
+                    "<Leave>",
+                    lambda _event, selected=index: self._hover_option(
+                        selected, False,
+                    ),
+                )
+                widget.bind(
+                    "<Button-1>",
+                    lambda _event, selected=index: self._choose(selected),
+                )
+            self._option_rows.append((row, widgets, value, detail, check))
+        popup.update_idletasks()
+        x = self.winfo_rootx() + self.winfo_width() - popup_width
+        y = self.winfo_rooty() + self.winfo_height()
+        popup.geometry(
+            f"{popup_width}x{popup_height}+{x}+{y + 4}",
+        )
+        popup.deiconify()
+        popup.lift()
+        self._style_options()
+
+    def _animate_open(self):
+        popup = self._popup
+        if popup is None:
+            return
+        geometry = popup.geometry().split("+")
+        size = geometry[0]
+        x, y = int(geometry[1]), int(geometry[2])
+        final_y = self.winfo_rooty() + self.winfo_height()
+        elapsed = time.monotonic() - self._open_started
+        progress = min(1.0, elapsed / 0.12)
+        eased = 1 - (1 - progress) ** 3
+        popup.geometry(f"{size}+{x}+{round(final_y + 4 * (1 - eased))}")
+        try:
+            popup.attributes("-alpha", 0.65 + 0.35 * eased)
+        except tk.TclError:
+            pass
+        if progress < 1:
+            self._animation_id = self.after(15, self._animate_open)
+        else:
+            self._animation_id = None
+            if hasattr(self, "_open_started"):
+                del self._open_started
+
+    def _animate_chevron(self, opening):
+        if self._chevron_id is not None:
+            self.after_cancel(self._chevron_id)
+            self._chevron_id = None
+        start = self._chevron_angle
+        end = math.pi if opening else 0.0
+        started = time.monotonic()
+
+        def advance():
+            progress = min(1.0, (time.monotonic() - started) / 0.12)
+            eased = 1 - (1 - progress) ** 3
+            self._chevron_angle = start + (end - start) * eased
+            self._draw_control()
+            if progress < 1:
+                self._chevron_id = self.after(15, advance)
+            else:
+                self._chevron_id = None
+
+        advance()
+
+    def _selected_index(self):
+        return next(
+            (index for index, (_label, value) in enumerate(self.options)
+             if value == self.variable.get()),
+            0,
+        )
+
+    def _move_active(self, step):
+        self._active_index = (
+            self._active_index + step
+        ) % len(self.options)
+        self._style_options()
+        return "break"
+
+    def _choose_active(self, _event=None):
+        self._choose(self._active_index)
+        return "break"
+
+    def _close_escape(self, _event=None):
+        self.close(restore_focus=True)
+        return "break"
+
+    def _choose(self, index):
+        _label, value = self.options[index]
+        self.variable.set(value)
+        self.close(restore_focus=True)
+        self.command(value)
+        return "break"
+
+    def _hover_option(self, index, hovered):
+        if hovered:
+            self._active_index = index
+        self._style_options(hovered_index=index if hovered else None)
+
+    def _style_options(self, hovered_index=None):
+        if self._popup is None:
+            return
+        colors = self._colors()
+        selected_value = self.variable.get()
+        for index, (row, widgets, value, detail, check) in enumerate(
+            self._option_rows,
+        ):
+            focused = index == self._active_index
+            hovered = index == hovered_index
+            background = (
+                colors["hover"] if hovered
+                else colors["menu"]
+            )
+            row.configure(
+                background=background,
+                highlightbackground=(
+                    colors["outline"] if focused else background
+                ),
+                highlightcolor=(
+                    colors["outline"] if focused else background
+                ),
+            )
+            for widget in widgets:
+                if widget is row:
+                    continue
+                widget.configure(background=background)
+                if widget is check:
+                    widget.configure(
+                        foreground=colors["accent"],
+                        text="✓" if value == selected_value else "",
+                    )
+                elif widget is detail:
+                    widget.configure(foreground=colors["muted"])
+                elif isinstance(widget, tk.Label):
+                    widget.configure(
+                        foreground=(
+                            colors["accent"]
+                            if value == selected_value
+                            else colors["foreground"]
+                        ),
+                    )
+
+    def _refresh_popup_palette(self):
+        if self._popup is None or self._popup_canvas is None:
+            return
+        colors = self._colors()
+        canvas = self._popup_canvas
+        width = int(canvas.cget("width"))
+        height = int(canvas.cget("height"))
+        self._popup.configure(background=colors["shadow"])
+        canvas.configure(background=colors["shadow"])
+        canvas.delete("all")
+        draw_rounded_rectangle(
+            canvas, 1, 1, width - 2, height - 2, 8,
+            colors["menu"], self.palette["preset_border"],
+            background=colors["shadow"],
+        )
+        self._options_frame.configure(background=colors["menu"])
+        canvas.create_window(
+            5, 5, anchor="nw", width=width - 10,
+            height=height - 10, window=self._options_frame,
+        )
+
+    def _outside_click(self, event):
+        widget_path = str(event.widget)
+        control_path = str(self)
+        popup_path = str(self._popup) if self._popup is not None else ""
+        if (
+            not widget_path.startswith(control_path)
+            and not (popup_path and widget_path.startswith(popup_path))
+        ):
+            self.after_idle(self.close)
+
+    def _on_destroy(self, event):
+        if event.widget != self:
+            return
+        self._destroying = True
+        if self._chevron_id is not None:
+            self.after_cancel(self._chevron_id)
+            self._chevron_id = None
+        self.close()
+        try:
+            self.variable.trace_remove("write", self._variable_trace)
+        except tk.TclError:
+            pass

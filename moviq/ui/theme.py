@@ -483,6 +483,11 @@ def apply_theme(app, mode):
         foreground=pal["header_muted"],
         background=pal["header_bg"],
     )
+    style.configure(
+        "HeaderMuted.TLabel",
+        foreground=pal["header_muted"],
+        background=pal["header_bg"],
+    )
     style.configure("Section.TLabel", font="TkHeadingFont",
                     foreground=pal["accent"])
     style.configure("Muted.TLabel", foreground=pal["muted"])

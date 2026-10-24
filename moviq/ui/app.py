@@ -46,7 +46,9 @@ from ..core.tmdb import (
     TMDBOperationCache,
 )
 from ..core.providers.router import ProviderRouter
-from ..core.providers.settings import PROVIDER_INFO, ProviderSettings
+from ..core.providers.settings import (
+    PROVIDER_INFO, ProviderSettings, provider_source_label,
+)
 from ..core.show_resolver import (
     ShowResolver,
 )
@@ -1828,7 +1830,9 @@ class App:
         self.settings_store.update(settings.to_config())
         self._configure_resolver()
         if hasattr(self, "provider_source_var"):
-            self.provider_source_var.set(f"Source: {settings.selected}")
+            self.provider_source_var.set(
+                f"Source: {provider_source_label(settings.selected)}",
+            )
 
     def _configure_resolver(self):
         self.show_resolver.configure(

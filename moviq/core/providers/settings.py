@@ -17,22 +17,28 @@ PROVIDER_INFO = {
         "note": "No key needed. Data by tvmaze.com (CC BY-SA).",
         "key_url": "https://www.tvmaze.com/api",
     },
+    "omdb": {
+        "label": "OMDb", "needs_key": True, "kinds": "Movies and TV",
+        "note": "Free key, 1,000 requests a day.",
+        "key_url": "https://www.omdbapi.com/apikey.aspx",
+    },
     "anilist": {
         "label": "AniList", "needs_key": False, "kinds": "Anime",
         "note": "No key needed. No episode titles.",
         "key_url": "https://anilist.co",
     },
-    "omdb": {
-        "label": "OMDb (IMDb)", "needs_key": True, "kinds": "Movies and TV",
-        "note": "Free key, 1,000 requests a day.",
-        "key_url": "https://www.omdbapi.com/apikey.aspx",
-    },
     "offline": {
-        "label": "Offline guess", "needs_key": False, "kinds": "Movies and TV",
+        "label": "Offline Guess", "needs_key": False, "kinds": "Movies and TV",
         "note": "From the file name only. Always sent to Review.",
         "key_url": "",
     },
 }
+
+
+def provider_source_label(selected):
+    if selected == "automatic":
+        return "Automatic"
+    return PROVIDER_INFO.get(selected, {}).get("label", selected)
 
 
 def _clean_order(order):

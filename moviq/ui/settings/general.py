@@ -3,7 +3,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from ..controls import SegmentedModeToggle
+from ..controls import SegmentedModeToggle, SettingsDropdown
 from ...core.providers.settings import PROVIDER_INFO
 from ._common import TMDB_KEY_URL, TMDB_SIGNUP_URL, check_tmdb_key
 
@@ -26,61 +26,29 @@ class GeneralTabMixin:
             else source_labels[selected]
         )
         self.source_selection_var = tk.StringVar(value=source_value)
-        source_selector = ttk.Combobox(
-            source_group, textvariable=self.source_selection_var,
-            values=source_values, state="readonly", width=20,
+        source_options = tuple(
+            (value, value) for value in source_values
         )
-        source_selector.bind(
-            "<<ComboboxSelected>>", self._source_selection_changed,
+        self.source_selector = SettingsDropdown(
+            source_group, self.source_selection_var, source_options,
+            self._source_selection_changed, self.app.pal,
+            descriptions={
+                "Automatic": "Priority order",
+                "Offline Guess": "No internet",
+            },
         )
         self._row(
-            source_group, 0, "Source", source_selector,
-            "Automatic uses enabled sources in priority order. "
-            "A selected source is used alone.",
+            source_group, 0, "Source", self.source_selector,
+            "Automatic tries enabled sources in priority order. "
+            "Choosing one uses only that source.",
         )
         appearance = self._group(frame, "Appearance")
-        theme_controls = ttk.Frame(appearance)
-        self._theme_option_indicators = {}
-        for text, value in (
-            ("Light", "light"), ("Dark", "dark"), ("System", "system"),
-        ):
-            option = ttk.Frame(theme_controls)
-            indicator = tk.Canvas(
-                option, width=18, height=18,
-                background=self.app.pal["bg"],
-                highlightthickness=0, bd=0, takefocus=1,
-                cursor="hand2",
-            )
-            ring = indicator.create_oval(
-                3, 3, 15, 15, width=2,
-            )
-            dot = indicator.create_oval(7, 7, 11, 11, outline="")
-            indicator.pack(side="left", padx=(0, 4))
-            label = self._label(option, text, cursor="hand2")
-            label.pack(side="left")
-            option.pack(side="left", padx=(0, 12))
-            self._theme_option_indicators[value] = (
-                indicator, ring, dot,
-            )
-            choose = lambda _event=None, selected=value: (
-                self._select_theme_option(selected)
-            )
-            for control in (option, indicator, label):
-                control.bind("<Button-1>", choose)
-            indicator.bind("<space>", choose)
-            indicator.bind("<Return>", choose)
-            for key, direction in (
-                ("<Left>", -1), ("<Up>", -1),
-                ("<Right>", 1), ("<Down>", 1),
-            ):
-                indicator.bind(
-                    key,
-                    lambda _event, selected=value, step=direction: (
-                        self._move_theme_option(selected, step)
-                    ),
-                )
-        self._update_theme_options()
-        self._row(appearance, 0, "Theme", theme_controls)
+        self.theme_selector = SettingsDropdown(
+            appearance, self.vars["theme"],
+            (("Light", "light"), ("Dark", "dark"), ("System", "system")),
+            self._select_theme_option, self.app.pal,
+        )
+        self._row(appearance, 0, "Theme", self.theme_selector)
 
     def _source_selection_changed(self, _event=None):
         selected_label = self.source_selection_var.get()
@@ -97,36 +65,7 @@ class GeneralTabMixin:
 
     def _select_theme_option(self, value):
         self.vars["theme"].set(value)
-        self._update_theme_options()
         return "break"
-
-    def _move_theme_option(self, value, direction):
-        options = tuple(self._theme_option_indicators)
-        index = (options.index(value) + direction) % len(options)
-        selected = options[index]
-        self._theme_option_indicators[selected][0].focus_set()
-        return self._select_theme_option(selected)
-
-    def _update_theme_options(self, palette=None):
-        palette = palette or self.app.pal
-        selected = self.vars["theme"].get()
-        for value, (indicator, ring, dot) in (
-            self._theme_option_indicators.items()
-        ):
-            is_selected = value == selected
-            indicator.configure(background=palette["bg"])
-            indicator.itemconfigure(
-                ring,
-                outline=(
-                    palette["accent"] if is_selected
-                    else palette["header_border_hi"]
-                ),
-            )
-            indicator.itemconfigure(
-                dot,
-                fill=palette["accent"],
-                state="normal" if is_selected else "hidden",
-            )
 
     def _build_api_key_help(self, parent):
         text = tk.Text(
@@ -147,13 +86,11 @@ class GeneralTabMixin:
         )
         text.insert("end", "Create a free account on ")
         text.insert("end", "TMDB", ("tmdb_link",))
-        text.insert("end", " \u2192 open ")
+        text.insert("end", " \u2192 ")
         text.insert("end", "Settings", ("bold",))
-        text.insert("end", " \u2192 go to ")
+        text.insert("end", " \u2192 ")
         text.insert("end", "Sources", ("bold",))
-        text.insert("end", " \u2192 copy your ")
-        text.insert("end", "API Key", ("api_link", "bold"))
-        text.insert("end", " and paste it here.")
+        text.insert("end", " \u2192 paste it here.")
         text.tag_configure("bold", font="TkHeadingFont")
         text.tag_configure(
             "bold",

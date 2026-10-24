@@ -171,7 +171,7 @@ class ShowResolver:
             candidate=candidate,
         )
         if is_volatile(tmdb_id):
-            return result  # offline guesses have no stable id to remember
+            return result  # Offline Guess results have no stable id to remember
         with self._lock:
             overrides = dict(self._overrides)
             overrides[key] = tmdb_id

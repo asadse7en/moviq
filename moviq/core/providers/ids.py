@@ -14,8 +14,8 @@ _INDEX = {
     name: number for number, name in enumerate(PROVIDER_IDS) if name is not None
 }
 LABELS = {
-    "tmdb": "TMDb", "tvmaze": "TVmaze", "omdb": "OMDb (IMDb)",
-    "anilist": "AniList", "offline": "Offline guess",
+    "tmdb": "TMDb", "tvmaze": "TVmaze", "omdb": "OMDb",
+    "anilist": "AniList", "offline": "Offline Guess",
 }
 _TYPED_ID = re.compile(
     r"^(tmdb|tvmaze|anilist|omdb|imdb)\s*[:=]\s*(?:tt)?(\d+)$",
@@ -46,7 +46,7 @@ def native_id(composite_id):
 
 
 def is_volatile(composite_id):
-    """Offline guesses have no real id; they cannot be loaded again later."""
+    """Offline Guess results have no real id; they cannot be loaded later."""
     return provider_of(composite_id) == "offline"
 
 

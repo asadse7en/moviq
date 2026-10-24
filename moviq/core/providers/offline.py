@@ -25,7 +25,7 @@ def _id(kind, title, year):
 
 class OfflineProvider(Provider):
     provider_id = "offline"
-    label = "Offline guess"
+    label = "Offline Guess"
     needs_key = False
 
     def _make(self, query, year, kind):
