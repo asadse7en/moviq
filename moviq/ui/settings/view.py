@@ -200,8 +200,13 @@ class SettingsView(
         )
 
     def _update_scroll_region(self, _event=None):
+        bounds = self.content_canvas.bbox("all")
+        if bounds is None:
+            return
+        left, top, right, bottom = bounds
+        bottom = max(bottom, top + self.content_canvas.winfo_height())
         self.content_canvas.configure(
-            scrollregion=self.content_canvas.bbox("all"),
+            scrollregion=(left, top, right, bottom),
         )
 
     def _bind_scroll_events(self):
@@ -236,17 +241,27 @@ class SettingsView(
         self._wheel_remainder += -event.delta / 30
         units = int(self._wheel_remainder)
         if units:
-            self.content_canvas.yview_scroll(units, "units")
+            if not self._scroll_settings_canvas(units):
+                self._wheel_remainder = 0.0
+                return "break"
             self._wheel_remainder -= units
         return "break"
 
     def _on_mousewheel_linux(self, event):
         if not self._pointer_over_content():
             return
-        self.content_canvas.yview_scroll(
-            -1 if event.num == 4 else 1, "units",
-        )
+        units = -1 if event.num == 4 else 1
+        self._scroll_settings_canvas(units)
         return "break"
+
+    def _scroll_settings_canvas(self, units, what="units"):
+        first, last = self.content_canvas.yview()
+        if units < 0 and first <= 0:
+            return False
+        if units > 0 and last >= 1:
+            return False
+        self.content_canvas.yview_scroll(units, what)
+        return True
 
     def _on_scroll_key(self, event):
         focus = self.focus_get()
@@ -260,17 +275,17 @@ class SettingsView(
         ):
             return
         if event.keysym == "Prior":
-            self.content_canvas.yview_scroll(-1, "pages")
+            self._scroll_settings_canvas(-1, "pages")
         elif event.keysym == "Next":
-            self.content_canvas.yview_scroll(1, "pages")
+            self._scroll_settings_canvas(1, "pages")
         elif event.keysym == "Home":
             self.content_canvas.yview_moveto(0)
         elif event.keysym == "End":
             self.content_canvas.yview_moveto(1)
         elif event.keysym == "Up":
-            self.content_canvas.yview_scroll(-1, "units")
+            self._scroll_settings_canvas(-1)
         elif event.keysym == "Down":
-            self.content_canvas.yview_scroll(1, "units")
+            self._scroll_settings_canvas(1)
         else:
             return
         return "break"

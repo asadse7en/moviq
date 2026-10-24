@@ -94,10 +94,15 @@ def build_main_page(app, page):
             f"Source: {provider_source_label(app.provider_settings.selected)}"
         ),
     )
-    ttk.Label(
+    app.provider_source_label = tk.Label(
         left_controls, textvariable=app.provider_source_var,
-        style="HeaderMuted.TLabel",
-    ).pack(side="left", padx=(10, 0))
+        font="TkDefaultFont",
+        background=app.pal["header_bg"],
+        foreground=(
+            "#777777" if app.mode == "dark" else app.pal["muted"]
+        ),
+    )
+    app.provider_source_label.pack(side="left", padx=(16, 0))
 
     match_actions = ttk.Frame(bar, style="Toolbar.TFrame")
     app.match_actions = match_actions

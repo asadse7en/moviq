@@ -83,6 +83,8 @@ class ProvidersTabMixin:
             self._build_provider_group(frame, name, settings)
 
         self._layout_providers()
+        for name in self._provider_status:
+            self._test_provider(name)
 
     def _build_provider_group(self, frame, name, settings):
         source = _SOURCE_NAMES[name]

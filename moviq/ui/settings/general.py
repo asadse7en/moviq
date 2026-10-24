@@ -298,6 +298,7 @@ class GeneralTabMixin:
             "Wrong format": status_colors.get(
                 "review", (self.app.pal["muted"],),
             )[0],
+            "Needs a key": self.app.pal["muted"],
             "Not checked": self.app.pal["muted"],
         }
         self.key_status_var.set(status)
@@ -408,7 +409,7 @@ class GeneralTabMixin:
         key = self.key_entry_var.get().strip()
         generation = self._key_generation
         if not key:
-            self._set_key_status("Not checked")
+            self._set_key_status("Needs a key")
             return
         if not self._V3_KEY.fullmatch(key):
             self._set_key_status("Wrong format")
