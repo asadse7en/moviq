@@ -300,7 +300,7 @@ class GeneralTabMixin:
             )[0],
             "Not checked": self.app.pal["muted"],
         }
-        self.key_status_var.set(f"● {status}")
+        self.key_status_var.set(status)
         self.key_status_label.configure(
             foreground=colors.get(
                 status,
@@ -310,6 +310,9 @@ class GeneralTabMixin:
         )
 
     def _key_draft_changed(self, *_args):
+        key = self.key_entry_var.get()
+        if self.vars["key"].get() != key:
+            self.vars["key"].set(key)
         if self._saved_key_status_after is not None:
             self.after_cancel(self._saved_key_status_after)
             self._saved_key_status_after = None

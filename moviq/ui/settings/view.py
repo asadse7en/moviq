@@ -603,7 +603,7 @@ class SettingsView(
             self._recolor_format_panel(kind, palette)
             self._refresh_preset_cards(kind)
         self._set_key_status(
-            self.key_status_var.get().removeprefix("● "),
+            self.key_status_var.get(),
         )
 
     def close(self):

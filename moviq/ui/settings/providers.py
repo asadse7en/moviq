@@ -99,6 +99,7 @@ class ProvidersTabMixin:
         group = tk.Frame(card, background=surface)
         group.columnconfigure(0, weight=1)
         group.columnconfigure(1, weight=0)
+        group.columnconfigure(2, weight=0)
         title = tk.Label(
             group if compact else card, text=source, font="TkHeadingFont",
             background=surface, foreground=self.app.pal["fg"],
@@ -127,7 +128,7 @@ class ProvidersTabMixin:
         self._switch(
             group, enabled, style=switch_style,
         ).grid(
-            row=0, column=1, sticky="e",
+            row=0, column=2, sticky="e",
             pady=2 if compact else 7,
         )
         row = 1
@@ -162,6 +163,11 @@ class ProvidersTabMixin:
             )
             controls = tk.Frame(group, background=surface)
             controls.grid(row=row, column=1, sticky="e", pady=5)
+            self._add_provider_status(
+                group, name, 0,
+                "Needs a key" if not key_var.get().strip() else "Not checked",
+                column=1, padx=(0, 12),
+            )
             wrap, entry = self.make_styled_entry(
                 controls, key_var, width=30, show="•",
             )
@@ -175,17 +181,6 @@ class ProvidersTabMixin:
                 controls, text="Test", style="Settings.TButton",
                 command=lambda provider=name: self._test_provider(provider),
             ).pack(side="left", padx=(6, 0))
-            ttk.Button(
-                controls, text="Save", style="Settings.TButton",
-                command=lambda provider=name: (
-                    self._commit_provider_keys(provider)
-                ),
-            ).pack(side="left", padx=(6, 0))
-            self._add_provider_status(
-                group, name, row + 1,
-                "Needs a key" if not key_var.get().strip() else "Not checked",
-                column=1,
-            )
             if name == "omdb":
                 help_row = tk.Frame(group, background=surface)
                 self._provider_card_surfaces.append(help_row)
@@ -217,17 +212,25 @@ class ProvidersTabMixin:
                 ),
                 muted=True,
             ).grid(row=row, column=0, sticky="w", padx=(0, 18))
-            ttk.Button(
-                group, text="Test", style="Settings.TButton",
-                command=lambda provider=name: self._test_provider(provider),
-            ).grid(row=row, column=1, sticky="e", pady=2 if compact else 5)
+            controls = tk.Frame(group, background=surface)
+            controls.grid(row=row, column=1, sticky="e", pady=2 if compact else 5)
             self._add_provider_status(
-                group, name, row + 1, "Not checked", column=1,
-                pady=(0, 2) if compact else (0, 7),
+                group, name, 0, "Not checked",
+                column=1, padx=(0, 12),
             )
+            ttk.Button(
+                controls, text="Test", style="Settings.TButton",
+                command=lambda provider=name: self._test_provider(provider),
+            ).pack(side="left", padx=(6, 0))
 
     def _build_tmdb_key(self, group, row):
-        self.key_status_var = tk.StringVar(value="● Not checked")
+        self.key_status_var = tk.StringVar(value="Not checked")
+        self.key_status_label = self._provider_label(
+            group, textvariable=self.key_status_var, muted=True,
+        )
+        self.key_status_label.grid(
+            row=0, column=1, sticky="e", padx=(0, 12),
+        )
         self.key_entry_var = tk.StringVar(value=self.vars["key"].get())
         key_row = tk.Frame(group, background=self.app.pal["preset_surface"])
         key_row.grid(row=row, column=1, sticky="e", pady=5)
@@ -273,18 +276,8 @@ class ProvidersTabMixin:
             key_row, text="Test", style="Settings.TButton",
             command=self.test_key,
         ).pack(side="left", padx=(6, 0))
-        ttk.Button(
-            key_row, text="Save", style="Settings.TButton",
-            command=self.save_key,
-        ).pack(side="left", padx=(6, 0))
         self.key_help_text = self._build_api_key_help(group)
-        self.key_status_label = self._provider_label(
-            group, textvariable=self.key_status_var, muted=True,
-        )
         self._set_key_status("Not checked")
-        self.key_status_label.grid(
-            row=row + 1, column=1, sticky="e", pady=(0, 5),
-        )
         self.key_help_text.grid(
             row=row, column=0, sticky="ew",
             padx=(0, 18), pady=3,
@@ -322,13 +315,14 @@ class ProvidersTabMixin:
 
     def _add_provider_status(
         self, group, name, row, status, column=1, pady=(0, 7),
+        padx=(0, 0),
     ):
         variable = tk.StringVar()
         label = self._provider_label(
             group, textvariable=variable, muted=True,
         )
         label.grid(
-            row=row, column=column, sticky="e", pady=pady,
+            row=row, column=column, sticky="e", pady=pady, padx=padx,
         )
         self._provider_status[name] = variable
         self._provider_status_labels[name] = label
@@ -425,14 +419,10 @@ class ProvidersTabMixin:
             )
 
     def _set_provider_status(self, name, status):
-        self._provider_status[name].set(f"• {status}")
+        self._provider_status[name].set(status)
 
     def _style_provider_status(self, name):
         status = self._provider_status[name].get()
-        if not status.startswith("• "):
-            status = f"• {status}"
-            self._provider_status[name].set(status)
-        status = status[2:]
         status_colors = self.app.pal.get("status_colors", {})
         if status == "Connected":
             color = self.app.pal.get(
@@ -471,6 +461,9 @@ class ProvidersTabMixin:
 
     def _provider_key_edited(self, field):
         key = self._provider_key_vars[field].get().strip()
+        settings = self.app.provider_settings.with_key(field, key)
+        if settings != self.app.provider_settings:
+            self.app.set_provider_settings(settings)
         self._set_provider_status(
             field, "Needs a key" if not key else "Not checked",
         )
