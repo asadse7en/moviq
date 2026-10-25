@@ -9,19 +9,18 @@ from ...core.tmdb import MAX_WORKERS
 from ._common import APP_VERSION
 from .about import AboutTabMixin
 from .formatting import FormattingTabMixin
-from .general import GeneralTabMixin
 from .matching import MatchingTabMixin
 from .providers import ProvidersTabMixin
+from .support import SettingsSupportMixin
 
 
 class SettingsView(
-    GeneralTabMixin, FormattingTabMixin, MatchingTabMixin, ProvidersTabMixin,
-    AboutTabMixin, ttk.Frame,
+    SettingsSupportMixin, FormattingTabMixin, MatchingTabMixin,
+    ProvidersTabMixin, AboutTabMixin, ttk.Frame,
 ):
     """Tabbed settings layout and asynchronous validation/update status."""
 
     _SECTIONS = (
-        ("General", "General"),
         ("Sources", "Sources"),
         ("Formatting", "Formatting"),
         ("Matching", "Matching"),
@@ -56,8 +55,7 @@ class SettingsView(
         self._format_grid_columns = {}
         self._syncing_tv_folder = False
         self._styled_entries = []
-        self._rich_texts = []
-        self._current_section = "General"
+        self._current_section = "Sources"
         self._wheel_remainder = 0.0
         self._scroll_bindings = []
         self.store.on_error = lambda error: self._queue.put(
@@ -65,7 +63,7 @@ class SettingsView(
         )
         self._build()
         self._bind_preferences()
-        self._show_section("General")
+        self._show_section("Sources")
         self._schedule_key_check(800)
         self._poll_id = self.after(100, self._poll)
 
@@ -116,7 +114,6 @@ class SettingsView(
             frame.grid(row=0, column=0, sticky="nsew")
             frame.columnconfigure(0, weight=1)
             self.section_frames[name] = frame
-        self._build_general(self.section_frames["General"])
         self._build_providers(self.section_frames["Sources"])
         self._build_formatting(self.section_frames["Formatting"])
         self._build_matching(self.section_frames["Matching"])
@@ -438,7 +435,6 @@ class SettingsView(
         )
         keys = {
             "key": self.vars["key"],
-            "theme": self.vars["theme"],
             "threshold": self.vars["threshold"],
             "auto_match": self.vars["auto_match"],
             "confirm_apply": self.vars["confirm_apply"],
@@ -568,8 +564,6 @@ class SettingsView(
     def recolor(self, palette):
         self._configure_settings_styles(palette)
         self.content_canvas.configure(background=palette["bg"])
-        self.source_selector.set_palette(palette)
-        self.theme_selector.set_palette(palette)
         self._set_format_selector_theme(palette)
         self._set_library_selector_theme(palette)
         self._recolor_styled_entries(palette)
@@ -625,14 +619,6 @@ class SettingsView(
                     palette["muted"] if muted else palette["fg"]
                 ),
             )
-        for text in self._rich_texts:
-            text.configure(
-                background=palette["card"],
-                foreground=palette["muted"],
-            )
-            for tag in ("tmdb_link", "api_link"):
-                text.tag_configure(tag, foreground=palette["accent"])
-            text.tag_configure("bold", foreground=palette["muted"])
         for label, muted in self._labels:
             try:
                 label.configure(foreground=(

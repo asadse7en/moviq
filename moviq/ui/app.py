@@ -563,6 +563,12 @@ class App:
         ))
         self.tag_id = tk.BooleanVar(value=c.get("tag_id", False))
         self.theme_var = tk.StringVar(value=self.theme_preference)
+        self.theme_var.trace_add(
+            "write",
+            lambda *_args: self.settings_store.set(
+                "theme", self.theme_var.get(),
+            ),
+        )
         self.theme_button_var = tk.StringVar()
         self.tv_template = tk.StringVar(value=c.get(
             "tv_file_pattern",
@@ -1417,7 +1423,6 @@ class App:
     def build_settings_page(self, page):
         variables = {
             "key": self.key_var,
-            "theme": self.theme_var,
             "auto_match": self.auto_match,
             "threshold": self.thr_var,
             "confirm_apply": self.confirm_apply,
@@ -1848,14 +1853,6 @@ class App:
         if hasattr(self, "source_control"):
             self.source_control.set_selected(settings.selected)
             self.refresh_source_control()
-        if hasattr(self, "settings_view") and hasattr(
-            self.settings_view, "source_selection_var",
-        ):
-            source_label = (
-                "Automatic" if settings.selected == "automatic"
-                else PROVIDER_INFO[settings.selected]["label"]
-            )
-            self.settings_view.source_selection_var.set(source_label)
 
     def refresh_source_control(self):
         if not hasattr(self, "source_control"):
@@ -2854,7 +2851,7 @@ class App:
                     )
                     message = (
                         f"{source_name} only covers {coverage}. "
-                        "Pick another source in General."
+                        "Pick another source in Settings > Sources."
                     )
                     results = [
                         ("error", None, message, "source_mode")
