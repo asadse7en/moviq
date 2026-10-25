@@ -451,9 +451,11 @@ class RoundedButton(tk.Canvas):
         else:
             self._draw_icon(self._icon, width, height, foreground, fill)
 
-    def _draw_icon(self, icon, width, height, color, background):
+    def _draw_icon(
+        self, icon, width, height, color, background, center=None,
+    ):
         scale = _tk_scale(self)
-        center_x, center_y = width / 2, height / 2
+        center_x, center_y = center or (width / 2, height / 2)
         line_width = max(1, round(1.5 * scale))
         if icon == "light":
             self.create_oval(
@@ -517,6 +519,403 @@ class RoundedButton(tk.Canvas):
                 center_x + 3 * scale, center_y + 3 * scale,
                 fill=background, outline=background,
             )
+        elif icon == "undo":
+            self.create_line(
+                center_x + 7 * scale, center_y - 5 * scale,
+                center_x - 3 * scale, center_y - 5 * scale,
+                center_x - 8 * scale, center_y,
+                center_x - 3 * scale, center_y + 5 * scale,
+                fill=color, width=line_width, capstyle="round",
+                joinstyle="round",
+            )
+            self.create_line(
+                center_x - 7 * scale, center_y,
+                center_x + 3 * scale, center_y,
+                center_x + 7 * scale, center_y + 4 * scale,
+                fill=color, width=line_width, capstyle="round",
+                joinstyle="round",
+            )
+        elif icon == "trash":
+            self.create_rectangle(
+                center_x - 6 * scale, center_y - 5 * scale,
+                center_x + 6 * scale, center_y + 8 * scale,
+                outline=color, width=line_width,
+            )
+            self.create_line(
+                center_x - 8 * scale, center_y - 7 * scale,
+                center_x + 8 * scale, center_y - 7 * scale,
+                fill=color, width=line_width, capstyle="round",
+            )
+            self.create_line(
+                center_x - 3 * scale, center_y - 9 * scale,
+                center_x + 3 * scale, center_y - 9 * scale,
+                fill=color, width=line_width, capstyle="round",
+            )
+            for offset in (-2, 2):
+                self.create_line(
+                    center_x + offset * scale, center_y - 2 * scale,
+                    center_x + offset * scale, center_y + 5 * scale,
+                    fill=color, width=max(1, round(scale)),
+                )
+
+
+class ToolbarIconGroup(tk.Canvas):
+    def __init__(self, master, actions, ui_scale=1.0, cell_width=50):
+        self.ui_scale = ui_scale
+        self.actions = tuple(actions)
+        self.cell_width = round(cell_width * ui_scale)
+        self.palette = {}
+        self.states = {name: "normal" for name, *_rest in self.actions}
+        self.icons = {
+            name: icon for name, icon, _command, _tooltip in self.actions
+        }
+        self.commands = {
+            name: command for name, _icon, command, _tooltip in self.actions
+        }
+        self.tooltips = {
+            name: tooltip for name, _icon, _command, tooltip in self.actions
+        }
+        height = (
+            tkfont.nametofont("TkDefaultFont").metrics("linespace")
+            + round(16 * ui_scale)
+        )
+        super().__init__(
+            master, width=self.cell_width * len(self.actions), height=height,
+            highlightthickness=0, bd=0,
+            background=master.winfo_toplevel().cget("background"),
+            takefocus=0, cursor="hand2",
+        )
+        self._hover_index = None
+        self._pressed_index = None
+        self.bind("<Configure>", self._draw)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def set_theme(
+        self, background, border, hover_background, foreground, muted,
+        canvas_background=None,
+    ):
+        self.palette = {
+            "background": background,
+            "border": border,
+            "hover_background": hover_background,
+            "foreground": foreground,
+            "muted": muted,
+        }
+        clear_rounded_image_cache(self)
+        self.configure(background=canvas_background or background)
+        self._draw()
+
+    def set_icon(self, name, icon):
+        if name in self.icons:
+            self.icons[name] = icon
+            self._draw()
+
+    def set_state(self, name, state):
+        if name in self.states:
+            self.states[name] = state
+            self._draw()
+
+    def set_tooltip(self, name, text):
+        if name in self.tooltips:
+            self.tooltips[name] = text
+
+    def _index_at(self, x):
+        return min(
+            max(0, x // max(1, self.cell_width)),
+            len(self.actions) - 1,
+        )
+
+    def _on_motion(self, event):
+        index = self._index_at(event.x)
+        self.configure(
+            cursor=(
+                "arrow" if self.states[self.actions[index][0]] == "disabled"
+                else "hand2"
+            ),
+        )
+        if index != self._hover_index:
+            self._hover_index = index
+            self._draw()
+        if hasattr(self, "tooltip"):
+            name = self.actions[index][0]
+            self.tooltip.set_text(self.tooltips[name])
+
+    def _on_leave(self, _event):
+        self._hover_index = None
+        self._pressed_index = None
+        self.configure(cursor="hand2")
+        self._draw()
+
+    def _on_press(self, event):
+        self._pressed_index = self._index_at(event.x)
+        self._draw()
+        return "break"
+
+    def _on_release(self, event):
+        index = self._index_at(event.x)
+        if (
+            self._pressed_index == index
+            and self.states[self.actions[index][0]] == "normal"
+        ):
+            name = self.actions[index][0]
+            self.commands[name]()
+        self._pressed_index = None
+        self._draw()
+        return "break"
+
+    def _draw(self, _event=None):
+        if not self.palette or not self.winfo_exists():
+            return
+        palette = self.palette
+        width, height = self.winfo_width(), self.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        self.delete("all")
+        draw_rounded_rectangle(
+            self, 0, 0, width, height, 6,
+            palette["background"], palette["border"],
+            background=self.cget("background"),
+        )
+        for index, (name, _icon, _command, _tooltip) in enumerate(
+            self.actions,
+        ):
+            left = index * self.cell_width
+            right = min(width, left + self.cell_width)
+            if (
+                index == self._hover_index
+                and self.states[name] == "normal"
+            ):
+                self.create_rectangle(
+                    left + (1 if index else 6), 1,
+                    right - (1 if index < len(self.actions) - 1 else 6),
+                    height - 1, fill=palette["hover_background"],
+                    outline="",
+                )
+            icon_color = (
+                palette["muted"] if self.states[name] == "disabled"
+                else palette["foreground"]
+            )
+            icon = self.icons[name]
+            if icon in (
+                "light", "dark", "system", "settings", "undo", "trash",
+            ):
+                RoundedButton._draw_icon(
+                    self, icon, width, height, icon_color,
+                    palette["background"],
+                    center=((left + right) / 2, height / 2),
+                )
+            if index:
+                self.create_line(
+                    left, 6 * _tk_scale(self), left,
+                    height - 6 * _tk_scale(self),
+                    fill=palette["border"], width=1,
+                )
+
+
+class SearchBox(tk.Frame):
+    def __init__(self, master, on_change, ui_scale=1.0, width=320):
+        self.ui_scale = ui_scale
+        self.on_change = on_change
+        self._count = None
+        self._focused = False
+        self.palette = {}
+        self._updating = False
+        height = (
+            tkfont.nametofont("TkDefaultFont").metrics("linespace")
+            + round(12 * ui_scale)
+        )
+        super().__init__(
+            master, width=width, height=height, bd=0, highlightthickness=0,
+        )
+        self._moviq_focus_control = True
+        self.pack_propagate(False)
+        self.canvas = tk.Canvas(
+            self, highlightthickness=0, bd=0, takefocus=0,
+        )
+        self.canvas.pack(fill="both", expand=True)
+        self.variable = tk.StringVar()
+        self.entry = tk.Entry(
+            self, textvariable=self.variable, relief="flat", bd=0,
+            highlightthickness=0, font="TkDefaultFont",
+            insertwidth=1,
+        )
+        self._showing_placeholder = True
+        self.variable.set("Search files")
+        self.entry.place(
+            y=round(2 * ui_scale),
+            height=height - round(4 * ui_scale),
+            x=round(36 * ui_scale),
+        )
+        self.variable.trace_add("write", self._value_changed)
+        self.entry.bind("<FocusIn>", self._focus_in)
+        self.entry.bind("<FocusOut>", self._focus_out)
+        self.entry.bind("<Escape>", self._escape)
+        self.canvas.bind("<Button-1>", self._canvas_click)
+        self.canvas.bind("<Motion>", self._canvas_motion)
+        self.canvas.bind("<Configure>", self._draw)
+        self.bind("<Configure>", self._layout_entry, add="+")
+
+    def set_palette(self, palette):
+        self.palette = palette
+        self.canvas.configure(background=palette["header_bg"])
+        self.entry.configure(
+            background=palette["chip"],
+            foreground=(
+                palette["muted"] if self._showing_placeholder
+                else palette["fg"]
+            ),
+            insertbackground=palette["fg"],
+            selectbackground=palette["header_accent"],
+            selectforeground=palette["accent_text"],
+        )
+        self._draw()
+
+    def set_width(self, width):
+        self.configure(width=max(1, round(width)))
+
+    def get_query(self):
+        return "" if self._showing_placeholder else self.variable.get()
+
+    def set_count(self, count, total):
+        self._count = (count, total) if self.get_query() else None
+        self._layout_entry()
+        self._draw()
+
+    def focus(self):
+        self.entry.focus_set()
+        if self._showing_placeholder:
+            self._showing_placeholder = False
+            self.variable.set("")
+            self.entry.configure(foreground=self.palette["fg"])
+        self.entry.icursor("end")
+
+    def clear_focus(self):
+        self.winfo_toplevel().focus_set()
+
+    def clear(self):
+        if self._showing_placeholder:
+            return
+        self.variable.set("")
+        self.entry.focus_set()
+
+    def _value_changed(self, *_args):
+        query = self.get_query()
+        self._count = None
+        if not self._showing_placeholder:
+            self.entry.configure(foreground=self.palette.get("fg", "#000000"))
+        self._layout_entry()
+        self._draw()
+        if not self._updating:
+            self.on_change(query)
+
+    def _focus_in(self, _event=None):
+        self._focused = True
+        if self._showing_placeholder:
+            self._showing_placeholder = False
+            self.variable.set("")
+            self.entry.configure(foreground=self.palette.get("fg", "#000000"))
+        self._draw()
+
+    def _focus_out(self, _event=None):
+        self._focused = False
+        if not self.variable.get():
+            self._showing_placeholder = True
+            self._updating = True
+            self.variable.set("Search files")
+            self._updating = False
+            self.entry.configure(
+                foreground=self.palette.get("muted", "#666666"),
+            )
+        self._draw()
+
+    def _escape(self, _event=None):
+        self.clear()
+        self.clear_focus()
+        return "break"
+
+    def _layout_entry(self, _event=None):
+        if not self.winfo_exists():
+            return
+        scale = _tk_scale(self)
+        width = self.winfo_width()
+        left = round(36 * scale)
+        right = round((96 if self.get_query() else 16) * scale)
+        self.entry.place_configure(
+            x=left, y=round(2 * scale),
+            width=max(1, width - left - right),
+            height=max(1, self.winfo_height() - round(4 * scale)),
+        )
+
+    def _canvas_click(self, event):
+        width = self.canvas.winfo_width()
+        if self.get_query() and event.x >= width - round(28 * _tk_scale(self)):
+            self.clear()
+            self.entry.focus_set()
+            return "break"
+        self.entry.focus_set()
+
+    def _canvas_motion(self, event):
+        width = self.canvas.winfo_width()
+        clickable = (
+            self.get_query()
+            and event.x >= width - round(28 * _tk_scale(self))
+        )
+        self.canvas.configure(cursor="hand2" if clickable else "")
+
+    def _draw(self, _event=None):
+        if not self.palette or not self.winfo_exists():
+            return
+        canvas = self.canvas
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        palette = self.palette
+        canvas.delete("all")
+        border = (
+            palette["header_accent"]
+            if self._focused or self.get_query()
+            else palette["chip_border"]
+        )
+        draw_rounded_rectangle(
+            canvas, 0, 0, width, height, 10,
+            palette["chip"], border, background=palette["header_bg"],
+        )
+        scale = _tk_scale(self)
+        icon_x, icon_y = round(18 * scale), height / 2
+        canvas.create_oval(
+            icon_x - 5 * scale, icon_y - 5 * scale,
+            icon_x + 5 * scale, icon_y + 5 * scale,
+            outline=palette["muted"], width=max(1, round(scale)),
+        )
+        canvas.create_line(
+            icon_x + 4 * scale, icon_y + 4 * scale,
+            icon_x + 9 * scale, icon_y + 9 * scale,
+            fill=palette["muted"], width=max(1, round(1.5 * scale)),
+            capstyle="round",
+        )
+        if self.get_query():
+            canvas.create_line(
+                width - 19 * scale, height / 2 - 4 * scale,
+                width - 11 * scale, height / 2 + 4 * scale,
+                fill=palette["muted"], width=max(1, round(1.5 * scale)),
+                capstyle="round",
+            )
+            canvas.create_line(
+                width - 11 * scale, height / 2 - 4 * scale,
+                width - 19 * scale, height / 2 + 4 * scale,
+                fill=palette["muted"], width=max(1, round(1.5 * scale)),
+                capstyle="round",
+            )
+            if self._count is not None:
+                canvas.create_text(
+                    width - 36 * scale, height / 2,
+                    text=f"{self._count[0]} of {self._count[1]}",
+                    fill=palette["muted"], anchor="e",
+                    font=("TkDefaultFont", 8),
+                )
 
 
 class ToolTip:

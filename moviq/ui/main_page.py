@@ -6,12 +6,15 @@ from PIL import Image, ImageTk
 from .. import resource
 from ..core.providers.settings import PROVIDER_INFO
 from .controls import (
-    RoundedButton, SegmentedModeToggle, SegmentedPillControl, ToolTip,
+    RoundedButton, SearchBox, SegmentedModeToggle, SegmentedPillControl,
+    ToolbarIconGroup, ToolTip,
 )
 
 MAIN_SHORTCUTS = {
     "<Control-a>": "select_all",
     "<Control-A>": "select_all",
+    "<Control-f>": "focus_search",
+    "<Control-F>": "focus_search",
     "<Delete>": "remove_selected",
     "<Control-z>": "undo",
     "<Control-Z>": "undo",
@@ -106,45 +109,29 @@ def build_main_page(app, page):
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
-    app.manual_match_button.pack(side="left", padx=(0, 8))
-    app.undo_button = RoundedButton(
-        match_actions, tk.StringVar(value="Undo"), app.undo,
-        font="TkDefaultFont", ui_scale=app.UI_SCALE,
-        padx=12, background=app.pal["header_bg"],
+    app.manual_match_button.pack(side="left")
+    app.toolbar_icon_group = ToolbarIconGroup(
+        match_actions,
+        (
+            ("undo", "undo", app.undo, "Undo"),
+            ("clear", "trash", app.clear, "Clear all files"),
+            ("theme", app.theme_preference, app.cycle_theme, ""),
+            ("settings", "settings", lambda: app.show_page("settings"),
+             "Settings"),
+        ),
+        ui_scale=app.UI_SCALE,
     )
-    app.undo_button.pack(side="left", padx=(0, 6))
-    app.clear_list_button = RoundedButton(
-        match_actions, tk.StringVar(value="Clear"), app.clear,
-        font="TkDefaultFont", ui_scale=app.UI_SCALE,
-        padx=12, background=app.pal["header_bg"],
+    app.toolbar_icon_group.pack(
+        side="left", padx=(round(24 * app.UI_SCALE), 0),
     )
-    app.clear_list_button.pack(side="left", padx=(0, 6))
-    settings_button = RoundedButton(
-        match_actions, tk.StringVar(value=""),
-        lambda: app.show_page("settings"),             font="TkDefaultFont",
-        ui_scale=app.UI_SCALE, padx=10,
-        background=app.pal["header_bg"],
+    app.icon_group_tooltip = ToolTip(
+        app.toolbar_icon_group, "Undo", app.pal["card"], app.pal["fg"],
     )
-    settings_button.set_icon("settings")
-    app.settings_button = settings_button
-    settings_button.pack(side="left")
-    ToolTip(
-        settings_button, "Settings", app.pal["card"], app.pal["fg"],
-    )
-    app.theme_button = RoundedButton(
-        match_actions, app.theme_button_var, app.cycle_theme,
-        font="TkDefaultFont", ui_scale=app.UI_SCALE, padx=10,
-        background=app.pal["header_bg"],
-    )
-    app.theme_button.pack(side="left", padx=(6, 0))
-    app.theme_tooltip = ToolTip(
-        app.theme_button, "", app.pal["card"], app.pal["fg"],
-    )
+    app.toolbar_icon_group.tooltip = app.icon_group_tooltip
     app.update_theme_button()
     app.toolbar_buttons = (
         app.add_files_button, app.add_folder_button,
         app.auto_match_button, app.manual_match_button,
-        app.undo_button, app.clear_list_button,
     )
     for widget, text in (
         (app.add_files_button, "Add files"),
@@ -154,12 +141,8 @@ def build_main_page(app, page):
             app.manual_match_button,
             "Manually match selected files, or all files if none are selected",
         ),
-        (app.undo_button, "Undo"),
-        (app.clear_list_button, "Clear the file list"),
     ):
         tooltip = ToolTip(widget, text, app.pal["card"], app.pal["fg"])
-        if widget is app.undo_button:
-            app._undo_tooltip = tooltip
 
     app.filter_row = ttk.Frame(page, style="Toolbar.TFrame")
     app.filter_row.pack(fill="x", pady=(6, 12))
@@ -176,12 +159,17 @@ def build_main_page(app, page):
         labels=tuple(variable.get() for variable in app.filter_vars.values()),
         values=tuple(app.filter_vars),
     )
-    app.filter_control_label = tk.Label(
-        app.filter_row, text="Filter", font="TkDefaultFont",
-        background=app.pal["header_bg"], foreground=app.pal["muted"],
-    )
-    app.filter_control_label.pack(side="left", padx=(0, 7))
     app.filter_control.pack(side="left")
+    app.search_slot = ttk.Frame(app.filter_row, style="Toolbar.TFrame")
+    app.search_slot.pack(
+        side="left", fill="x", expand=True,
+        padx=(round(24 * app.UI_SCALE), 0),
+    )
+    app.search_box = SearchBox(
+        app.search_slot, app._search_changed, ui_scale=app.UI_SCALE,
+    )
+    app.search_box.pack(anchor="w")
+    app.search_slot.bind("<Configure>", app._resize_search_box, add="+")
     app.source_control = SegmentedPillControl(
         app.filter_row,
         app.provider_settings.selected,
@@ -194,6 +182,7 @@ def build_main_page(app, page):
         background=app.pal["header_bg"], foreground=app.pal["muted"],
     )
     app.source_control_label.pack(side="right", padx=(0, 7))
+    app.search_box.set_palette(app.pal)
     app.source_control.set_palette(app.pal)
     app.refresh_source_control()
     app.key_var.trace_add(

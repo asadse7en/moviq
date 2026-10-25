@@ -489,9 +489,6 @@ def apply_theme(app, mode):
         background=pal["header_bg"],
     )
     if hasattr(app, "source_control"):
-        app.filter_control_label.configure(
-            background=pal["header_bg"], foreground=pal["muted"],
-        )
         app.source_control_label.configure(
             background=pal["header_bg"], foreground=pal["muted"],
         )

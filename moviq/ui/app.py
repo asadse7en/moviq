@@ -35,6 +35,7 @@ from ..core.matching import (
     _is_generic_title, group_match_items, normalize_search_title, score,
     tv_match_is_applicable, tv_score,
 )
+from ..core.list_filter import matches_list_filter
 from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
 from ..core.providers.ids import display_id, provider_of
@@ -229,6 +230,9 @@ class App:
         self._review_filter = False
         self._status_filter = None
         self._filtered_out = set()
+        self._search_after = None
+        self._search_query = ""
+        self._search_new_names = {}
         self._vcount = {}
         self._last_folder = self.cfg.get("last_folder", "")
         self._file_log_handler = RotatingFileHandler(
@@ -352,6 +356,9 @@ class App:
 
     def on_close(self):
         self._hide_tree_tooltip()
+        if self._search_after is not None:
+            self.root.after_cancel(self._search_after)
+            self._search_after = None
         if self._system_theme_after is not None:
             self.root.after_cancel(self._system_theme_after)
             self._system_theme_after = None
@@ -409,9 +416,13 @@ class App:
         next_preference = {
             "light": "dark", "dark": "system", "system": "light",
         }[preference]
-        self.theme_button.set_icon(preference)
-        if hasattr(self, "theme_tooltip"):
-            self.theme_tooltip.set_text(names[preference])
+        next_name = names[next_preference]
+        if hasattr(self, "toolbar_icon_group"):
+            self.toolbar_icon_group.set_icon("theme", preference)
+            tooltip = f"Theme: {names[preference]}. Click for {next_name}"
+            self.toolbar_icon_group.set_tooltip("theme", tooltip)
+            if getattr(self.toolbar_icon_group, "_hover_index", None) == 2:
+                self.icon_group_tooltip.set_text(tooltip)
 
     def cycle_theme(self):
         next_preference = {
@@ -434,9 +445,7 @@ class App:
         buttons = [
             self.rename_all_button, self.add_files_button,
             self.add_folder_button, self.auto_match_button,
-            self.manual_match_button, self.undo_button,
-            self.clear_list_button, self.settings_button,
-            self.theme_button,
+            self.manual_match_button,
         ]
         for button in buttons:
             button.set_theme(
@@ -450,6 +459,14 @@ class App:
                 accent_foreground=pal["accent_text"],
                 canvas_background=pal["header_bg"],
             )
+        self.toolbar_icon_group.set_theme(
+            background=pal["header_btn"],
+            border=pal["header_border"],
+            hover_background=pal["header_btn_hi"],
+            foreground=pal["fg"], muted=pal["header_muted"],
+            canvas_background=pal["header_bg"],
+        )
+        self.search_box.set_palette(pal)
         self._refresh_filter_chip_styles()
         self.logo_canvas.configure(background=pal["header_bg"])
         self.logo_canvas.delete("all")
@@ -569,7 +586,6 @@ class App:
                 "theme", self.theme_var.get(),
             ),
         )
-        self.theme_button_var = tk.StringVar()
         self.tv_template = tk.StringVar(value=c.get(
             "tv_file_pattern",
             c.get(
@@ -1484,17 +1500,26 @@ class App:
         if hasattr(self, "filter_control"):
             self._refresh_filter_chip_styles()
         self._schedule_status_cells()
-        visible = any(
-            self._matches_status_filter(
-                item, getattr(self, "_status_filter", None),
-            )
+        total_in_scope = sum(
+            self._matches_current_filter(item, query="")
             for item in self.items
         )
-        if visible:
+        visible_count = sum(
+            self._matches_current_filter(item)
+            for item in self.items
+        )
+        if hasattr(self, "search_box"):
+            self.search_box.set_count(visible_count, total_in_scope)
+        if visible_count:
             self.empty_state.place_forget()
         else:
             status_filter = getattr(self, "_status_filter", None)
-            if status_filter:
+            if self._search_query:
+                self.empty_title_var.set("No search results")
+                self.empty_lbl.configure(
+                    text="No files match your search.",
+                )
+            elif status_filter:
                 title = {
                     "all": "No files added yet",
                     "ready": "Nothing ready",
@@ -1519,15 +1544,52 @@ class App:
 
     @staticmethod
     def _matches_status_filter(item, selected_filter):
-        if selected_filter in (None, "all"):
-            return True
-        if selected_filter == "ready":
-            return item.status in ("auto", "manual")
-        if selected_filter == "done":
-            return item.status in ("done", "no_change")
-        if selected_filter == "review":
-            return item.status in ("review", "nomatch", "error")
-        return item.status == selected_filter
+        return matches_list_filter(item, status_filter=selected_filter)
+
+    def _matches_current_filter(self, item, query=None):
+        if query is None:
+            query = self._search_query
+        return matches_list_filter(
+            item,
+            status_filter=getattr(self, "_status_filter", None),
+            media_mode=self.media_mode.get(),
+            query=query,
+            original_name=Path(item.orig_path).name,
+            new_name=self._search_new_names.get(item.iid, ""),
+        )
+
+    def _search_changed(self, query):
+        if self._search_after is not None:
+            self.root.after_cancel(self._search_after)
+        self._search_after = self.root.after(
+            150, lambda value=query: self._apply_search_query(value),
+        )
+
+    def _apply_search_query(self, query):
+        self._search_after = None
+        self._search_query = query
+        for item in self.items:
+            self._sync_row_visibility(item)
+        self._restore_visible_row_order()
+        self.update_summary()
+
+    def _resize_search_box(self, event=None):
+        if not hasattr(self, "search_box"):
+            return
+        scale = self.UI_SCALE
+        available = (
+            event.width if event is not None
+            else self.search_slot.winfo_width()
+        )
+        self.search_box.set_width(
+            min(round(420 * scale), max(round(220 * scale), available)),
+        )
+
+    def focus_search(self):
+        if not self.page_main.winfo_ismapped():
+            return None
+        self.search_box.focus()
+        return "break"
 
     def _action_scope_items(self):
         selected = self.selected()
@@ -1657,14 +1719,12 @@ class App:
         return bool(self._matching_run or self.job_total or self._rename_running)
 
     def _update_undo_button(self):
-        if not hasattr(self, "undo_button"):
+        if not hasattr(self, "toolbar_icon_group"):
             return
         busy = self._history_busy()
-        self.undo_button.set_state(
-            "normal" if self.undo_stack and not busy else "disabled",
+        self.toolbar_icon_group.set_state(
+            "undo", "normal" if self.undo_stack and not busy else "disabled",
         )
-        label = self.undo_stack[-1][0] if self.undo_stack else ""
-        self._undo_tooltip.text = f"Undo: {label}" if label else "Undo"
 
     def _capture_record(self, item, index=None):
         if index is None:
@@ -1757,6 +1817,7 @@ class App:
         self.by_iid.clear()
         self._filtered_out.clear()
         self._row_tooltip_paths.clear()
+        self._search_new_names.clear()
         for item in self.items:
             item.iid = self.tree.insert("", "end", values=("", ""))
             self.by_iid[item.iid] = item
@@ -1827,6 +1888,8 @@ class App:
         self._update_undo_button()
 
     def _run_main_shortcut(self, event, action):
+        if action == "focus_search":
+            return self.focus_search()
         focused = self.root.focus_get()
         if focused and focused.winfo_class() in {
             "Entry", "TEntry", "Text", "Spinbox", "TSpinbox", "TCombobox",
@@ -2338,6 +2401,7 @@ class App:
             self.by_iid.pop(item.iid, None)
             self._filtered_out.discard(item.iid)
             self._row_tooltip_paths.pop(item.iid, None)
+            self._search_new_names.pop(item.iid, None)
             self.items.remove(item)
         for item, error in unavailable:
             item.status = "error"
@@ -2543,6 +2607,7 @@ class App:
             "#2": str(Path(new_path).absolute()) if new_path else "",
             "display": new,
         }
+        search_new_name = new
         item.status_detail = self._status_detail(item, new_path)
         font = tkfont.nametofont("TkTextFont")
         original = Path(item.orig_path).name
@@ -2564,17 +2629,14 @@ class App:
                            "",
                            new,
                        ))
+        self._search_new_names[item.iid] = search_new_name
         self._schedule_status_cells()
         self._sync_row_visibility(item)
 
     def _sync_row_visibility(self, item):
         if not self.tree.exists(item.iid):
             return
-        selected_filter = getattr(
-            self, "_status_filter",
-            "review" if getattr(self, "_review_filter", False) else None,
-        )
-        should_show = self._matches_status_filter(item, selected_filter)
+        should_show = self._matches_current_filter(item)
         is_hidden = item.iid in self._filtered_out
         if should_show and is_hidden:
             self.tree.reattach(item.iid, "", "end")
@@ -3627,6 +3689,7 @@ class App:
         self.by_iid.clear()
         self._filtered_out.clear()
         self._row_tooltip_paths.clear()
+        self._search_new_names.clear()
         self.schedule_summary()
         self.update_action_labels()
         self.status("List cleared.")
