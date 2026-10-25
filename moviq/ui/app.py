@@ -47,7 +47,7 @@ from ..core.tmdb import (
 )
 from ..core.providers.router import ProviderRouter
 from ..core.providers.settings import (
-    PROVIDER_INFO, ProviderSettings, provider_source_label,
+    PROVIDER_INFO, SOURCE_SELECTIONS, ProviderSettings,
 )
 from ..core.show_resolver import (
     ShowResolver,
@@ -267,6 +267,9 @@ class App:
             self.settings_store.data,
         )
         self.build_ui()
+        root.bind_all(
+            "<Button-1>", self._clear_focus_after_pointer_click, add="+",
+        )
         self.show_resolver = ShowResolver(
             self.key_var.get().strip(), self.language(),
             client_factory=_resolver_client,
@@ -285,6 +288,19 @@ class App:
         self._system_theme_after = root.after(
             1000, self._poll_system_theme,
         )
+
+    def _clear_focus_after_pointer_click(self, event):
+        widget = event.widget
+        while widget is not None:
+            if getattr(widget, "_moviq_focus_control", False):
+                return
+            if widget.winfo_class() in {
+                "Entry", "Text", "TEntry", "TCombobox", "Spinbox",
+                "TSpinbox",
+            }:
+                return
+            widget = getattr(widget, "master", None)
+        self.root.after_idle(self.root.focus_set)
 
     def _restore_window_geometry(self, geometry, window_state="normal"):
         match = re.fullmatch(
@@ -383,7 +399,25 @@ class App:
         )
 
     def apply_theme(self, mode):
-        return apply_app_theme(self, mode)
+        result = apply_app_theme(self, mode)
+        self.update_theme_button()
+        return result
+
+    def update_theme_button(self):
+        preference = self.theme_preference
+        names = {"light": "Light", "dark": "Dark", "system": "System"}
+        next_preference = {
+            "light": "dark", "dark": "system", "system": "light",
+        }[preference]
+        self.theme_button.set_icon(preference)
+        if hasattr(self, "theme_tooltip"):
+            self.theme_tooltip.set_text(names[preference])
+
+    def cycle_theme(self):
+        next_preference = {
+            "light": "dark", "dark": "system", "system": "light",
+        }[self.theme_preference]
+        self.theme_var.set(next_preference)
 
     def _poll_system_theme(self):
         self._system_theme_after = None
@@ -402,6 +436,7 @@ class App:
             self.add_folder_button, self.auto_match_button,
             self.manual_match_button, self.undo_button,
             self.clear_list_button, self.settings_button,
+            self.theme_button,
         ]
         for button in buttons:
             button.set_theme(
@@ -410,24 +445,6 @@ class App:
                 hover_background=pal["header_btn_hi"],
                 hover_border=pal["header_border_hi"],
                 foreground=pal["fg"], muted=pal["header_muted"],
-                accent=pal["header_accent"],
-                accent_hover=pal["accent_hi"],
-                accent_foreground=pal["accent_text"],
-                canvas_background=pal["header_bg"],
-            )
-        for key, chip in self.filter_chips.items():
-            chip.filter_color = {
-                "all": pal["fg"],
-                "ready": pal["status_text"]["matched"],
-                "review": pal["status_text"]["review"],
-                "nomatch": pal["status_text"]["nomatch"],
-                "done": pal["status_text"]["done"],
-            }[key]
-            chip.set_theme(
-                background=pal["chip"], border=pal["chip_border"],
-                hover_background=pal["header_btn_hi"],
-                hover_border=pal["header_border_hi"],
-                foreground=chip.filter_color, muted=pal["header_muted"],
                 accent=pal["header_accent"],
                 accent_hover=pal["accent_hi"],
                 accent_foreground=pal["accent_text"],
@@ -546,6 +563,7 @@ class App:
         ))
         self.tag_id = tk.BooleanVar(value=c.get("tag_id", False))
         self.theme_var = tk.StringVar(value=self.theme_preference)
+        self.theme_button_var = tk.StringVar()
         self.tv_template = tk.StringVar(value=c.get(
             "tv_file_pattern",
             c.get(
@@ -1444,19 +1462,21 @@ class App:
         counts = {
             "all": n,
             "ready": c.get("auto", 0) + c.get("manual", 0),
-            "review": c.get("review", 0),
-            "nomatch": c.get("nomatch", 0),
+            "review": (
+                c.get("review", 0) + c.get("nomatch", 0)
+                + c.get("error", 0)
+            ),
             "done": c.get("done", 0) + c.get("no_change", 0),
         }
         self._filter_counts = counts
         labels = {
             "all": "All", "ready": "Ready", "review": "Review",
-            "nomatch": "No match", "done": "Done",
+            "done": "Done",
         }
         for key, count in counts.items():
             if hasattr(self, "filter_vars"):
                 self.filter_vars[key].set(f"{labels[key]} {count}")
-        if hasattr(self, "filter_chips"):
+        if hasattr(self, "filter_control"):
             self._refresh_filter_chip_styles()
         self._schedule_status_cells()
         visible = any(
@@ -1474,7 +1494,6 @@ class App:
                     "all": "No files added yet",
                     "ready": "Nothing ready",
                     "review": "Nothing to review",
-                    "nomatch": "No unmatched files",
                     "done": "Nothing completed",
                 }[status_filter]
                 self.empty_title_var.set(title)
@@ -1502,7 +1521,7 @@ class App:
         if selected_filter == "done":
             return item.status in ("done", "no_change")
         if selected_filter == "review":
-            return item.status == "review"
+            return item.status in ("review", "nomatch", "error")
         return item.status == selected_filter
 
     def _action_scope_items(self):
@@ -1534,24 +1553,21 @@ class App:
         self._schedule_status_cells()
 
     def _refresh_filter_chip_styles(self):
-        if not hasattr(self, "filter_chips"):
+        if not hasattr(self, "filter_control"):
             return
         selected = self._status_filter or "all"
         counts = getattr(self, "_filter_counts", {})
-        for key, chip in self.filter_chips.items():
-            foreground = (
-                self.pal["header_muted"] if counts.get(key, 0) == 0
-                else chip.filter_color
+        self.filter_control.set_labels(tuple(
+            f"{label} {counts.get(key, 0)}"
+            for key, label in (
+                ("all", "All"), ("ready", "Ready"), ("review", "Review"),
+                ("done", "Done"),
             )
-            if key == selected:
-                chip.set_appearance(
-                    self.pal["chip_active"], self.pal["header_accent"],
-                    foreground, active=True,
-                )
-            else:
-                chip.set_appearance(
-                    self.pal["chip"], self.pal["chip_border"], foreground,
-                )
+        ))
+        self.filter_control.set_selected(selected)
+        self.filter_control.set_available({
+            key: counts.get(key, 0) > 0 for key in self.filter_control.values
+        })
 
     def _item_sort_key(self):
         if self.media_mode.get() == "tv":
@@ -1829,10 +1845,36 @@ class App:
         self.provider_settings = settings
         self.settings_store.update(settings.to_config())
         self._configure_resolver()
-        if hasattr(self, "provider_source_var"):
-            self.provider_source_var.set(
-                f"Source: {provider_source_label(settings.selected)}",
+        if hasattr(self, "source_control"):
+            self.source_control.set_selected(settings.selected)
+            self.refresh_source_control()
+        if hasattr(self, "settings_view") and hasattr(
+            self.settings_view, "source_selection_var",
+        ):
+            source_label = (
+                "Automatic" if settings.selected == "automatic"
+                else PROVIDER_INFO[settings.selected]["label"]
             )
+            self.settings_view.source_selection_var.set(source_label)
+
+    def refresh_source_control(self):
+        if not hasattr(self, "source_control"):
+            return
+        self.source_control.set_available({
+            name: self.provider_settings.can_select(
+                name, self.key_var.get(),
+            )
+            for name in SOURCE_SELECTIONS
+        })
+
+    def select_source(self, name):
+        if not self.provider_settings.can_select(name, self.key_var.get()):
+            self.show_page("settings")
+            self.settings_view.focus_provider_source(name)
+            return
+        self.set_provider_settings(
+            self.provider_settings.with_selected(name),
+        )
 
     def _configure_resolver(self):
         self.show_resolver.configure(

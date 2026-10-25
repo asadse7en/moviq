@@ -1,4 +1,5 @@
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 import webbrowser
 
@@ -8,7 +9,6 @@ from ...core.providers.settings import PROVIDER_INFO
 _KEY_FIELDS = {
     "omdb": (("omdb", "API key"),),
 }
-_COMPACT_PROVIDERS = {"tmdb", "tvmaze", "anilist", "omdb", "offline"}
 _SOURCE_NAMES = {
     "tmdb": "TMDb",
     "tvmaze": "TVmaze",
@@ -16,8 +16,6 @@ _SOURCE_NAMES = {
     "omdb": "OMDb",
     "offline": "Offline Guess",
 }
-
-
 class ProvidersTabMixin:
     """Sources page: priority order, on/off, keys and a connection test."""
 
@@ -28,92 +26,139 @@ class ProvidersTabMixin:
             "good match.",
         )
         settings = self.app.provider_settings
-        self._provider_priority_rows = {}
-        self._provider_move_buttons = {}
+        self._provider_order = list(settings.order)
+        self._provider_drag_name = None
+        self._provider_rows = {}
         self._provider_card_surfaces = []
         self._provider_card_titles = []
         self._provider_card_labels = []
-        priority_group = self._group(frame, "Priority List")
-        priority_group.columnconfigure(0, weight=1)
-        for name in settings.order:
-            row = tk.Frame(
-                priority_group, background=self.app.pal["preset_surface"],
-                padx=8, pady=5,
-            )
-            row.columnconfigure(1, weight=1)
-            number = tk.Label(
-                row, anchor="center", width=2,
-                background=self.app.pal["preset_selected"],
-                foreground=self.app.pal["muted"], font="TkTextFont",
-                padx=5, pady=2,
-            )
-            number.grid(row=0, column=0, sticky="w", padx=(0, 8))
-            label = tk.Label(
-                row, anchor="w", background=self.app.pal["preset_surface"],
-                foreground=self.app.pal["fg"], font="TkTextFont",
-            )
-            label.grid(row=0, column=1, sticky="ew")
-            controls = ttk.Frame(row)
-            controls.grid(row=0, column=2, sticky="e", padx=(8, 0))
-            move_up = ttk.Button(
-                controls, text="↑", width=3, style="Settings.TButton",
-                command=lambda provider=name: self._move_provider(provider, -1),
-            )
-            move_up.pack(side="left", padx=(0, 4))
-            move_down = ttk.Button(
-                controls, text="↓", width=3, style="Settings.TButton",
-                command=lambda provider=name: self._move_provider(provider, 1),
-            )
-            move_down.pack(side="left")
-            self._provider_priority_rows[name] = (row, number, label)
-            self._provider_move_buttons[name] = (move_up, move_down)
-
-        self._label(frame, "Provider Details", font="TkHeadingFont").pack(
-            anchor="w", pady=(18, 10),
-        )
+        self._provider_descriptions = []
+        self._provider_titles = {}
+        self._provider_test_buttons = {}
         self._provider_blocks = {}
         self._provider_enabled = {}
         self._provider_key_vars = {}
         self._provider_key_entries = {}
         self._provider_key_eyes = {}
+        self._provider_key_wraps = {}
         self._provider_status = {}
         self._provider_status_labels = {}
+        self._provider_status_dots = {}
+        self._provider_key_check_after = {}
+        self._provider_test_generation = {}
 
-        for name in settings.order:
+        for name in self._provider_order:
             self._build_provider_group(frame, name, settings)
 
+        self._refresh_provider_ranks()
         self._layout_providers()
-        for name in self._provider_status:
-            self._test_provider(name)
+        self.after_idle(self._refresh_provider_ranks)
+        for name in self._provider_order:
+            if name != "tmdb" and name in settings.enabled:
+                self._test_provider(name)
 
     def _build_provider_group(self, frame, name, settings):
-        source = _SOURCE_NAMES[name]
         info = PROVIDER_INFO[name]
-        compact = name in _COMPACT_PROVIDERS
         surface = self.app.pal["preset_surface"]
         card = tk.Frame(
             frame, background=surface, highlightthickness=1,
             highlightbackground=self.app.pal["preset_border"],
             highlightcolor=self.app.pal["preset_border"],
-            padx=12, pady=6 if compact else 10,
+            padx=9, pady=0, height=68,
         )
-        card.pack(fill="x", pady=(0, 14))
-        group = tk.Frame(card, background=surface)
-        group.columnconfigure(0, weight=1)
-        group.columnconfigure(1, weight=0)
-        group.columnconfigure(2, weight=0)
+        card.grid_propagate(False)
+        card.columnconfigure(2, weight=1)
+        card.columnconfigure(3, minsize=180)
+        card.columnconfigure(4, minsize=65)
+        card.columnconfigure(5, minsize=160)
+        card.columnconfigure(6, minsize=45)
+        self._provider_blocks[name] = card
+        self._provider_card_surfaces.append(card)
+        self._provider_rows[name] = {"card": card, "surfaces": [card]}
+
+        handle = tk.Canvas(
+            card, width=20, height=32, background=surface,
+            highlightthickness=0,
+            cursor="fleur" if name != "offline" else "",
+            takefocus=0,
+        )
+        self._provider_card_surfaces.append(handle)
+        self._provider_rows[name]["surfaces"].append(handle)
+        for y in (9, 15, 21):
+            handle.create_line(
+                5, y, 15, y,
+                fill=(
+                    self.app.pal["preset_border"]
+                    if name == "offline" else self.app.pal["muted"]
+                ),
+                width=2,
+                tags="grip",
+            )
+        handle.grid(row=0, column=0, padx=(0, 5), sticky="w")
+        if name != "offline":
+            handle.bind(
+                "<ButtonPress-1>",
+                lambda event, provider=name: self._provider_drag_start(
+                    provider, event,
+                ),
+            )
+            handle.bind(
+                "<B1-Motion>",
+                lambda event, provider=name: self._provider_drag_motion(
+                    provider, event,
+                ),
+            )
+            handle.bind(
+                "<ButtonRelease-1>",
+                lambda event, provider=name: self._provider_drag_end(
+                    provider, event,
+                ),
+            )
+
+        number = tk.Label(
+            card, text=str(self._provider_order.index(name) + 1),
+            anchor="center", width=2,
+            background=self.app.pal["preset_selected"],
+            foreground=self.app.pal["muted"], font="TkTextFont",
+            padx=5, pady=2,
+        )
+        number.grid(row=0, column=1, sticky="w", padx=(0, 10))
+        self._provider_rows[name].update(handle=handle, number=number)
+        identity = tk.Frame(card, background=surface)
+        self._provider_card_surfaces.append(identity)
+        self._provider_rows[name]["surfaces"].append(identity)
+        identity.grid(row=0, column=2, sticky="ew", padx=(0, 10))
+        identity.columnconfigure(0, weight=1, minsize=0)
         title = tk.Label(
-            group if compact else card, text=source, font="TkHeadingFont",
+            identity, text=_SOURCE_NAMES[name], font="TkHeadingFont",
             background=surface, foreground=self.app.pal["fg"],
         )
-        if compact:
-            title.grid(row=0, column=0, sticky="w")
-        else:
-            title.pack(anchor="w", pady=(0, 8))
-        group.pack(fill="x")
-        self._provider_blocks[name] = card
-        self._provider_card_surfaces.extend((card, group))
+        title.grid(row=0, column=0, sticky="w")
+        description_links = info.get("description_links")
+        if description_links is None and info.get("description_link"):
+            description_links = (info["description_link"],)
+        description = tk.Text(
+            identity, width=1, height=1, wrap="none",
+            font="TkTextFont", background=surface,
+            foreground=self.app.pal["muted"], relief="flat",
+            borderwidth=0, highlightthickness=0, padx=0, pady=0,
+            takefocus=False, exportselection=False,
+        )
+        description.bind(
+            "<Configure>",
+            lambda _event, widget=description, provider_info=info: (
+                self._render_provider_description(widget, provider_info)
+            ),
+        )
+        description.configure(state="disabled", cursor="")
+        description.grid(
+            row=1, column=0, sticky="ew", pady=(2, 0),
+        )
+        self._provider_card_surfaces.append(description)
+        self._provider_rows[name]["surfaces"].append(description)
+        self._provider_descriptions.append((description, info))
         self._provider_card_titles.append(title)
+        self._provider_titles[name] = title
 
         enabled = tk.BooleanVar(value=name in settings.enabled)
         enabled.trace_add(
@@ -127,34 +172,24 @@ class ProvidersTabMixin:
             "Moviq.Formatting.Switch.TCheckbutton"
             if self.app.have_sv else "Formatting.TCheckbutton"
         )
-        self._switch(
-            group, enabled, style=switch_style,
-        ).grid(
-            row=0, column=2, sticky="e",
-            pady=2 if compact else 7,
+        self._switch(card, enabled, style=switch_style).grid(
+            row=0, column=6, sticky="e", padx=(8, 0),
         )
-        row = 1
-        if name == "offline":
-            description = tk.Frame(group, background=surface)
-            description.grid(
-                row=row, column=0, columnspan=2, sticky="w",
-                padx=(0, 18), pady=(0, 3),
-            )
-            self._provider_label(
-                description,
-                "Guess from the file name when nothing else can help. "
-                "Always sent to Review.",
-                muted=True,
-            ).pack(side="left")
-            row += 1
-
         if name == "tmdb":
-            self._build_tmdb_key(group, row)
-            return
-
-        if name in _KEY_FIELDS:
-            fields = _KEY_FIELDS[name]
-            key_field = fields[0][0]
+            key_var = tk.StringVar(value=self.vars["key"].get())
+            self.key_entry_var = key_var
+            self._build_provider_key_control(card, name, "key", key_var)
+            self.key_entry_wrap = self._provider_key_wraps["key"]
+            self.key_entry = self._provider_key_entries["key"]
+            self.key_eye_canvas = self._provider_key_eyes["key"]
+            self.key_entry.bind("<<Copy>>", self._copy_api_key, add="+")
+            self.key_entry.bind("<Control-z>", self._undo_key_entry)
+            self.key_entry.bind("<Control-y>", self._redo_key_entry)
+            self.key_status_var = tk.StringVar(value="Not checked")
+            self._provider_status[name] = self.key_status_var
+            test_command = self.test_key
+        elif name in _KEY_FIELDS:
+            key_field = _KEY_FIELDS[name][0][0]
             key_var = tk.StringVar(value=settings.key(key_field))
             self._provider_key_vars[key_field] = key_var
             key_var.trace_add(
@@ -163,127 +198,51 @@ class ProvidersTabMixin:
                     self._provider_key_edited(field)
                 ),
             )
-            controls = tk.Frame(group, background=surface)
-            controls.grid(row=row, column=1, sticky="e", pady=5)
-            self._add_provider_status(
-                group, name, 0,
-                "Needs a key" if not key_var.get().strip() else "Not checked",
-                column=1, padx=(0, 12),
-            )
-            wrap, entry = self.make_styled_entry(
-                controls, key_var, width=30, show="•",
-            )
-            entry.grid_configure(padx=7, pady=3)
-            self._add_provider_key_placeholder(wrap, entry, key_var)
-            self._provider_key_entries[key_field] = entry
-            eye = self._provider_eye_toggle(wrap, key_field)
-            self._provider_key_eyes[key_field] = eye
-            wrap.pack(side="left")
-            ttk.Button(
-                controls, text="Test", style="Settings.TButton",
-                command=lambda provider=name: self._test_provider(provider),
-            ).pack(side="left", padx=(6, 0))
-            if name == "omdb":
-                help_row = tk.Frame(group, background=surface)
-                self._provider_card_surfaces.append(help_row)
-                help_row.grid(
-                    row=row, column=0, sticky="w",
-                    padx=(0, 18), pady=3,
-                )
-                self._provider_label(
-                    help_row, "Request a free API key from ", muted=True,
-                ).pack(side="left")
-                self._provider_link(
-                    help_row, "OMDb", info["key_url"],
-                ).pack(side="left")
-                self._provider_label(
-                    help_row,
-                    " \u2192 check your email \u2192 paste it here.",
-                    muted=True,
-                ).pack(side="left")
-
-            return
-
-        if name in ("tvmaze", "anilist"):
-            self._provider_label(
-                group,
-                (
-                    "Free tv show and episode database. No key needed."
-                    if name == "tvmaze"
-                    else "Free anime and manga database. No key needed."
+            self._build_provider_key_control(card, name, key_field, key_var)
+            self._provider_status[name] = tk.StringVar(
+                value=(
+                    "Disabled" if name not in settings.enabled else (
+                        "Needs a key"
+                        if not key_var.get().strip() else "Not checked"
+                    )
                 ),
-                muted=True,
-            ).grid(row=row, column=0, sticky="w", padx=(0, 18))
-            controls = tk.Frame(group, background=surface)
-            controls.grid(row=row, column=1, sticky="e", pady=2 if compact else 5)
-            self._add_provider_status(
-                group, name, 0, "Not checked",
-                column=1, padx=(0, 12),
             )
-            ttk.Button(
-                controls, text="Test", style="Settings.TButton",
-                command=lambda provider=name: self._test_provider(provider),
-            ).pack(side="left", padx=(6, 0))
+            test_command = lambda provider=name: self._test_provider(provider)
+        else:
+            status = (
+                ("Connected" if name in settings.enabled else "Disabled")
+                if name == "offline" else
+                "Not checked" if name in settings.enabled else "Disabled"
+            )
+            self._provider_status[name] = tk.StringVar(value=status)
+            test_command = lambda provider=name: self._test_provider(provider)
 
-    def _build_tmdb_key(self, group, row):
-        self.key_status_var = tk.StringVar(value="Not checked")
-        self.key_status_label = self._provider_label(
-            group, textvariable=self.key_status_var, muted=True,
+        self._add_provider_status(
+            card, name, self._provider_status[name].get(),
         )
-        self.key_status_label.grid(
-            row=0, column=1, sticky="e", padx=(0, 12),
+        self._provider_test_buttons[name] = ttk.Button(
+            card, text="Test", style="Settings.TButton",
+            command=test_command,
         )
-        self.key_entry_var = tk.StringVar(value=self.vars["key"].get())
-        key_row = tk.Frame(group, background=self.app.pal["preset_surface"])
-        key_row.grid(row=row, column=1, sticky="e", pady=5)
-        self.key_entry_wrap, self.key_entry = self.make_styled_entry(
-            key_row, self.key_entry_var, width=30, show="•",
+        self._provider_test_buttons[name].grid(
+            row=0, column=4, padx=(6, 0),
         )
-        self.key_entry.grid_configure(padx=7, pady=3)
-        self._add_provider_key_placeholder(
-            self.key_entry_wrap, self.key_entry, self.key_entry_var,
+        self._set_provider_row_enabled(
+            name, name in settings.enabled,
         )
-        self.key_eye_canvas = tk.Canvas(
-            self.key_entry_wrap, width=28, height=28,
-            background=self.app.pal["preset_surface"],
-            highlightthickness=0, cursor="hand2", takefocus=1,
+
+    def _build_provider_key_control(self, row, name, field, variable):
+        self._provider_key_vars[field] = variable
+        wrap, entry = self.make_styled_entry(
+            row, variable, width=19, show="•",
         )
-        self.key_eye_canvas.grid(
-            row=0, column=1, sticky="e", padx=(0, 5), pady=2,
-        )
-        self.key_eye_canvas.create_line(
-            3, 14, 7, 8, 14, 5, 21, 8, 25, 14, 21, 20, 14, 23, 7, 20,
-            smooth=True, splinesteps=20, fill=self.app.pal["muted"],
-            width=2, tags="eye",
-        )
-        self.key_eye_canvas.create_oval(
-            11, 11, 17, 17, fill=self.app.pal["muted"],
-            outline=self.app.pal["muted"], tags="pupil",
-        )
-        self.key_eye_canvas.create_line(
-            5, 23, 23, 5, fill=self.app.pal["muted"], width=2,
-            state="hidden", tags="slash",
-        )
-        self.key_eye_canvas.bind(
-            "<Button-1>", lambda _event: self._toggle_key_visibility(),
-        )
-        self.key_eye_canvas.bind(
-            "<space>", lambda _event: self._toggle_key_visibility(),
-        )
-        self.key_entry.bind("<<Copy>>", self._copy_api_key, add="+")
-        self.key_entry.bind("<Control-z>", self._undo_key_entry)
-        self.key_entry.bind("<Control-y>", self._redo_key_entry)
-        self.key_entry_wrap.pack(side="left")
-        ttk.Button(
-            key_row, text="Test", style="Settings.TButton",
-            command=self.test_key,
-        ).pack(side="left", padx=(6, 0))
-        self.key_help_text = self._build_api_key_help(group)
-        self._set_key_status("Not checked")
-        self.key_help_text.grid(
-            row=row, column=0, sticky="ew",
-            padx=(0, 18), pady=3,
-        )
+        entry.grid_configure(padx=7, pady=6)
+        self._add_provider_key_placeholder(wrap, entry, variable)
+        self._provider_key_entries[field] = entry
+        self._provider_key_wraps[field] = wrap
+        eye = self._provider_eye_toggle(wrap, field)
+        self._provider_key_eyes[field] = eye
+        wrap.grid(row=0, column=3, sticky="ew")
 
     def _provider_eye_toggle(self, wrap, field):
         eye = tk.Canvas(
@@ -315,19 +274,83 @@ class ProvidersTabMixin:
         )
         return eye
 
-    def _add_provider_status(
-        self, group, name, row, status, column=1, pady=(0, 7),
-        padx=(0, 0),
-    ):
-        variable = tk.StringVar()
+    def _render_provider_description(self, widget, info):
+        text = info["description"]
+        links = info.get("description_links")
+        if links is None and info.get("description_link"):
+            links = (info["description_link"],)
+        links = tuple(links or ())
+        available = max(0, widget.winfo_width() - 2)
+        font = tkfont.nametofont(widget.cget("font"), root=widget)
+        visible_length = len(text)
+        if font.measure(text) > available:
+            visible_length = 0
+            for length in range(len(text), -1, -1):
+                candidate = text[:length].rstrip() + "\u2026"
+                if font.measure(candidate) <= available:
+                    visible_length = length
+                    break
+            for link in links:
+                link_start = text.find(link["text"])
+                link_end = link_start + len(link["text"])
+                if link_start >= 0 and link_start < visible_length < link_end:
+                    visible_length = link_start
+            text = text[:visible_length].rstrip() + "\u2026"
+
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        content = text[:-1] if text.endswith("\u2026") else text
+        spans = []
+        for index, link in enumerate(links):
+            start = content.find(link["text"])
+            end = start + len(link["text"])
+            if start >= 0 and end <= len(content):
+                spans.append((start, end, index, link["url"]))
+
+        cursor = 0
+        for start, end, index, url in spans:
+            widget.insert("end", content[cursor:start])
+            tag = f"description_link_{index}"
+            widget.tag_configure(
+                tag, foreground=self.app.pal["accent"],
+            )
+            widget.tag_bind(
+                tag, "<Button-1>",
+                lambda _event, target=url: webbrowser.open(target),
+            )
+            widget.tag_bind(
+                tag, "<Enter>",
+                lambda _event, target=widget: target.configure(cursor="hand2"),
+            )
+            widget.tag_bind(
+                tag, "<Leave>",
+                lambda _event, target=widget: target.configure(cursor=""),
+            )
+            widget.insert("end", content[start:end], tag)
+            cursor = end
+        widget.insert("end", content[cursor:] + text[len(content):])
+        widget.configure(state="disabled")
+
+    def _add_provider_status(self, card, name, status):
+        variable = self._provider_status[name]
+        status_row = tk.Frame(card, background=self.app.pal["preset_surface"])
+        self._provider_card_surfaces.append(status_row)
+        self._provider_rows[name]["surfaces"].append(status_row)
+        status_row.grid(row=0, column=5, sticky="w", padx=(8, 0))
+        dot = tk.Canvas(
+            status_row, width=10, height=10,
+            background=self.app.pal["preset_surface"],
+            highlightthickness=0,
+        )
+        dot.grid(row=0, column=0, padx=(0, 6))
+        dot.create_oval(1, 1, 9, 9, tags="status")
         label = self._provider_label(
-            group, textvariable=variable, muted=True,
+            status_row, textvariable=variable, muted=True, width=18,
+            anchor="w",
         )
-        label.grid(
-            row=row, column=column, sticky="e", pady=pady, padx=padx,
-        )
-        self._provider_status[name] = variable
+        label.grid(row=0, column=1, sticky="w")
         self._provider_status_labels[name] = label
+        self._provider_status_dots[name] = dot
         variable.trace_add(
             "write",
             lambda *_args, provider=name: (
@@ -335,10 +358,12 @@ class ProvidersTabMixin:
             ),
         )
         self._set_provider_status(name, status)
+        if name == "tmdb":
+            self.key_status_label = label
 
     def _add_provider_key_placeholder(self, wrap, entry, variable):
         placeholder = self._provider_label(
-            wrap, "Enter API key here", muted=True, cursor="xterm",
+            wrap, "API key", muted=True, cursor="xterm",
         )
 
         def update_placeholder(*_args):
@@ -376,49 +401,93 @@ class ProvidersTabMixin:
         self._provider_card_labels.append((label, muted, accent))
         return label
 
-    def _provider_link(self, parent, text, url):
-        link = self._provider_label(parent, text, accent=True, cursor="hand2")
-        link.bind(
-            "<Button-1>", lambda _event, target=url: webbrowser.open(target),
-        )
-        return link
-
     def _layout_providers(self):
-        settings = self.app.provider_settings
-        self._provider_detail_order = [
-            name for name in settings.order if name != "tvmaze"
-        ]
-        if "tvmaze" in settings.order:
-            insert_at = (
-                self._provider_detail_order.index("omdb") + 1
-                if "omdb" in self._provider_detail_order
-                else len(self._provider_detail_order)
-            )
-            self._provider_detail_order.insert(insert_at, "tvmaze")
-        for row, _number, _label in self._provider_priority_rows.values():
-            row.pack_forget()
-        for group in self._provider_blocks.values():
-            group.pack_forget()
-        for position, name in enumerate(settings.order):
-            priority_row, number, label = self._provider_priority_rows[name]
-            priority_row.pack(fill="x", pady=(0, 5))
-            move_up, move_down = self._provider_move_buttons[name]
-            move_up.configure(
-                state="disabled" if position == 0 else "normal",
-            )
-            move_down.configure(
-                state=(
-                    "disabled"
-                    if position == len(settings.order) - 1 else "normal"
+        self._refresh_provider_ranks()
+        for position, name in enumerate(self._provider_order, start=1):
+            row = self._provider_rows[name]
+            card = row["card"]
+            card.configure(
+                highlightbackground=(
+                    self.app.pal["accent"]
+                    if name == self._provider_drag_name
+                    else self.app.pal["preset_border"]
+                ),
+                highlightcolor=(
+                    self.app.pal["accent"]
+                    if name == self._provider_drag_name
+                    else self.app.pal["preset_border"]
                 ),
             )
-            number.configure(text=str(position + 1))
-            label.configure(text=_SOURCE_NAMES[name])
-        for name in self._provider_detail_order:
-            self._provider_blocks[name].pack(
-                fill="x",
-                pady=(0, 8) if name in _COMPACT_PROVIDERS else (0, 14),
+
+        next_card = None
+        for name in reversed(self._provider_order):
+            card = self._provider_rows[name]["card"]
+            pack_options = {"fill": "x", "pady": (0, 6)}
+            if card.winfo_manager() == "pack":
+                if next_card is not None:
+                    card.pack_configure(before=next_card, **pack_options)
+                else:
+                    card.pack_configure(**pack_options)
+            elif next_card is not None:
+                card.pack(before=next_card, **pack_options)
+            else:
+                card.pack(**pack_options)
+            next_card = card
+
+    def _refresh_provider_ranks(self):
+        for position, name in enumerate(self._provider_order, start=1):
+            number = self._provider_rows[name]["number"]
+            enabled = self._provider_enabled[name].get()
+            number.configure(
+                text=str(position),
+                background=(
+                    self.app.pal["preset_selected"] if enabled
+                    else self.app.pal["preset_border"]
+                ),
+                foreground=self.app.pal["muted"],
             )
+
+    def _provider_drag_start(self, name, _event):
+        if name == "offline":
+            return "break"
+        self._provider_drag_name = name
+        self._provider_drag_original = tuple(self._provider_order)
+        self._layout_providers()
+        return "break"
+
+    def _provider_drag_motion(self, name, event):
+        if name != self._provider_drag_name:
+            return "break"
+        self.update_idletasks()
+        movable = [
+            provider for provider in self._provider_order
+            if provider not in (name, "offline")
+        ]
+        target = len(movable)
+        for index, provider in enumerate(movable):
+            card = self._provider_blocks[provider]
+            midpoint = card.winfo_rooty() + card.winfo_height() / 2
+            if event.y_root < midpoint:
+                target = index
+                break
+        movable.insert(target, name)
+        new_order = movable + ["offline"]
+        if new_order != self._provider_order:
+            self._provider_order = new_order
+            self._layout_providers()
+        return "break"
+
+    def _provider_drag_end(self, name, _event):
+        if name != self._provider_drag_name:
+            return "break"
+        self._provider_drag_name = None
+        self._layout_providers()
+        if tuple(self._provider_order) != self._provider_drag_original:
+            self.app.set_provider_settings(
+                self.app.provider_settings.with_order(self._provider_order),
+            )
+        self._provider_drag_original = None
+        return "break"
 
     def _set_provider_status(self, name, status):
         self._provider_status[name].set(status)
@@ -430,9 +499,9 @@ class ProvidersTabMixin:
             color = self.app.pal.get(
                 "done", status_colors.get("auto", (self.app.pal["muted"],))[0],
             )
-        elif status == "Needs a key" or status == "Not checked":
+        elif status in ("Disabled", "Needs a key", "Not checked"):
             color = self.app.pal["muted"]
-        elif status == "Testing...":
+        elif status in ("Testing...", "Checking", "Wrong format"):
             color = self.app.pal.get(
                 "warning",
                 status_colors.get("review", (self.app.pal["muted"],))[0],
@@ -442,6 +511,9 @@ class ProvidersTabMixin:
                 "error", (self.app.pal["muted"],),
             )[0]
         self._provider_status_labels[name].configure(foreground=color)
+        self._provider_status_dots[name].itemconfigure(
+            "status", fill=color, outline=color,
+        )
 
     def _provider_toggled(self, name):
         settings = self.app.provider_settings
@@ -449,26 +521,90 @@ class ProvidersTabMixin:
         if value == (name in settings.enabled):
             return
         self.app.set_provider_settings(settings.with_enabled(name, value))
-
-    def _move_provider(self, name, step):
-        settings = self.app.provider_settings
-        order = list(settings.order)
-        index = order.index(name)
-        target = index + step
-        if not 0 <= target < len(order):
+        self._set_provider_row_enabled(name, value)
+        if not value:
+            self._provider_test_generation[name] = (
+                self._provider_test_generation.get(name, 0) + 1
+            )
+            self._set_provider_status(name, "Disabled")
+            if name == "tmdb":
+                self._key_generation += 1
+                if self._key_after is not None:
+                    self.after_cancel(self._key_after)
+                    self._key_after = None
+                if self._saved_key_status_after is not None:
+                    self.after_cancel(self._saved_key_status_after)
+                    self._saved_key_status_after = None
+                    self._saved_key_validation_status = None
             return
-        order[index], order[target] = order[target], order[index]
-        self.app.set_provider_settings(settings.with_order(order))
-        self._layout_providers()
+        if name == "tmdb":
+            self.test_key()
+        else:
+            self._test_provider(name)
+
+    def _set_provider_row_enabled(self, name, enabled):
+        background = self.app.pal["preset_surface"]
+        for surface in self._provider_rows[name]["surfaces"]:
+            surface.configure(background=background)
+        self._provider_status_labels[name].configure(
+            background=background,
+        )
+        self._provider_status_dots[name].configure(
+            background=background,
+        )
+        title = self._provider_titles[name]
+        title.configure(
+            background=background,
+            foreground=(
+                self.app.pal["fg"] if enabled
+                else self.app.pal["muted"]
+            ),
+        )
+        self._provider_test_buttons[name].configure(
+            state="normal" if enabled else "disabled",
+        )
+        number = self._provider_rows[name]["number"]
+        number.configure(
+            background=(
+                self.app.pal["preset_selected"] if enabled
+                else self.app.pal["preset_border"]
+            ),
+            foreground=self.app.pal["muted"],
+        )
+        if name == "offline":
+            self._provider_rows[name]["handle"].itemconfigure(
+                "grip", fill=self.app.pal["preset_border"],
+            )
 
     def _provider_key_edited(self, field):
         key = self._provider_key_vars[field].get().strip()
         settings = self.app.provider_settings.with_key(field, key)
         if settings != self.app.provider_settings:
             self.app.set_provider_settings(settings)
+        after_id = self._provider_key_check_after.pop(field, None)
+        if after_id is not None:
+            self.after_cancel(after_id)
+        generation = self._provider_test_generation.get(field, 0) + 1
+        self._provider_test_generation[field] = generation
         self._set_provider_status(
             field, "Needs a key" if not key else "Not checked",
         )
+        if key:
+            if field not in self.app.provider_settings.enabled:
+                self._set_provider_status(field, "Disabled")
+                return
+            self._provider_key_check_after[field] = self.after(
+                800,
+                lambda provider=field, token=generation: (
+                    self._run_provider_key_check(provider, token)
+                ),
+            )
+
+    def _run_provider_key_check(self, name, generation):
+        if generation != self._provider_test_generation.get(name):
+            return
+        self._provider_key_check_after.pop(name, None)
+        self._test_provider(name)
 
     def _commit_provider_keys(self, name=None):
         settings = self.app.provider_settings
@@ -500,19 +636,29 @@ class ProvidersTabMixin:
         )
 
     def _test_provider(self, name):
+        if name not in self.app.provider_settings.enabled:
+            self._set_provider_status(name, "Disabled")
+            return
+        after_id = self._provider_key_check_after.pop(name, None)
+        if after_id is not None:
+            self.after_cancel(after_id)
         if name in _KEY_FIELDS:
             self._commit_provider_keys(name)
+        generation = self._provider_test_generation.get(name, 0) + 1
+        self._provider_test_generation[name] = generation
         self._set_provider_status(name, "Testing...")
         settings = self.app.provider_settings
         tmdb_key = self.vars["key"].get().strip()
         self._executor.submit(
-            self._provider_test_job, name, settings, tmdb_key,
+            self._provider_test_job, name, settings, tmdb_key, generation,
         )
 
-    def _provider_test_job(self, name, settings, tmdb_key):
+    def _provider_test_job(self, name, settings, tmdb_key, generation):
         try:
             result = test_provider(name, settings, tmdb_key)
         except Exception as error:  # never leave the label on "Testing..."
             result = str(error)[:80] or "Failed"
         if not self._closed:
-            self._queue.put(("provider_status", name, result))
+            self._queue.put((
+                "provider_status", name, generation, result,
+            ))

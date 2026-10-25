@@ -15,10 +15,12 @@ class GeneralTabMixin:
         )
         source_group = self._group(frame, "Matching source")
         source_values = ("Automatic",) + tuple(
-            info["label"] for info in PROVIDER_INFO.values()
+            info["label"] for name, info in PROVIDER_INFO.items()
+            if name != "offline"
         )
         source_labels = {
             name: info["label"] for name, info in PROVIDER_INFO.items()
+            if name != "offline"
         }
         selected = self.app.provider_settings.selected
         source_value = (
@@ -32,10 +34,7 @@ class GeneralTabMixin:
         self.source_selector = SettingsDropdown(
             source_group, self.source_selection_var, source_options,
             self._source_selection_changed, self.app.pal,
-            descriptions={
-                "Automatic": "Priority order",
-                "Offline Guess": "No internet",
-            },
+            descriptions={"Automatic": "Priority order"},
         )
         self._row(
             source_group, 0, "Source", self.source_selector,
@@ -56,7 +55,7 @@ class GeneralTabMixin:
         if selected_label != "Automatic":
             selected = next(
                 name for name, info in PROVIDER_INFO.items()
-                if info["label"] == selected_label
+                if name != "offline" and info["label"] == selected_label
             )
         self.app.set_provider_settings(
             self.app.provider_settings.with_selected(selected),
@@ -283,6 +282,7 @@ class GeneralTabMixin:
     def _set_key_status(self, status):
         status_colors = self.app.pal.get("status_colors", {})
         colors = {
+            "Disabled": self.app.pal["muted"],
             "Connected": self.app.pal.get(
                 "done", status_colors.get("auto", (self.app.pal["muted"],))[0],
             ),
@@ -309,6 +309,8 @@ class GeneralTabMixin:
                 else self.app.pal["muted"],
             ),
         )
+        if "tmdb" in getattr(self, "_provider_status_dots", {}):
+            self._style_provider_status("tmdb")
 
     def _key_draft_changed(self, *_args):
         key = self.key_entry_var.get()
@@ -319,6 +321,9 @@ class GeneralTabMixin:
             self._saved_key_status_after = None
             self._saved_key_validation_status = None
         self._key_generation += 1
+        if "tmdb" not in self.app.provider_settings.enabled:
+            self._set_key_status("Disabled")
+            return
         self._set_key_status("Not checked")
         self._schedule_key_check(800)
 
@@ -406,6 +411,10 @@ class GeneralTabMixin:
     def _schedule_key_check(self, delay):
         if self._key_after is not None:
             self.after_cancel(self._key_after)
+            self._key_after = None
+        if "tmdb" not in self.app.provider_settings.enabled:
+            self._set_key_status("Disabled")
+            return
         key = self.key_entry_var.get().strip()
         generation = self._key_generation
         if not key:
@@ -431,6 +440,9 @@ class GeneralTabMixin:
         self._queue.put(("key", generation, key, status))
 
     def test_key(self):
+        if "tmdb" not in self.app.provider_settings.enabled:
+            self._set_key_status("Disabled")
+            return
         key = self.key_entry_var.get().strip()
         self._key_generation += 1
         generation = self._key_generation

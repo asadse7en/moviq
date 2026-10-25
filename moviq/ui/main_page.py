@@ -4,8 +4,10 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 
 from .. import resource
-from ..core.providers.settings import provider_source_label
-from .controls import RoundedButton, SegmentedModeToggle, ToolTip
+from ..core.providers.settings import PROVIDER_INFO
+from .controls import (
+    RoundedButton, SegmentedModeToggle, SegmentedPillControl, ToolTip,
+)
 
 MAIN_SHORTCUTS = {
     "<Control-a>": "select_all",
@@ -89,20 +91,6 @@ def build_main_page(app, page):
     )
     app.media_mode_selector.pack(side="left")
     app.update_media_mode_selector()
-    app.provider_source_var = tk.StringVar(
-        value=(
-            f"Source: {provider_source_label(app.provider_settings.selected)}"
-        ),
-    )
-    app.provider_source_label = tk.Label(
-        left_controls, textvariable=app.provider_source_var,
-        font="TkDefaultFont",
-        background=app.pal["header_bg"],
-        foreground=(
-            "#777777" if app.mode == "dark" else app.pal["muted"]
-        ),
-    )
-    app.provider_source_label.pack(side="left", padx=(16, 0))
 
     match_actions = ttk.Frame(bar, style="Toolbar.TFrame")
     app.match_actions = match_actions
@@ -132,16 +120,27 @@ def build_main_page(app, page):
     )
     app.clear_list_button.pack(side="left", padx=(0, 6))
     settings_button = RoundedButton(
-        match_actions, tk.StringVar(value="\u2699\ufe0f"),
+        match_actions, tk.StringVar(value=""),
         lambda: app.show_page("settings"),             font="TkDefaultFont",
         ui_scale=app.UI_SCALE, padx=10,
         background=app.pal["header_bg"],
     )
+    settings_button.set_icon("settings")
     app.settings_button = settings_button
     settings_button.pack(side="left")
     ToolTip(
         settings_button, "Settings", app.pal["card"], app.pal["fg"],
     )
+    app.theme_button = RoundedButton(
+        match_actions, app.theme_button_var, app.cycle_theme,
+        font="TkDefaultFont", ui_scale=app.UI_SCALE, padx=10,
+        background=app.pal["header_bg"],
+    )
+    app.theme_button.pack(side="left", padx=(6, 0))
+    app.theme_tooltip = ToolTip(
+        app.theme_button, "", app.pal["card"], app.pal["fg"],
+    )
+    app.update_theme_button()
     app.toolbar_buttons = (
         app.add_files_button, app.add_folder_button,
         app.auto_match_button, app.manual_match_button,
@@ -168,30 +167,38 @@ def build_main_page(app, page):
         key: tk.StringVar(value=f"{label} 0")
         for key, label in (
             ("all", "All"), ("ready", "Ready"),
-            ("review", "Review"), ("nomatch", "No match"),
-            ("done", "Done"),
+            ("review", "Review"), ("done", "Done"),
         )
     }
-    app.filter_chips = {}
-    for key in app.filter_vars:
-        base_color = {
-            "all": app.pal["fg"],
-            "ready": app.pal["status_text"]["matched"],
-            "review": app.pal["status_text"]["review"],
-            "nomatch": app.pal["status_text"]["nomatch"],
-            "done": app.pal["status_text"]["done"],
-        }[key]
-        chip = RoundedButton(
-            app.filter_row, app.filter_vars[key],
-            lambda selected=key: app.set_status_filter(selected),
-            font="TkDefaultFont", padx=9, pady=6, radius=8,
-            ui_scale=app.UI_SCALE,
-            background=app.pal["header_bg"],
-        )
-        chip.filter_key = key
-        chip.filter_color = base_color
-        chip.pack(side="left", padx=(0, 6))
-        app.filter_chips[key] = chip
+    app.filter_control = SegmentedPillControl(
+        app.filter_row, "all", app.set_status_filter,
+        ui_scale=app.UI_SCALE,
+        labels=tuple(variable.get() for variable in app.filter_vars.values()),
+        values=tuple(app.filter_vars),
+    )
+    app.filter_control_label = tk.Label(
+        app.filter_row, text="Filter", font="TkDefaultFont",
+        background=app.pal["header_bg"], foreground=app.pal["muted"],
+    )
+    app.filter_control_label.pack(side="left", padx=(0, 7))
+    app.filter_control.pack(side="left")
+    app.source_control = SegmentedPillControl(
+        app.filter_row,
+        app.provider_settings.selected,
+        app.select_source,
+        ui_scale=app.UI_SCALE,
+    )
+    app.source_control.pack(side="right", padx=(8, 0))
+    app.source_control_label = tk.Label(
+        app.filter_row, text="Source", font="TkDefaultFont",
+        background=app.pal["header_bg"], foreground=app.pal["muted"],
+    )
+    app.source_control_label.pack(side="right", padx=(0, 7))
+    app.source_control.set_palette(app.pal)
+    app.refresh_source_control()
+    app.key_var.trace_add(
+        "write", lambda *_args: app.refresh_source_control(),
+    )
     app.reset_columns_button = ttk.Button(
         app.filter_row, text="Reset columns",
         command=app._reset_table_widths,

@@ -5,31 +5,56 @@ DEFAULT_ORDER = ("tmdb", "tvmaze", "anilist", "omdb", "offline")
 DEFAULT_ENABLED = ("tmdb", "tvmaze", "anilist", "omdb")
 # Providers that work for ordinary movies/shows; AniList is anime-only.
 GENERAL = ("tmdb", "omdb", "tvmaze")
+SOURCE_SELECTIONS = ("automatic", "tmdb", "omdb", "tvmaze", "anilist")
 
 PROVIDER_INFO = {
     "tmdb": {
         "label": "TMDb", "needs_key": True, "kinds": "Movies and TV",
         "note": "Best overall. Free key from themoviedb.org.",
+        "description": (
+            "Create a free account on TMDB \u2192 Settings \u2192 API "
+            "\u2192 paste it here."
+        ),
+        "description_links": (
+            {"text": "TMDB", "url": "https://www.themoviedb.org"},
+            {
+                "text": "API",
+                "url": "https://www.themoviedb.org/settings/api",
+            },
+        ),
         "key_url": "https://www.themoviedb.org/settings/api",
     },
     "tvmaze": {
         "label": "TVmaze", "needs_key": False, "kinds": "TV only",
         "note": "No key needed. Data by tvmaze.com (CC BY-SA).",
+        "description": "Free TV show and episode database. No key needed.",
         "key_url": "https://www.tvmaze.com/api",
     },
     "omdb": {
         "label": "OMDb", "needs_key": True, "kinds": "Movies and TV",
         "note": "Free key, 1,000 requests a day.",
+        "description": (
+            "Request a free API key from OMDb \u2192 check your email "
+            "\u2192 paste it here."
+        ),
+        "description_link": {
+            "text": "OMDb", "url": "https://www.omdbapi.com/apikey.aspx",
+        },
         "key_url": "https://www.omdbapi.com/apikey.aspx",
     },
     "anilist": {
         "label": "AniList", "needs_key": False, "kinds": "Anime",
         "note": "No key needed. No episode titles.",
+        "description": "Free anime and manga database. No key needed.",
         "key_url": "https://anilist.co",
     },
     "offline": {
         "label": "Offline Guess", "needs_key": False, "kinds": "Movies and TV",
         "note": "From the file name only. Always sent to Review.",
+        "description": (
+            "Guess from the file name when nothing else can help. "
+            "Always sent to Review."
+        ),
         "key_url": "",
     },
 }
@@ -44,11 +69,12 @@ def provider_source_label(selected):
 def _clean_order(order):
     seen = []
     for name in order or ():
-        if name in PROVIDER_INFO and name not in seen:
+        if name in PROVIDER_INFO and name != "offline" and name not in seen:
             seen.append(name)
     for name in DEFAULT_ORDER:
-        if name not in seen:
+        if name != "offline" and name not in seen:
             seen.append(name)
+    seen.append("offline")
     return tuple(seen)
 
 
@@ -80,12 +106,22 @@ class ProviderSettings:
             for name in ("omdb",)
         ))
         selected = raw.get("selected", "automatic")
-        if not isinstance(selected, str) or selected not in PROVIDER_INFO:
+        if not isinstance(selected, str) or selected not in SOURCE_SELECTIONS:
             selected = "automatic"
         return cls(order, enabled, keys, selected)
 
     def key(self, name):
         return dict(self.keys).get(name, "")
+
+    def can_select(self, name, tmdb_key=""):
+        if name == "automatic":
+            return True
+        if name not in SOURCE_SELECTIONS or name not in self.enabled:
+            return False
+        if not PROVIDER_INFO[name]["needs_key"]:
+            return True
+        key = tmdb_key if name == "tmdb" else self.key(name)
+        return bool(key.strip())
 
     def to_config(self):
         return {
@@ -120,7 +156,7 @@ class ProviderSettings:
 
     def with_selected(self, name):
         selected = (
-            name if isinstance(name, str) and name in PROVIDER_INFO
+            name if isinstance(name, str) and name in SOURCE_SELECTIONS
             else "automatic"
         )
         return ProviderSettings(

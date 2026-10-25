@@ -291,6 +291,7 @@ class RoundedButton(tk.Canvas):
         self._hover = False
         self._pressed = False
         self._appearance = None
+        self._icon = None
         self.palette = {}
         self._text_trace = textvariable.trace_add("write", self._text_changed)
         self.bind("<Configure>", self._on_configure)
@@ -334,7 +335,12 @@ class RoundedButton(tk.Canvas):
         self._draw()
 
     def set_text(self, text):
+        self._icon = None
         self.textvariable.set(text)
+
+    def set_icon(self, icon):
+        self._icon = icon
+        self._size_to_content()
 
     def invoke(self):
         if self._state == "normal":
@@ -345,8 +351,13 @@ class RoundedButton(tk.Canvas):
 
     def _size_to_content(self):
         scale = _tk_scale(self)
-        text = self.textvariable.get()
-        width = self.font.measure(text) + self.padx * scale * 2
+        if self._icon is None:
+            width = (
+                self.font.measure(self.textvariable.get())
+                + self.padx * scale * 2
+            )
+        else:
+            width = round(20 * scale) + round(self.padx * scale * 2)
         height = self.font.metrics("linespace") + self.pady * scale * 2
         size = (max(1, round(width)), max(1, round(height)))
         if (int(self.cget("width")), int(self.cget("height"))) != size:
@@ -431,11 +442,81 @@ class RoundedButton(tk.Canvas):
                 "hover" if self._hover else "normal"
             ),
         )
-        self.create_text(
-            width / 2, height / 2, text=self.textvariable.get(),
-            fill=foreground,
-            font="TkHeadingFont" if self._bold else self.font,
-        )
+        if self._icon is None:
+            self.create_text(
+                width / 2, height / 2, text=self.textvariable.get(),
+                fill=foreground,
+                font="TkHeadingFont" if self._bold else self.font,
+            )
+        else:
+            self._draw_icon(self._icon, width, height, foreground, fill)
+
+    def _draw_icon(self, icon, width, height, color, background):
+        scale = _tk_scale(self)
+        center_x, center_y = width / 2, height / 2
+        line_width = max(1, round(1.5 * scale))
+        if icon == "light":
+            self.create_oval(
+                center_x - 4 * scale, center_y - 4 * scale,
+                center_x + 4 * scale, center_y + 4 * scale,
+                outline=color, width=line_width,
+            )
+            for angle in range(0, 360, 45):
+                radians = math.radians(angle)
+                inner = 7 * scale
+                outer = 9 * scale
+                self.create_line(
+                    center_x + math.cos(radians) * inner,
+                    center_y + math.sin(radians) * inner,
+                    center_x + math.cos(radians) * outer,
+                    center_y + math.sin(radians) * outer,
+                    fill=color, width=line_width, capstyle="round",
+                )
+        elif icon == "dark":
+            self.create_oval(
+                center_x - 7 * scale, center_y - 7 * scale,
+                center_x + 7 * scale, center_y + 7 * scale,
+                fill=color, outline=color,
+            )
+            self.create_oval(
+                center_x - 1 * scale, center_y - 9 * scale,
+                center_x + 11 * scale, center_y + 3 * scale,
+                fill=background, outline=background,
+            )
+        elif icon == "system":
+            self.create_rectangle(
+                center_x - 9 * scale, center_y - 7 * scale,
+                center_x + 9 * scale, center_y + 5 * scale,
+                outline=color, width=line_width,
+            )
+            self.create_line(
+                center_x, center_y + 5 * scale,
+                center_x, center_y + 8 * scale,
+                fill=color, width=line_width, capstyle="round",
+            )
+            self.create_line(
+                center_x - 4 * scale, center_y + 8 * scale,
+                center_x + 4 * scale, center_y + 8 * scale,
+                fill=color, width=line_width, capstyle="round",
+            )
+        elif icon == "settings":
+            points = []
+            tooth_radii = (7, 7, 10, 10)
+            for index in range(32):
+                angle = math.radians(index * 360 / 32 - 90)
+                radius = tooth_radii[index % len(tooth_radii)] * scale
+                points.extend((
+                    center_x + math.cos(angle) * radius,
+                    center_y + math.sin(angle) * radius,
+                ))
+            self.create_polygon(
+                points, fill=color, outline=color,
+            )
+            self.create_oval(
+                center_x - 3 * scale, center_y - 3 * scale,
+                center_x + 3 * scale, center_y + 3 * scale,
+                fill=background, outline=background,
+            )
 
 
 class ToolTip:
@@ -451,6 +532,13 @@ class ToolTip:
         widget.bind("<FocusIn>", self._schedule, add="+")
         widget.bind("<FocusOut>", self._hide, add="+")
         widget.bind("<Destroy>", self._on_destroy, add="+")
+
+    def set_text(self, text):
+        self.text = text
+        if self._window is not None:
+            for child in self._window.winfo_children():
+                if isinstance(child, tk.Label):
+                    child.configure(text=text)
 
     def _schedule(self, _event=None):
         self._cancel_schedule()
@@ -699,6 +787,165 @@ class SegmentedModeToggle(tk.Canvas):
             segment_start += segment_width
 
 
+class SegmentedPillControl(tk.Canvas):
+    def __init__(
+        self, master, selected, on_select, ui_scale=1.0,
+        labels=("Auto", "TMDb", "OMDb", "TVmaze", "AniList"),
+        values=("automatic", "tmdb", "omdb", "tvmaze", "anilist"),
+    ):
+        super().__init__(
+            master, width=1, height=1, highlightthickness=0, bd=0,
+            background=master.winfo_toplevel().cget("background"),
+            takefocus=0, cursor="hand2",
+        )
+        self.ui_scale = ui_scale
+        self.labels = labels
+        self.values = values
+        self.on_select = on_select
+        self.selected = selected if selected in values else values[0]
+        self.available = {value: True for value in values}
+        self.palette = {}
+        self.font = tkfont.nametofont("TkDefaultFont")
+        self.horizontal_padding = 9
+        self.vertical_padding = 6
+        self._hover_index = None
+        self.bind("<Configure>", self._draw)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+        self._size_to_content()
+
+    def _segment_widths(self):
+        scale = _tk_scale(self)
+        return tuple(
+            self.font.measure(label) + 2 * self.horizontal_padding * scale
+            for label in self.labels
+        )
+
+    def _size_to_content(self):
+        scale = _tk_scale(self)
+        widths = self._segment_widths()
+        height = (
+            self.font.metrics("linespace")
+            + 2 * self.vertical_padding * scale
+        )
+        self.configure(
+            width=round(sum(widths)) + 2,
+            height=round(height),
+        )
+
+    def set_palette(self, palette):
+        self.palette = palette
+        clear_rounded_image_cache(self)
+        self.configure(background=palette["header_bg"])
+        self._draw()
+
+    def set_selected(self, selected):
+        if selected in self.values:
+            self.selected = selected
+            self._draw()
+
+    def set_labels(self, labels):
+        if len(labels) != len(self.values):
+            raise ValueError("Each segment must have a label.")
+        self.labels = tuple(labels)
+        self._size_to_content()
+        self._draw()
+
+    def set_available(self, available):
+        self.available = {
+            value: bool(available.get(value, False))
+            for value in self.values
+        }
+        self._draw()
+
+    def _index_at(self, x):
+        widths = self._segment_widths()
+        position = 1
+        for index, width in enumerate(widths):
+            position += width
+            if x < position:
+                return index
+        return len(widths) - 1
+
+    def _on_motion(self, event):
+        index = self._index_at(event.x)
+        if index != self._hover_index:
+            self._hover_index = index
+            self._draw()
+
+    def _on_leave(self, _event):
+        self._hover_index = None
+        self._draw()
+
+    def _on_click(self, event):
+        self.on_select(self.values[self._index_at(event.x)])
+        return "break"
+
+    def _draw(self, _event=None):
+        if not self.palette or not self.winfo_exists():
+            return
+        palette = self.palette
+        scale = _tk_scale(self)
+        width, height = self.winfo_width(), self.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+        self.delete("all")
+        widths = self._segment_widths()
+        available_width = width - 2
+        total = sum(widths)
+        positions = [1]
+        for segment_width in widths:
+            positions.append(
+                positions[-1] + available_width * segment_width / total
+            )
+        draw_rounded_rectangle(
+            self, 0, 0, width - 1, height - 1, 6,
+            palette["chip"], palette["chip_border"],
+            background=self.cget("background"),
+        )
+        for index, value in enumerate(self.values):
+            left, right = positions[index], positions[index + 1]
+            selected = value == self.selected
+            hovered = index == self._hover_index and self.available[value]
+            if selected:
+                fill = palette["chip_active"]
+                color = (
+                    palette["fg"] if self.available[value]
+                    else palette["muted"]
+                )
+            elif hovered:
+                fill = palette["header_btn_hi"]
+                color = palette["fg"]
+            else:
+                fill = palette["chip"]
+                color = (
+                    palette["fg"] if self.available[value]
+                    else palette["muted"]
+                )
+            if selected or hovered:
+                draw_rounded_rectangle(
+                    self, left, 1, right, height - 1,
+                    6,
+                    fill,
+                    palette["header_accent"] if selected else "",
+                    corners=(True, True, True, True),
+                    background=palette["chip"],
+                    state=("source", value, selected, hovered),
+                )
+            center = (left + right) / 2
+            self.create_text(
+                center, height / 2, text=self.labels[index],
+                fill=color, font=self.font,
+            )
+            if index:
+                self.create_line(
+                    left, 4 * scale, left, height - 4 * scale,
+                    fill=palette["chip_border"],
+                    width=max(1, round(scale)),
+                )
+
+
 class SettingsDropdown(tk.Frame):
     def __init__(
         self, master, variable, options, command, palette,
@@ -707,6 +954,7 @@ class SettingsDropdown(tk.Frame):
         super().__init__(
             master, width=width, height=height, bd=0, highlightthickness=0,
         )
+        self._moviq_focus_control = True
         self.pack_propagate(False)
         self.variable = variable
         self.options = tuple(options)
@@ -882,6 +1130,7 @@ class SettingsDropdown(tk.Frame):
         colors = self._colors()
         popup = tk.Toplevel(self)
         self._popup = popup
+        popup._moviq_focus_control = True
         popup.withdraw()
         popup.overrideredirect(True)
         popup.transient(self.winfo_toplevel())

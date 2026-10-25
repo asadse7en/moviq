@@ -235,6 +235,19 @@ class SettingsTests(unittest.TestCase):
         settings = ProviderSettings.from_config({})
         self.assertEqual(settings.order[0], "tmdb")
         self.assertNotIn("offline", settings.enabled)
+        self.assertEqual(settings.order[-1], "offline")
+
+    def test_offline_provider_is_always_last_in_saved_order(self):
+        settings = ProviderSettings.from_config({
+            "providers": {
+                "order": ["offline", "omdb", "tmdb", "tvmaze", "anilist"],
+            },
+        })
+
+        self.assertEqual(
+            settings.order,
+            ("omdb", "tmdb", "tvmaze", "anilist", "offline"),
+        )
 
 
 if __name__ == "__main__":

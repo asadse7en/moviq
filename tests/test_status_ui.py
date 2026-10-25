@@ -1327,5 +1327,121 @@ class ErrorInspectionTests(unittest.TestCase):
         app.fix_selected.assert_not_called()
 
 
+class ProviderRowInteractionTests(unittest.TestCase):
+    def test_edited_key_debounces_automatic_check(self):
+        view = SettingsView.__new__(SettingsView)
+        settings = Mock()
+        settings.enabled = ("omdb",)
+        settings.with_key.return_value = settings
+        view.app = SimpleNamespace(
+            provider_settings=settings,
+            set_provider_settings=Mock(),
+        )
+        view._provider_key_vars = {
+            "omdb": Mock(get=Mock(return_value="updated-key")),
+        }
+        view._provider_status = {}
+        view._provider_key_check_after = {"omdb": "old-timer"}
+        view._provider_test_generation = {"omdb": 4}
+        view._set_provider_status = Mock()
+        view.after = Mock(return_value="new-timer")
+        view.after_cancel = Mock()
+        view._test_provider = Mock()
+
+        view._provider_key_edited("omdb")
+
+        view.after_cancel.assert_called_once_with("old-timer")
+        self.assertEqual(view._provider_test_generation["omdb"], 5)
+        self.assertEqual(view._provider_key_check_after["omdb"], "new-timer")
+        self.assertEqual(view.after.call_args.args[0], 800)
+        view.after.call_args.args[1]()
+        view._test_provider.assert_called_once_with("omdb")
+
+    def test_disabling_provider_sets_disabled_status(self):
+        settings = Mock()
+        settings.enabled = ("omdb",)
+        settings.with_enabled.return_value = "disabled-settings"
+        view = SimpleNamespace(
+            app=SimpleNamespace(
+                provider_settings=settings,
+                set_provider_settings=Mock(),
+            ),
+            _provider_enabled={"omdb": Mock(get=Mock(return_value=False))},
+            _provider_test_generation={"omdb": 3},
+            _set_provider_status=Mock(),
+        )
+
+        SettingsView._provider_toggled(view, "omdb")
+
+        view.app.set_provider_settings.assert_called_once_with(
+            "disabled-settings",
+        )
+        self.assertEqual(view._provider_test_generation["omdb"], 4)
+        view._set_provider_status.assert_called_once_with("omdb", "Disabled")
+
+    def test_manual_test_does_not_connect_disabled_provider(self):
+        view = SettingsView.__new__(SettingsView)
+        view.app = SimpleNamespace(
+            provider_settings=SimpleNamespace(enabled=()),
+        )
+        view._set_provider_status = Mock()
+        view._provider_test_job = Mock()
+        view._executor = Mock()
+
+        SettingsView._test_provider(view, "omdb")
+
+        view._set_provider_status.assert_called_once_with("omdb", "Disabled")
+        view._executor.submit.assert_not_called()
+
+    def test_drag_reorders_live_and_saves_when_released(self):
+        view = SettingsView.__new__(SettingsView)
+        view._provider_order = [
+            "tmdb", "tvmaze", "anilist", "omdb", "offline",
+        ]
+        view._provider_drag_name = "tvmaze"
+        view._provider_drag_original = tuple(view._provider_order)
+        view._provider_blocks = {
+            name: SimpleNamespace(
+                winfo_rooty=lambda y=y: y,
+                winfo_height=lambda: 20,
+            )
+            for name, y in (
+                ("tmdb", 0), ("tvmaze", 25), ("anilist", 50),
+                ("omdb", 75), ("offline", 100),
+            )
+        }
+        view.update_idletasks = Mock()
+        view._layout_providers = Mock()
+        view.app = SimpleNamespace(
+            provider_settings=Mock(),
+            set_provider_settings=Mock(),
+        )
+        view.app.provider_settings.with_order.return_value = "updated-settings"
+
+        view._provider_drag_motion("tvmaze", SimpleNamespace(y_root=66))
+
+        self.assertEqual(
+            view._provider_order,
+            ["tmdb", "anilist", "tvmaze", "omdb", "offline"],
+        )
+        self.assertEqual(view._provider_blocks["offline"].winfo_rooty(), 100)
+        view._provider_drag_end("tvmaze", None)
+        view.app.provider_settings.with_order.assert_called_once_with(
+            ["tmdb", "anilist", "tvmaze", "omdb", "offline"],
+        )
+        view.app.set_provider_settings.assert_called_once_with(
+            "updated-settings",
+        )
+
+    def test_offline_provider_cannot_start_drag(self):
+        view = SettingsView.__new__(SettingsView)
+        view._provider_drag_name = None
+
+        result = view._provider_drag_start("offline", None)
+
+        self.assertEqual(result, "break")
+        self.assertIsNone(view._provider_drag_name)
+
+
 if __name__ == "__main__":
     unittest.main()

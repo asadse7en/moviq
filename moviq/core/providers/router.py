@@ -62,6 +62,8 @@ class ProviderRouter:
         return provider
 
     def _usable(self, name, kind):
+        if name == "offline" and name not in self.settings.enabled:
+            return False
         if name in self._failed:
             return False
         provider = self._provider(name)
@@ -77,10 +79,11 @@ class ProviderRouter:
             if name != "offline" and name in self.settings.enabled
             and self._usable(name, kind)
         ]
-        has_general = any(name in GENERAL for name in names)
-        if "offline" in self.settings.enabled or not has_general:
-            if "offline" not in self._failed:
-                names.append("offline")
+        if (
+            "offline" in self.settings.enabled
+            and "offline" not in self._failed
+        ):
+            names.append("offline")
         return names
 
     def available(self, kind=None):

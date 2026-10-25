@@ -488,13 +488,15 @@ def apply_theme(app, mode):
         foreground=pal["header_muted"],
         background=pal["header_bg"],
     )
-    if hasattr(app, "provider_source_label"):
-        app.provider_source_label.configure(
-            background=pal["header_bg"],
-            foreground=(
-                "#777777" if mode == "dark" else pal["muted"]
-            ),
+    if hasattr(app, "source_control"):
+        app.filter_control_label.configure(
+            background=pal["header_bg"], foreground=pal["muted"],
         )
+        app.source_control_label.configure(
+            background=pal["header_bg"], foreground=pal["muted"],
+        )
+        app.source_control.set_palette(pal)
+        app.filter_control.set_palette(pal)
     style.configure("Section.TLabel", font="TkHeadingFont",
                     foreground=pal["accent"])
     style.configure("Muted.TLabel", foreground=pal["muted"])

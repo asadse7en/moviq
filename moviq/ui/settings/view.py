@@ -332,6 +332,7 @@ class SettingsView(
             highlightbackground=palette["preset_border"],
             highlightcolor=palette["preset_border"],
         )
+        wrap._moviq_focus_control = True
         entry_options = {
             "master": wrap,
             "textvariable": textvariable,
@@ -527,8 +528,13 @@ class SettingsView(
                         foreground=self.app.pal["muted"],
                     )
                 elif message[0] == "provider_status":
-                    _, name, text = message
-                    self._provider_status[name].set(text)
+                    _, name, generation, text = message
+                    if generation == self._provider_test_generation.get(name):
+                        self._set_provider_status(
+                            name,
+                            text if name in self.app.provider_settings.enabled
+                            else "Disabled",
+                        )
                 elif message[0] == "save_error":
                     self._set_key_status(
                         f"Couldn't save settings: {message[1]}",
@@ -546,6 +552,19 @@ class SettingsView(
         self.content_canvas.yview_moveto(0)
         self.after_idle(self._update_scroll_region)
 
+    def focus_provider_source(self, name):
+        self._show_section("Sources")
+
+        def focus():
+            field = "key" if name == "tmdb" else name
+            target = getattr(self, "_provider_key_entries", {}).get(field)
+            if target is None:
+                target = getattr(self, "_provider_test_buttons", {}).get(name)
+            if target is not None:
+                target.focus_set()
+
+        self.after_idle(focus)
+
     def recolor(self, palette):
         self._configure_settings_styles(palette)
         self.content_canvas.configure(background=palette["bg"])
@@ -554,18 +573,20 @@ class SettingsView(
         self._set_format_selector_theme(palette)
         self._set_library_selector_theme(palette)
         self._recolor_styled_entries(palette)
-        for row, number, label in self._provider_priority_rows.values():
-            row.configure(background=palette["preset_surface"])
-            number.configure(
+        for surface in self._provider_card_surfaces:
+            surface.configure(background=palette["preset_surface"])
+        for name, row in self._provider_rows.items():
+            row["number"].configure(
                 background=palette["preset_selected"],
                 foreground=palette["muted"],
             )
-            label.configure(
-                background=palette["preset_surface"],
-                foreground=palette["fg"],
+            row["handle"].itemconfigure(
+                "grip",
+                fill=(
+                    palette["preset_border"] if name == "offline"
+                    else palette["muted"]
+                ),
             )
-        for surface in self._provider_card_surfaces:
-            surface.configure(background=palette["preset_surface"])
         for eye in self._provider_key_eyes.values():
             eye.configure(background=palette["preset_surface"])
             eye.itemconfigure("eye", fill=palette["muted"])
@@ -573,10 +594,23 @@ class SettingsView(
                 "pupil", fill=palette["muted"], outline=palette["muted"],
             )
             eye.itemconfigure("slash", fill=palette["muted"])
+        for description, info in self._provider_descriptions:
+            description.configure(
+                background=palette["preset_surface"],
+                foreground=palette["muted"],
+            )
+            self._render_provider_description(description, info)
+        for dot in self._provider_status_dots.values():
+            dot.configure(background=palette["preset_surface"])
         for card in self._provider_blocks.values():
+            border = (
+                palette["accent"]
+                if card is self._provider_blocks.get(self._provider_drag_name)
+                else palette["preset_border"]
+            )
             card.configure(
-                highlightbackground=palette["preset_border"],
-                highlightcolor=palette["preset_border"],
+                highlightbackground=border,
+                highlightcolor=border,
             )
         for title in self._provider_card_titles:
             title.configure(
@@ -599,7 +633,6 @@ class SettingsView(
             for tag in ("tmdb_link", "api_link"):
                 text.tag_configure(tag, foreground=palette["accent"])
             text.tag_configure("bold", foreground=palette["muted"])
-        self.key_help_text.configure(background=palette["preset_surface"])
         for label, muted in self._labels:
             try:
                 label.configure(foreground=(
@@ -614,6 +647,8 @@ class SettingsView(
                 pass
         for name in self._provider_status:
             self._style_provider_status(name)
+        for name, enabled in self._provider_enabled.items():
+            self._set_provider_row_enabled(name, enabled.get())
         for kind in ("movie", "tv"):
             self._recolor_format_panel(kind, palette)
             self._refresh_preset_cards(kind)
@@ -641,6 +676,11 @@ class SettingsView(
         if self._saved_key_status_after is not None:
             try:
                 self.after_cancel(self._saved_key_status_after)
+            except tk.TclError:
+                pass
+        for after_id in getattr(self, "_provider_key_check_after", {}).values():
+            try:
+                self.after_cancel(after_id)
             except tk.TclError:
                 pass
         for variable, trace_id in getattr(self, "_preference_traces", ()):
