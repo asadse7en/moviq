@@ -216,7 +216,7 @@ def build_main_page(app, page):
         app.search_slot, app._search_changed, ui_scale=app.UI_SCALE,
         width=1,
     )
-    app.search_box.pack(anchor="w")
+    app.search_box.pack(anchor="center")
     app.search_slot.bind("<Configure>", app._resize_search_box, add="+")
     app.source_control = SegmentedPillControl(
         app.filter_row,

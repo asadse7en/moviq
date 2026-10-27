@@ -1284,7 +1284,9 @@ class SegmentedPillControl(tk.Canvas):
             left, right = positions[index], positions[index + 1]
             selected = value == self.selected
             hovered = index == self._hover_index and self.available[value]
-            segment_colors = self.segment_colors.get(value)
+            segment_colors = (
+                self.segment_colors.get(value) if selected else None
+            )
             if selected:
                 fill = (
                     segment_colors[1] if segment_colors
