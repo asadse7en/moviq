@@ -2,7 +2,7 @@
 from ..matching import _normalized_match_title
 from ..naming import fold_diacritics, similarity
 from ..tmdb import (
-    TMDB, TMDBAuthError, TMDBCancelled, TMDBError,
+    TMDB, TMDBAuthError, TMDBCancelled, TMDBError, TMDBNetworkError,
 )
 from . import ids
 from .anilist import AniListProvider
@@ -89,9 +89,9 @@ class ProviderRouter:
     def available(self, kind=None):
         kinds = (kind,) if kind else ("movie", "tv")
         return any(
-            name != "offline" and self.chain(k) and self.chain(k)[0] != "offline"
-            for k in kinds for name in self.chain(k)
-        ) or any(self.chain(k) for k in kinds)
+            any(name != "offline" for name in self.chain(k))
+            for k in kinds
+        )
 
     @property
     def signature(self):
@@ -131,23 +131,36 @@ class ProviderRouter:
 
     def _search(self, kind, method, query, year):
         names = self.chain(kind)
+        online_names = [name for name in names if name != "offline"]
+        offline_enabled = "offline" in names
         weak = None
         first_error = None
-        for name in names:
+        network_unavailable = False
+        online_search_succeeded = False
+        other_provider_error = False
+        for name in online_names:
             provider = self._provider(name)
             try:
                 results = getattr(provider, method)(query, year)
             except TMDBCancelled:
                 raise
+            except TMDBNetworkError as error:
+                self._note(error)
+                first_error = first_error or error
+                network_unavailable = True
+                continue
             except TMDBAuthError as error:
                 self._failed[name] = error
                 self._note(error)
                 first_error = first_error or error
+                other_provider_error = True
                 continue
             except TMDBError as error:
                 self._note(error)
                 first_error = first_error or error
+                other_provider_error = True
                 continue
+            online_search_succeeded = True
             tagged = [self._tag(name, result) for result in results or []]
             if not tagged:
                 continue
@@ -156,9 +169,24 @@ class ProviderRouter:
             weak = weak or tagged
         if weak is not None:
             return weak
+        if (
+            network_unavailable and not online_search_succeeded
+            and not other_provider_error
+            and offline_enabled
+        ):
+            provider = self._provider("offline")
+            return [
+                self._tag("offline", result)
+                for result in getattr(provider, method)(query, year) or []
+            ]
+        if (
+            network_unavailable and online_search_succeeded
+            and not other_provider_error
+        ):
+            return []
         if first_error is not None:
             raise first_error
-        if not names:
+        if not online_names:
             raise TMDBAuthError(
                 "No metadata provider is available. Add an API key or "
                 "enable a provider in Settings.",
@@ -208,7 +236,9 @@ class ProviderRouter:
     def check(self):
         return any(
             self._provider(name).check()
-            for name in self.chain("tv") + self.chain("movie")
+            for name in (
+                self.chain("tv") + self.chain("movie")
+            ) if name != "offline"
         )
 
     @staticmethod

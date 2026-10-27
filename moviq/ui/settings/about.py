@@ -22,16 +22,18 @@ class AboutTabMixin:
         with Image.open(resource("assets/moviq-icon.png")) as icon:
             icon = icon.resize((72, 72), Image.Resampling.LANCZOS)
             self.moviq_icon_image = ImageTk.PhotoImage(icon)
-        tk.Label(
+        self.about_icon_label = tk.Label(
             group,
             image=self.moviq_icon_image,
-            background=self.app.pal["card"],
+            background=self.app.pal["preset_surface"],
             borderwidth=0,
-        ).grid(row=0, column=0, sticky="w", pady=(5, 0))
+        )
+        self.about_icon_label.grid(row=1, column=0, sticky="w", pady=(0, 0))
+        self._settings_card_surfaces.append(self.about_icon_label)
         self._label(
             group, f"Moviq {APP_VERSION}",
-            font="TkHeadingFont",
-        ).grid(row=1, column=0, sticky="w", pady=5)
+            font="TkHeadingFont", style="Settings.Card.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=5)
         self.update_button = ttk.Button(
             group,
             text="Check for updates",
@@ -39,16 +41,17 @@ class AboutTabMixin:
             command=self._check_for_updates,
         )
         self.update_button.grid(
-            row=0, column=1, sticky="e", padx=12, pady=7,
+            row=1, column=1, sticky="e", padx=8, pady=7,
         )
         self.update_status_var = tk.StringVar(value="")
         self.update_status_label = self._label(
             group,
             textvariable=self.update_status_var,
             muted=True,
+            style="Settings.Card.TLabel",
         )
         self.update_status_label.grid(
-            row=1, column=1, sticky="e", padx=12, pady=4,
+            row=2, column=1, sticky="e", padx=8, pady=4,
         )
         self.download_update_button = ttk.Button(
             group,
@@ -57,11 +60,12 @@ class AboutTabMixin:
             command=lambda: webbrowser.open(self._update_release_url),
         )
         self.download_update_button.grid(
-            row=2, column=1, sticky="e", padx=12, pady=4,
+            row=3, column=1, sticky="e", padx=8, pady=4,
         )
         self.download_update_button.grid_remove()
-        links = ttk.Frame(group)
-        links.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        links = tk.Frame(group, background=self.app.pal["preset_surface"])
+        links.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 4))
+        self._settings_card_surfaces.append(links)
         self._link(links, "Release notes", RELEASES_URL).pack(side="left", padx=(0, 16))
         self._link(links, "Report a problem", ISSUES_URL).pack(side="left", padx=(0, 16))
         self._link(links, "Open-source licenses", LICENSE_URL).pack(side="left")
@@ -70,11 +74,12 @@ class AboutTabMixin:
             cache_group,
             "Clear cached provider responses when testing with fresh data.",
             muted=True,
-        ).grid(row=0, column=0, sticky="w", padx=(0, 16), pady=4)
+            style="Settings.Card.TLabel",
+        ).grid(row=1, column=0, sticky="w", padx=(0, 12), pady=4)
         ttk.Button(
             cache_group, text="Clear cache",
             style="Settings.TButton", command=self._clear_tmdb_cache,
-        ).grid(row=0, column=1, sticky="e", pady=4)
+        ).grid(row=1, column=1, sticky="e", pady=4)
 
     def _clear_tmdb_cache(self):
         try:

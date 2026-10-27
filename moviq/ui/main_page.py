@@ -5,10 +5,15 @@ from PIL import Image, ImageTk
 
 from .. import resource
 from ..core.providers.settings import PROVIDER_INFO
+from .design import TABLE_METRICS
+from .file_table import FileTable
+from .icons import draw_icon
 from .controls import (
     RoundedButton, SearchBox, SegmentedModeToggle, SegmentedPillControl,
     ToolbarIconGroup, ToolTip,
 )
+
+HEADER_SEPARATOR_MARGIN = 10
 
 MAIN_SHORTCUTS = {
     "<Control-a>": "select_all",
@@ -22,11 +27,13 @@ MAIN_SHORTCUTS = {
 }
 
 def build_main_page(app, page):
+    separator_margin = round(HEADER_SEPARATOR_MARGIN * app.UI_SCALE)
     app.match_btn_var = tk.StringVar(value="Auto Match")
     app.manual_match_btn_var = tk.StringVar(value="Manual Match")
     app.apply_btn_var = tk.StringVar(value="Rename All")
     head = ttk.Frame(page, style="Header.TFrame")
-    head.pack(fill="x", pady=(2, 12))
+    head.pack(fill="x", pady=(2, 8))
+    head.columnconfigure(2, weight=1)
     logo = tk.Canvas(
         head, width=round(40 * app.UI_SCALE),
         height=round(40 * app.UI_SCALE),
@@ -35,7 +42,7 @@ def build_main_page(app, page):
     )
     logo.ui_scale = app.UI_SCALE
     app.logo_canvas = logo
-    logo.pack(side="left")
+    logo.grid(row=0, column=0, sticky="w")
     logo_size = round(40 * app.UI_SCALE)
     with Image.open(resource("assets/moviq-icon.png")) as icon:
         resized_icon = icon.resize(
@@ -47,71 +54,95 @@ def build_main_page(app, page):
         image=app.logo_image,
     )
     titles = ttk.Frame(head, style="Header.TFrame")
-    titles.pack(side="left", padx=(12, 0), pady=1)
+    titles.grid(row=0, column=1, sticky="w", padx=(8, 20))
     ttk.Label(titles, text="Moviq",
               style="Title.TLabel").pack(anchor="w")
-    ttk.Label(titles, style="HeaderSubtitle.TLabel",
-              text="Match, review, and organize your media files."
-              ).pack(anchor="w", pady=(2, 0))
-    header_actions = ttk.Frame(head, style="Header.TFrame")
-    header_actions.pack(side="right", padx=(12, 0))
-    app.rename_all_button = RoundedButton(
-        header_actions,
-        app.apply_btn_var, app.apply, font="TkHeadingFont",
-        ui_scale=app.UI_SCALE,
-        bold=True, variant="accent", padx=18, pady=9, radius=6,
-        background=app.pal["header_bg"],
-    )
-    app.rename_all_button.pack()
-    ttk.Separator(
-        page, orient="horizontal", style="HeaderDivider.TSeparator",
-    ).pack(fill="x", pady=(0, 10))
-
-    bar = ttk.Frame(page, style="Toolbar.TFrame")
-    bar.pack(fill="x", pady=(0, 8))
-    bar.columnconfigure(0, weight=1)
-    left_controls = ttk.Frame(bar, style="Toolbar.TFrame")
-    left_controls.grid(row=0, column=0, sticky="w")
+    ttk.Label(
+        titles, text="Match, review, and organize.",
+        style="HeaderSubtitle.TLabel",
+    ).pack(anchor="w")
     app.add_files_button = RoundedButton(
-        left_controls, tk.StringVar(value="Add files"), app.add_files,
+        head, tk.StringVar(value="Add files"), app.add_files,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
-    app.add_files_button.pack(side="left", padx=(0, 6))
+    app.add_files_button.set_leading_icon("file-plus")
+    app.add_files_button.grid(row=0, column=3, sticky="w", padx=(0, 8))
     app.add_folder_button = RoundedButton(
-        left_controls, tk.StringVar(value="Add folder"), app.add_folder,
+        head, tk.StringVar(value="Add folder"), app.add_folder,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
-    app.add_folder_button.pack(side="left", padx=(0, 8))
+    app.add_folder_button.set_leading_icon("folder-plus")
+    app.add_folder_button.grid(row=0, column=4, sticky="w", padx=(0, 8))
+    app.header_mode_separator = tk.Frame(
+        head, width=max(1, round(1 * app.UI_SCALE)),
+        height=round(26 * app.UI_SCALE),
+        background=app.pal["header_separator"],
+        highlightthickness=0, bd=0,
+    )
+    app.header_mode_separator.grid(
+        row=0, column=5, sticky="ns",
+        padx=(separator_margin, separator_margin),
+    )
     app.media_mode_selector = SegmentedModeToggle(
-        left_controls,
+        head,
         app.media_mode.get(),
         app.switch_media_mode,
         font="TkDefaultFont",
         background=app.pal["header_bg"],
         ui_scale=app.UI_SCALE,
     )
-    app.media_mode_selector.pack(side="left")
+    app.media_mode_selector.grid(row=0, column=6, sticky="w", padx=(0, 8))
     app.update_media_mode_selector()
 
-    match_actions = ttk.Frame(bar, style="Toolbar.TFrame")
+    app.header_match_separator = tk.Frame(
+        head, width=max(1, round(1 * app.UI_SCALE)),
+        height=round(26 * app.UI_SCALE),
+        background=app.pal["header_separator"],
+        highlightthickness=0, bd=0,
+    )
+    app.header_match_separator.grid(
+        row=0, column=7, sticky="ns",
+        padx=(separator_margin, separator_margin),
+    )
+    match_actions = ttk.Frame(head, style="Toolbar.TFrame")
     app.match_actions = match_actions
-    match_actions.grid(row=0, column=1, sticky="e")
+    match_actions.grid(row=0, column=8, sticky="e", padx=(0, 8))
     app.auto_match_button = RoundedButton(
         match_actions, app.match_btn_var, app.match_run,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
-    app.auto_match_button.pack(side="left", padx=(0, 6))
+    app.auto_match_button.pack(side="left", padx=(0, 8))
     app.manual_match_button = RoundedButton(
         match_actions, app.manual_match_btn_var, app.match_manually,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
     app.manual_match_button.pack(side="left")
+    app.rename_all_button = RoundedButton(
+        head,
+        app.apply_btn_var, app.apply, font="TkHeadingFont",
+        ui_scale=app.UI_SCALE,
+        bold=True, variant="accent", padx=18, pady=9, radius=6,
+        background=app.pal["header_bg"],
+    )
+    app.rename_all_button.grid(
+        row=0, column=9, sticky="e", padx=(0, 12),
+    )
+    app.header_icon_separator = tk.Frame(
+        head, width=max(1, round(1 * app.UI_SCALE)),
+        height=round(26 * app.UI_SCALE),
+        background=app.pal["header_separator"],
+        highlightthickness=0, bd=0,
+    )
+    app.header_icon_separator.grid(
+        row=0, column=10, sticky="ns",
+        padx=(separator_margin, separator_margin),
+    )
     app.toolbar_icon_group = ToolbarIconGroup(
-        match_actions,
+        head,
         (
             ("undo", "undo", app.undo, "Undo"),
             ("clear", "trash", app.clear, "Clear all files"),
@@ -121,9 +152,7 @@ def build_main_page(app, page):
         ),
         ui_scale=app.UI_SCALE,
     )
-    app.toolbar_icon_group.pack(
-        side="left", padx=(round(24 * app.UI_SCALE), 0),
-    )
+    app.toolbar_icon_group.grid(row=0, column=11, sticky="e")
     app.icon_group_tooltip = ToolTip(
         app.toolbar_icon_group, "Undo", app.pal["card"], app.pal["fg"],
     )
@@ -144,13 +173,18 @@ def build_main_page(app, page):
     ):
         tooltip = ToolTip(widget, text, app.pal["card"], app.pal["fg"])
 
+    ttk.Separator(
+        page, orient="horizontal", style="HeaderDivider.TSeparator",
+    ).pack(fill="x")
+
     app.filter_row = ttk.Frame(page, style="Toolbar.TFrame")
-    app.filter_row.pack(fill="x", pady=(6, 12))
+    app.filter_row.pack(fill="x", pady=(14, 14))
     app.filter_vars = {
         key: tk.StringVar(value=f"{label} 0")
         for key, label in (
             ("all", "All"), ("ready", "Ready"),
-            ("review", "Review"), ("done", "Done"),
+            ("review", "Review"), ("error", "Error"),
+            ("done", "Done"),
         )
     }
     app.filter_control = SegmentedPillControl(
@@ -159,14 +193,28 @@ def build_main_page(app, page):
         labels=tuple(variable.get() for variable in app.filter_vars.values()),
         values=tuple(app.filter_vars),
     )
-    app.filter_control.pack(side="left")
-    app.search_slot = ttk.Frame(app.filter_row, style="Toolbar.TFrame")
-    app.search_slot.pack(
-        side="left", fill="x", expand=True,
-        padx=(round(24 * app.UI_SCALE), 0),
+    filter_count_width = sum(
+        app.filter_control.font.measure(f"{label} 000000")
+        + 2 * app.filter_control.horizontal_padding * app.UI_SCALE
+        for label in ("All", "Ready", "Review", "Error", "Done")
+    ) + 2
+    app.filter_row.columnconfigure(
+        0, minsize=round(filter_count_width),
     )
+    app.filter_row.columnconfigure(1, weight=1, minsize=0)
+    app.filter_row.columnconfigure(2, weight=0)
+    app.filter_row.columnconfigure(3, weight=0)
+    app.filter_row.columnconfigure(4, weight=0)
+    app.filter_control.grid(row=0, column=0, sticky="w")
+    app.search_slot = ttk.Frame(app.filter_row, style="Toolbar.TFrame")
+    app.search_slot.grid(
+        row=0, column=1, sticky="ew",
+        padx=(round(20 * app.UI_SCALE), 0),
+    )
+    app.search_slot.grid_propagate(False)
     app.search_box = SearchBox(
         app.search_slot, app._search_changed, ui_scale=app.UI_SCALE,
+        width=1,
     )
     app.search_box.pack(anchor="w")
     app.search_slot.bind("<Configure>", app._resize_search_box, add="+")
@@ -176,34 +224,37 @@ def build_main_page(app, page):
         app.select_source,
         ui_scale=app.UI_SCALE,
     )
-    app.source_control.pack(side="right", padx=(8, 0))
+    app.source_control.grid(
+        row=0, column=3, sticky="e", padx=(8, 0),
+    )
     app.source_control_label = tk.Label(
         app.filter_row, text="Source", font="TkDefaultFont",
         background=app.pal["header_bg"], foreground=app.pal["muted"],
     )
-    app.source_control_label.pack(side="right", padx=(0, 7))
+    app.source_control_label.grid(
+        row=0, column=2, sticky="e", padx=(12, 7),
+    )
     app.search_box.set_palette(app.pal)
     app.source_control.set_palette(app.pal)
     app.refresh_source_control()
     app.key_var.trace_add(
         "write", lambda *_args: app.refresh_source_control(),
     )
-    app.reset_columns_button = ttk.Button(
-        app.filter_row, text="Reset columns",
-        command=app._reset_table_widths,
-        style="ResetColumns.TButton",
-    )
-    app.reset_columns_button.pack(side="right")
-    app.reset_columns_button.pack_forget()
     app.root.bind("<Configure>", app._update_toolbar_responsive, add="+")
 
     # Bottom bars are packed BEFORE the list so they are never pushed
     # out of view when the window is small.
-    sb = ttk.Frame(page)
+    sb = ttk.Frame(page, height=round(32 * app.UI_SCALE))
     sb.pack(side="bottom", fill="x", pady=(2, 0))
+    sb.pack_propagate(False)
     app.status_var = tk.StringVar(value="Ready.")
     ttk.Label(sb, textvariable=app.status_var, style="Muted.TLabel"
-              ).pack(side="left")
+              ).pack(side="left", fill="y")
+    app.summary_var = tk.StringVar(value="")
+    app.summary_label = ttk.Label(
+        sb, textvariable=app.summary_var, style="Muted.TLabel",
+        anchor="e",
+    )
 
     app.detail_var = tk.StringVar(value="")
     ttk.Label(
@@ -215,50 +266,58 @@ def build_main_page(app, page):
     frame.pack(fill="both", expand=True)
     table_content = ttk.Frame(frame, style="TableContent.TFrame")
     table_content.pack(fill="both", expand=True)
-    cols = ("status", "new")
-    app.tree = ttk.Treeview(table_content, columns=cols, show=("tree", "headings"),
-                             selectmode="extended")
-    app.status_column_width = app._status_column_width()
-    app.table_min_widths = {
-        "#0": 178, "status": app.status_column_width, "new": 150,
-    }
-    app._table_widths = {"#0": 240, "status": 100, "new": 150}
-    app._table_columns_initialized = False
-    app._table_columns_customized = False
-    app.tree.heading(
-        "#0", text="\u2610  Original name", anchor="w",
+    cols = ("status", "new", "source")
+    app.tree = FileTable(
+        table_content, columns=cols, displaycolumns=cols,
+        selectmode="extended", ui_scale=app.UI_SCALE, palette=app.pal,
     )
-    app.tree.column("#0", width=240, minwidth=178, anchor="w",
-                     stretch=False)
-    app._table_widths["status"] = app.status_column_width
-    for c, text, w, anc in (("status", "Status", app.status_column_width, "w"),
-                            ("new", "New Name", 150, "w")):
-        app.tree.heading(c, text=text, anchor=anc)
+    app.status_column_width = round(
+        TABLE_METRICS["status_width"] * app.UI_SCALE,
+    )
+    app.source_column_width = round(
+        TABLE_METRICS["source_width"] * app.UI_SCALE,
+    )
+    app.table_name_min_width = round(
+        TABLE_METRICS["name_min_width"] * app.UI_SCALE,
+    )
+    app.table_min_widths = {
+        "#0": app.table_name_min_width,
+        "status": app.status_column_width,
+        "new": app.table_name_min_width,
+        "source": app.source_column_width,
+    }
+    app.tree.heading("#0", text="Original name", anchor="w")
+    app.tree.column(
+        "#0", width=app.table_name_min_width, minwidth=app.table_name_min_width,
+        anchor="w", stretch=True,
+    )
+    for column, text, width in (
+        ("status", "Status", app.status_column_width),
+        ("new", "New name", app.table_name_min_width),
+        ("source", "Source", app.source_column_width),
+    ):
+        app.tree.heading(column, text=text, anchor="w")
         app.tree.column(
-            c, width=w, minwidth=app.table_min_widths[c],
-            anchor=anc, stretch=False,
+            column, width=width, minwidth=app.table_min_widths[column],
+            anchor="w",
+            stretch=column == "new",
         )
     app.tree.grid(row=0, column=0, sticky="nsew")
     table_content.rowconfigure(0, weight=1)
     table_content.columnconfigure(0, weight=1)
     app.tree.bind("<Configure>", app.fit_table_columns, add="+")
-    app.tree.bind("<Configure>", app._schedule_status_cells, add="+")
     app.tree.bind(
         "<ButtonPress-1>", app._hide_tree_tooltip, add="+",
     )
-    app.tree.bind("<ButtonPress-1>", app._begin_table_resize, add="+")
-    app.tree.bind(
-        "<ButtonRelease-1>",
-        lambda _event: app.root.after_idle(app._finish_table_resize),
-        add="+",
-    )
+    app.tree.bind("<<TableScroll>>", app._hide_tree_tooltip, add="+")
+    for sequence in ("<Button-1>", "<B1-Motion>", "<Double-Button-1>"):
+        app.tree.bind(sequence, app._ignore_column_separator, add="+")
     app.tree.bind("<Motion>", app.on_tree_hover, add="+")
     app.tree.bind("<Leave>", app.clear_tree_hover, add="+")
     app.tree.bind("<MouseWheel>", app.on_mousewheel, add="+")
     app.tree.bind("<Button-4>", lambda _event: app.scroll_rows(-1), add="+")
     app.tree.bind("<Button-5>", lambda _event: app.scroll_rows(1), add="+")
     app.tree.bind("<KeyPress>", app._hide_tooltip_on_scroll_key, add="+")
-    app._status_cell_labels = {}
     app.empty_state = ttk.Frame(
         table_content, style="EmptyState.TFrame", padding=(24, 18),
     )
@@ -267,23 +326,8 @@ def build_main_page(app, page):
         bg=app.pal["card"], highlightthickness=0,
     )
     app.empty_icon.pack(pady=(0, 10))
-    app.empty_icon.create_line(
-        10, 17, 10, 12, 30, 12, 37, 19, 53, 19, 53, 41,
-        10, 41, 10, 17,
-        fill=app.pal["muted"], width=3, capstyle="round",
-        joinstyle="round",
-    )
-    app.empty_icon.create_oval(
-        38, 30, 58, 50, fill=app.pal["card"],
-        outline=app.pal["accent"], width=2,
-    )
-    app.empty_icon.create_line(
-        48, 34, 48, 46, fill=app.pal["accent"], width=2,
-        capstyle="round",
-    )
-    app.empty_icon.create_line(
-        42, 40, 54, 40, fill=app.pal["accent"], width=2,
-        capstyle="round",
+    draw_icon(
+        app.empty_icon, "folder-plus", 36, app.pal["accent"], (32, 27),
     )
     app.empty_title_var = tk.StringVar(value="No files added yet")
     ttk.Label(
@@ -342,7 +386,3 @@ def build_main_page(app, page):
     app.menu.add_command(label="Apply to selected now", command=app.apply)
     app.menu.add_separator()
     app.menu.add_command(label="Remove from list", command=app.remove_selected)
-    app.column_menu = tk.Menu(app.root, tearoff=0)
-    app.column_menu.add_command(
-        label="Reset column widths", command=app._reset_table_widths,
-    )

@@ -14,6 +14,7 @@ from ...core.show_resolver import ShowState
 from ...core.providers.ids import display_id, parse_typed_id
 from ...core.tmdb import MAX_WORKERS, TMDBOperationCache
 from ..popups import apply_titlebar_theme, set_window_icon
+from ..icons import draw_icon
 from ._common import ID_RE, _match_dialog_sizes
 from .details_panel import DetailsPanelMixin
 from .poster_loader import PosterLoaderMixin
@@ -242,18 +243,8 @@ class SearchDialog(
             takefocus=True,
         )
         self.search_icon.pack(side="right", padx=(4, 11), pady=7)
-        self.search_icon.create_oval(
-            2, 2, 10, 10,
-            outline=palette["muted"],
-            width=1.6,
-            tags=("icon",),
-        )
-        self.search_icon.create_line(
-            8, 8, 15, 15,
-            fill=palette["muted"],
-            width=1.6,
-            capstyle="round",
-            tags=("icon",),
+        draw_icon(
+            self.search_icon, "search", 18, palette["muted"], (9, 9),
         )
         self.search_icon.bind("<Button-1>", self._submit_search)
         self.search_icon.bind("<Return>", self._submit_search)
@@ -490,7 +481,9 @@ class SearchDialog(
         palette = self.app.pal
         is_primary = role == "primary"
         background = palette["accent"] if is_primary else palette["btn"]
-        foreground = "#ffffff" if is_primary else palette["muted"]
+        foreground = (
+            palette["accent_text"] if is_primary else palette["fg"]
+        )
         hover_background = (
             palette["accent_hi"] if is_primary else palette["btn_hi"]
         )
@@ -534,7 +527,7 @@ class SearchDialog(
         self.update_button.configure(
             state="normal" if enabled else "disabled",
             bg=palette["accent"] if enabled else palette["btn"],
-            fg="#ffffff" if enabled else palette["muted"],
+            fg=palette["accent_text"] if enabled else palette["muted"],
             disabledforeground=palette["muted"],
             cursor="hand2" if enabled else "arrow",
         )

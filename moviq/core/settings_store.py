@@ -139,6 +139,11 @@ class SettingsStore:
                     )
         merged = dict(self.defaults)
         merged.update(config)
+        provider_keys = config.get("provider_keys")
+        if isinstance(provider_keys, dict) and isinstance(
+            provider_keys.get("tmdb"), str,
+        ):
+            merged["key"] = provider_keys["tmdb"]
         cache_setting_keys = [
             key for key in merged
             if "cache" in str(key).casefold()
@@ -186,6 +191,7 @@ class SettingsStore:
             if not isinstance(merged.get(key), str):
                 merged[key] = self.defaults[key]
         formatting_migrated = _migrate_formatting_settings(merged, config)
+        provider_keys_migrated = "key" in config
         if merged.get("media_mode") not in ("movie", "tv"):
             merged["media_mode"] = self.defaults["media_mode"]
         if merged.get("window_state") not in ("normal", "zoomed"):
@@ -194,6 +200,7 @@ class SettingsStore:
             (source == self.legacy_path and config)
             or removed_setting_found
             or formatting_migrated
+            or provider_keys_migrated
         ):
             self.data = merged
             self._schedule_save()
@@ -233,6 +240,12 @@ class SettingsStore:
 
     def _persistable_data(self):
         data = dict(self.data)
+        provider_keys = data.get("provider_keys")
+        provider_keys = (
+            dict(provider_keys) if isinstance(provider_keys, dict) else {}
+        )
+        provider_keys["tmdb"] = data.pop("key", "")
+        data["provider_keys"] = provider_keys
         for key in tuple(data):
             if "cache" in str(key).casefold():
                 data.pop(key, None)

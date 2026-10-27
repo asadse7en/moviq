@@ -2,34 +2,114 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from ..controls import SegmentedModeToggle
+from ..controls import RoundedCard, SegmentedModeToggle
 from ._common import check_tmdb_key
 
 
 class SettingsSupportMixin:
     def _build_safety(self, frame):
         self._section_header(
-            frame, "Files & Safety", "Choose how file changes are confirmed and recorded.",
+            frame, "Files & Safety",
+            "Choose how matching and file changes are handled.",
+            bottom_pad=22,
         )
-        group = self._group(frame, "File operations")
-        for index, (title, key, description) in enumerate((
-            ("Confirm before renaming", "confirm_apply", "Ask before applying planned file changes."),
-            ("Put each movie in its own folder", "movie_folder", "Create a separate folder for every movie."),
-            ("Rename subtitles with the video", "rename_subtitles", "Keep attached subtitle names in sync with the video."),
+        self._safety_surfaces = []
+        self._safety_labels = []
+        cards = tk.Frame(frame, background=self.app.pal["header_bg"])
+        self._safety_surfaces.append((cards, "page"))
+        cards.pack(fill="x", pady=(0, 12))
+        cards.columnconfigure(0, weight=1, uniform="safety_cards")
+        cards.columnconfigure(1, weight=1, uniform="safety_cards")
+
+        matching_card = self._safety_card(cards, "Automatic matching")
+        matching_card.grid(
+            row=0, column=0, sticky="nsew", padx=(0, 6),
+        )
+        matching_content = matching_card.content
+        self._safety_setting_row(
+            matching_content, 1, "Auto-match new files",
+            "Match files as soon as they are added.",
+            self.vars["auto_match"],
+        )
+        self._safety_divider(matching_content, 3)
+        self._safety_text(
+            matching_content, "Match confidence threshold",
+            foreground="normal", font=("TkDefaultFont", 10, "bold"),
+        ).grid(
+            row=4, column=0, sticky="w", padx=(10, 8), pady=(8, 5),
+        )
+        self.threshold_label_var = tk.StringVar()
+        self._safety_text(
+            matching_content, textvariable=self.threshold_label_var,
+            foreground="accent", font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=4, column=1, sticky="e", padx=(8, 10), pady=(8, 5))
+        scale_wrap = tk.Frame(
+            matching_content, background=self.app.pal["preset_surface"],
+        )
+        self._safety_surfaces.append((scale_wrap, "card"))
+        scale_wrap.grid(
+            row=5, column=0, columnspan=2, sticky="ew",
+            padx=10, pady=(0, 2),
+        )
+        scale_wrap.columnconfigure(0, weight=1)
+        scale = ttk.Scale(
+            scale_wrap, from_=50, to=100, variable=self.vars["threshold"],
+            command=self._threshold_moved, length=300,
+            style="Moviq.Horizontal.TScale",
+        )
+        scale.grid(row=0, column=0, sticky="ew")
+        self.threshold_hint_var = tk.StringVar()
+        self._safety_text(
+            matching_content, textvariable=self.threshold_hint_var,
+            foreground="muted",
+        ).grid(
+            row=6, column=0, columnspan=2, sticky="w",
+            padx=10, pady=(0, 12),
+        )
+        self.vars["threshold"].trace_add(
+            "write", lambda *_args: self._update_threshold_hint(),
+        )
+        self._update_threshold_hint()
+
+        operations_card = self._safety_card(cards, "File operations")
+        operations_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        operations_content = operations_card.content
+        for index, (title, description, key) in enumerate((
+            (
+                "Confirm before renaming",
+                "Review planned changes before applying.",
+                "confirm_apply",
+            ),
+            (
+                "Put each movie in its own folder",
+                "Keep each movie in a separate folder.",
+                "movie_folder",
+            ),
+            (
+                "Rename subtitles with the video",
+                "Keep attached subtitle names in sync.",
+                "rename_subtitles",
+            ),
         )):
-            self._row(
-                group, index * 2, title,
-                self._switch(group, self.vars[key]), description,
+            row = 1 + index * 3
+            self._safety_setting_row(
+                operations_content, row, title, description, self.vars[key],
             )
-        library_group = self._group(frame, "Library destination")
-        library_group.columnconfigure(0, weight=1)
-        self._label(
-            library_group,
+            if index < 2:
+                self._safety_divider(operations_content, row + 2)
+
+        library_card = self._safety_card(frame, "Library destination")
+        self.library_card = library_card
+        library_card.pack(fill="x", pady=(0, 14))
+        library_content = library_card.content
+        library_content.columnconfigure(0, weight=1)
+        self._safety_text(
+            library_content,
             "Choose where renamed files should go.",
-            font="TkHeadingFont",
-        ).grid(row=0, column=0, sticky="w", pady=(0, 2))
+            foreground="muted",
+        ).grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
         self.library_selector = SegmentedModeToggle(
-            library_group,
+            library_content,
             self.vars["library_mode"].get(),
             self._select_library_mode,
             ui_scale=self.app.UI_SCALE,
@@ -37,27 +117,32 @@ class SettingsSupportMixin:
             values=("in_place", "library"),
         )
         self.library_selector.grid(
-            row=0, column=1, rowspan=2, sticky="e", padx=(16, 0),
+            row=0, column=1, rowspan=2, sticky="e",
+            padx=(16, 10), pady=(8, 0),
         )
-        self.library_mode_hint = self._label(
-            library_group,
+        self.library_mode_hint = self._safety_text(
+            library_content,
             "Files stay in their current folders.",
-            muted=True,
+            foreground="muted",
         )
-        self.library_mode_hint.grid(row=1, column=0, sticky="w")
-        ttk.Separator(library_group).grid(
-            row=2, column=0, columnspan=2, sticky="ew", pady=(12, 8),
+        self.library_mode_hint.grid(
+            row=2, column=0, sticky="w", padx=10, pady=(0, 10),
         )
-        self.library_paths_frame = ttk.Frame(library_group)
+        self._safety_divider(library_content, 3)
+        self.library_paths_frame = tk.Frame(
+            library_content, background=self.app.pal["preset_surface"],
+        )
+        self._safety_surfaces.append((self.library_paths_frame, "card"))
         self.library_paths_frame.grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(2, 4),
+            row=4, column=0, columnspan=2, sticky="ew",
+            padx=10, pady=(8, 10),
         )
         self.library_paths_frame.columnconfigure(1, weight=1)
-        self._label(
+        self._safety_text(
             self.library_paths_frame,
             "Library folders",
-            font="TkHeadingFont",
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
+            foreground="normal", font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
         self._library_path_row(
             self.library_paths_frame, 1, "Movies folder",
             self.vars["movies_library"], "movies_library",
@@ -72,19 +157,96 @@ class SettingsSupportMixin:
         self._set_library_selector_theme(self.app.pal)
         self._show_library_paths()
 
+    def _safety_card(self, parent, title):
+        palette = self.app.pal
+        card = RoundedCard(
+            parent, palette["header_bg"], palette["preset_surface"],
+            palette["preset_border"],
+        )
+        self._safety_surfaces.append((card, "rounded_card"))
+        card.content.columnconfigure(0, weight=1)
+        self._safety_text(
+            card.content, title, foreground="normal",
+            font=("TkDefaultFont", 11, "bold"),
+        ).grid(
+            row=0, column=0, columnspan=2, sticky="w",
+            padx=10, pady=(10, 6),
+        )
+        return card
+
+    def _safety_text(self, parent, text="", foreground="normal", **kwargs):
+        palette = self.app.pal
+        font = kwargs.pop("font", "TkDefaultFont")
+        label = tk.Label(
+            parent, text=text, anchor="w",
+            background=palette["preset_surface"],
+            foreground=(
+                palette["fg"] if foreground == "normal"
+                else palette["muted"] if foreground == "muted"
+                else palette["accent"]
+            ),
+            font=font, **kwargs,
+        )
+        self._safety_labels.append((label, foreground))
+        return label
+
+    def _safety_setting_row(self, card, row, title, description, variable):
+        self._safety_text(
+            card, title, foreground="normal",
+            font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=row, column=0, sticky="w", padx=(10, 8), pady=(9, 1))
+        self._safety_text(
+            card, description, foreground="muted",
+        ).grid(row=row + 1, column=0, sticky="w", padx=(10, 8), pady=(0, 9))
+        self._switch(
+            card, variable, style="Settings.Safety.Switch.TCheckbutton",
+        ).grid(row=row, column=1, rowspan=2, sticky="e", padx=(8, 10), pady=9)
+
+    def _safety_divider(self, parent, row, columnspan=2):
+        divider = tk.Frame(
+            parent, height=1, background=self.app.pal["preset_border"],
+        )
+        self._safety_surfaces.append((divider, "divider"))
+        divider.grid(
+            row=row, column=0, columnspan=columnspan, sticky="ew",
+            padx=18,
+        )
+
+    def _threshold_moved(self, value):
+        snapped = min(100, max(50, int(round(float(value) / 5) * 5)))
+        if self.vars["threshold"].get() != snapped:
+            self.vars["threshold"].set(snapped)
+
+    def _update_threshold_hint(self):
+        threshold = min(
+            100,
+            max(50, int(round(self.vars["threshold"].get() / 5) * 5)),
+        )
+        if self.vars["threshold"].get() != threshold:
+            self.vars["threshold"].set(threshold)
+        self.threshold_label_var.set(f"{threshold}%")
+        if threshold >= 90:
+            hint = "Strict: fewer matches are accepted automatically."
+        elif threshold >= 75:
+            hint = "Balanced: uncertain matches go to review."
+        else:
+            hint = "Lenient: more matches are accepted automatically."
+        self.threshold_hint_var.set(hint)
+
     def _select_library_mode(self, mode):
         self.vars["library_mode"].set(mode)
 
     def _set_library_selector_theme(self, palette):
         self.library_selector.set_theme(
-            background=palette["header_bg"],
-            track=palette["header_bg"],
-            border=palette["header_accent"],
-            active=palette["header_accent"],
+            background=palette["preset_surface"],
+            track=palette["switch_track"],
+            border=palette["switch_border"],
+            active=palette["switch_active"],
             foreground=palette["fg"],
             muted=palette["header_muted"],
-            accent_foreground=palette["accent_text"],
-            canvas_background=palette["header_bg"],
+            accent_foreground=palette["header_accent"],
+            canvas_background=palette["preset_surface"],
+            active_border=palette["header_accent"],
         )
         self.library_selector.set_mode(
             self.vars["library_mode"].get(), animate=False,
@@ -96,18 +258,21 @@ class SettingsSupportMixin:
         self._show_library_paths()
 
     def _library_path_row(self, parent, row, label, variable, setting):
-        self._label(parent, label).grid(
-            row=row, column=0, sticky="w", padx=(0, 12), pady=4,
+        self._safety_text(
+            parent, label, foreground="muted",
+        ).grid(
+            row=row, column=0, sticky="w", padx=(0, 12), pady=5,
         )
         ttk.Entry(
             parent, textvariable=variable, state="readonly",
-        ).grid(row=row, column=1, sticky="ew", pady=4)
+            style="Settings.Safety.TEntry",
+        ).grid(row=row, column=1, sticky="ew", pady=5)
         ttk.Button(
             parent, text="Browse", style="Settings.TButton",
             command=lambda var=variable, key=setting: self._browse_library(
                 var, key,
             ),
-        ).grid(row=row, column=2, sticky="e", padx=(8, 0), pady=4)
+        ).grid(row=row, column=2, sticky="e", padx=(8, 0), pady=5)
 
     def _browse_library(self, variable, setting):
         initialdir = variable.get().strip() or str(Path.home())
@@ -132,6 +297,30 @@ class SettingsSupportMixin:
                 text="Files stay in their current folders.",
             )
             self.library_paths_frame.grid_remove()
+        self.library_card.after_idle(self.library_card._fit_height)
+
+    def recolor_safety(self, palette):
+        for widget, role in getattr(self, "_safety_surfaces", ()):
+            if role == "divider":
+                widget.configure(background=palette["preset_border"])
+            elif role == "page":
+                widget.configure(background=palette["header_bg"])
+            elif role == "rounded_card":
+                widget.set_surface(
+                    palette["header_bg"], palette["preset_surface"],
+                    palette["preset_border"],
+                )
+            else:
+                widget.configure(background=palette["preset_surface"])
+        for label, foreground in getattr(self, "_safety_labels", ()):
+            label.configure(
+                background=palette["preset_surface"],
+                foreground=(
+                    palette["fg"] if foreground == "normal"
+                    else palette["muted"] if foreground == "muted"
+                    else palette["accent"]
+                ),
+            )
 
     def _set_key_status(self, status):
         status_colors = self.app.pal.get("status_colors", {})

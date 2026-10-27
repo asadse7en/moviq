@@ -3,8 +3,9 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 
-from .popups import set_window_icon
 from .table_tooltip import TableTooltip
+from .icons import draw_icon
+from .window_utils import set_window_icon
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -12,6 +13,17 @@ try:
 except ImportError:
     Image = ImageDraw = ImageTk = None
     HAVE_PIL = False
+
+ICON_ASSETS = {
+    "light": "sun",
+    "dark": "moon",
+    "system": "monitor",
+    "settings": "settings",
+    "undo": "undo-2",
+    "trash": "trash-2",
+    "file-plus": "file-plus",
+    "folder-plus": "folder-plus",
+}
 
 
 def _tk_scale(widget):
@@ -52,74 +64,6 @@ def _rounded_rectangle_points(x1, y1, x2, y2, radius, corners):
     return points
 
 
-def _draw_segment_fill(canvas, x1, y1, x2, y2, radius, fill,
-                       round_left, round_right):
-    if round_left and round_right:
-        canvas.create_rectangle(
-            x1 + radius, y1, x2 - radius, y2, fill=fill, outline="",
-        )
-        canvas.create_rectangle(
-            x1, y1 + radius, x1 + radius, y2 - radius,
-            fill=fill, outline="",
-        )
-        canvas.create_rectangle(
-            x2 - radius, y1 + radius, x2, y2 - radius,
-            fill=fill, outline="",
-        )
-        for x1_arc, y1_arc, x2_arc, y2_arc, start in (
-            (x1, y1, x1 + 2 * radius, y1 + 2 * radius, 90),
-            (x2 - 2 * radius, y1, x2, y1 + 2 * radius, 0),
-            (x2 - 2 * radius, y2 - 2 * radius, x2, y2, 270),
-            (x1, y2 - 2 * radius, x1 + 2 * radius, y2, 180),
-        ):
-            canvas.create_arc(
-                x1_arc, y1_arc, x2_arc, y2_arc,
-                start=start, extent=90, style=tk.PIESLICE,
-                fill=fill, outline="",
-            )
-        return
-    if round_left:
-        canvas.create_rectangle(
-            x1 + radius, y1, x2, y2, fill=fill, outline="",
-        )
-        canvas.create_rectangle(
-            x1, y1 + radius, x1 + radius, y2 - radius,
-            fill=fill, outline="",
-        )
-        canvas.create_arc(
-            x1, y1, x1 + 2 * radius, y1 + 2 * radius,
-            start=90, extent=90, style=tk.PIESLICE,
-            fill=fill, outline="",
-        )
-        canvas.create_arc(
-            x1, y2 - 2 * radius, x1 + 2 * radius, y2,
-            start=180, extent=90, style=tk.PIESLICE,
-            fill=fill, outline="",
-        )
-    elif round_right:
-        canvas.create_rectangle(
-            x1, y1, x2 - radius, y2, fill=fill, outline="",
-        )
-        canvas.create_rectangle(
-            x2 - radius, y1 + radius, x2, y2 - radius,
-            fill=fill, outline="",
-        )
-        canvas.create_arc(
-            x2 - 2 * radius, y1, x2, y1 + 2 * radius,
-            start=0, extent=90, style=tk.PIESLICE,
-            fill=fill, outline="",
-        )
-        canvas.create_arc(
-            x2 - 2 * radius, y2 - 2 * radius, x2, y2,
-            start=270, extent=90, style=tk.PIESLICE,
-            fill=fill, outline="",
-        )
-    else:
-        canvas.create_rectangle(
-            x1, y1, x2, y2, fill=fill, outline="",
-        )
-
-
 def draw_rounded_rectangle(canvas, x1, y1, x2, y2, radius, fill, outline,
                            width=1, corners=(True, True, True, True),
                            background=None, state="normal"):
@@ -156,6 +100,90 @@ def clear_rounded_image_cache(widget):
     cache = getattr(widget, "_rounded_image_cache", None)
     if cache is not None:
         cache.clear()
+
+
+class RoundedCard(tk.Canvas):
+    def __init__(
+        self, master, background, surface, border, radius=8, height=None,
+    ):
+        self._parent_background = background
+        self._surface = surface
+        self._border = border
+        self._radius = radius
+        self._fixed_height = height
+        self._background_items = ()
+        self._window_item = None
+        self._card_image = None
+        self._card_signature = None
+        super().__init__(
+            master, background=background, width=1, height=height or 1,
+            highlightthickness=0, bd=0, takefocus=0,
+        )
+        self.content = tk.Frame(
+            self, background=surface, bd=0, highlightthickness=0,
+            padx=6, pady=6,
+        )
+        self.bind("<Configure>", self._resize_card, add="+")
+        self.content.bind("<Configure>", self._fit_height, add="+")
+        self.after_idle(self._fit_height)
+        self._draw_card()
+
+    def set_surface(self, background, surface, border):
+        self._parent_background = background
+        self._surface = surface
+        self._border = border
+        self._card_signature = None
+        super().configure(background=background)
+        self.content.configure(background=surface)
+        self._draw_card()
+
+    def _resize_card(self, event):
+        self._draw_card(event.width, event.height)
+
+    def _fit_height(self, _event=None):
+        if self._fixed_height is not None:
+            return
+        height = self.content.winfo_reqheight() + self._radius * 2
+        if height != int(self.cget("height")):
+            self.configure(height=height)
+
+    def _draw_card(self, width=None, height=None):
+        width = width or self.winfo_width()
+        height = height or self.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        signature = (
+            width, height, self._parent_background,
+            self._surface, self._border, self._radius,
+        )
+        if signature != self._card_signature:
+            old_background_items = self._background_items
+            before = set(self.find_all())
+            self._card_image = draw_rounded_rectangle(
+                self, 0, 0, width, height, self._radius,
+                self._surface, self._border,
+                background=self._parent_background,
+            )
+            self._background_items = tuple(
+                item for item in self.find_all()
+                if item not in before and item != self._window_item
+            )
+            if self._window_item is None:
+                self._window_item = self.create_window(
+                    self._radius, self._radius, anchor="nw",
+                    window=self.content,
+                )
+            for item in self._background_items:
+                self.tag_lower(item, self._window_item)
+            for item in old_background_items:
+                self.delete(item)
+            self._card_signature = signature
+        self.coords(self._window_item, self._radius, self._radius)
+        self.itemconfigure(
+            self._window_item,
+            width=max(1, width - self._radius * 2),
+            height=max(1, height - self._radius * 2),
+        )
 
 
 def _rounded_rectangle_image(
@@ -272,7 +300,7 @@ def _draw_rounded_rectangle_tk(
 class RoundedButton(tk.Canvas):
     def __init__(self, master, textvariable, command, font="TkDefaultFont",
                  bold=False, variant="normal", padx=12, pady=8, radius=6,
-                 background=None, ui_scale=1.0):
+                 background=None, ui_scale=1.0, fit_content=True):
         super().__init__(
             master, width=1, height=1, highlightthickness=0, bd=0,
             background=background or master.winfo_toplevel().cget("background"),
@@ -287,11 +315,13 @@ class RoundedButton(tk.Canvas):
         self.padx = padx
         self.pady = pady
         self.radius = radius
+        self.fit_content = fit_content
         self._state = "normal"
         self._hover = False
         self._pressed = False
         self._appearance = None
         self._icon = None
+        self._leading_icon = None
         self.palette = {}
         self._text_trace = textvariable.trace_add("write", self._text_changed)
         self.bind("<Configure>", self._on_configure)
@@ -342,6 +372,10 @@ class RoundedButton(tk.Canvas):
         self._icon = icon
         self._size_to_content()
 
+    def set_leading_icon(self, icon):
+        self._leading_icon = icon
+        self._size_to_content()
+
     def invoke(self):
         if self._state == "normal":
             self.command()
@@ -352,16 +386,18 @@ class RoundedButton(tk.Canvas):
     def _size_to_content(self):
         scale = _tk_scale(self)
         if self._icon is None:
-            width = (
-                self.font.measure(self.textvariable.get())
-                + self.padx * scale * 2
-            )
+            width = self.font.measure(self.textvariable.get())
+            if self._leading_icon is not None:
+                width += round(16 * scale) + round(7 * scale)
+            width += self.padx * scale * 2
         else:
             width = round(20 * scale) + round(self.padx * scale * 2)
         height = self.font.metrics("linespace") + self.pady * scale * 2
         size = (max(1, round(width)), max(1, round(height)))
-        if (int(self.cget("width")), int(self.cget("height"))) != size:
-            self.configure(width=size[0], height=size[1])
+        if self.fit_content and int(self.cget("width")) != size[0]:
+            self.configure(width=size[0])
+        if int(self.cget("height")) != size[1]:
+            self.configure(height=size[1])
         self._draw()
 
     def _on_configure(self, _event):
@@ -409,8 +445,9 @@ class RoundedButton(tk.Canvas):
                 foreground = palette["muted"]
         elif self.variant == "accent":
             fill = (
+                palette["btn"] if disabled else
                 palette["accent_hover"]
-                if (self._hover or self._pressed) and not disabled
+                if self._hover or self._pressed
                 else palette["accent"]
             )
             border = fill
@@ -443,11 +480,29 @@ class RoundedButton(tk.Canvas):
             ),
         )
         if self._icon is None:
-            self.create_text(
-                width / 2, height / 2, text=self.textvariable.get(),
-                fill=foreground,
-                font="TkHeadingFont" if self._bold else self.font,
-            )
+            if self._leading_icon is None:
+                self.create_text(
+                    width / 2, height / 2, text=self.textvariable.get(),
+                    fill=foreground,
+                    font="TkHeadingFont" if self._bold else self.font,
+                )
+            else:
+                scale = _tk_scale(self)
+                icon_size = round(16 * scale)
+                gap = round(7 * scale)
+                text_width = self.font.measure(self.textvariable.get())
+                content_width = icon_size + gap + text_width
+                left = (width - content_width) / 2
+                draw_icon(
+                    self, self._leading_icon, icon_size, foreground,
+                    (left + icon_size / 2, height / 2),
+                )
+                self.create_text(
+                    left + icon_size + gap, height / 2,
+                    text=self.textvariable.get(), fill=foreground,
+                    font="TkHeadingFont" if self._bold else self.font,
+                    anchor="w",
+                )
         else:
             self._draw_icon(self._icon, width, height, foreground, fill)
 
@@ -456,111 +511,48 @@ class RoundedButton(tk.Canvas):
     ):
         scale = _tk_scale(self)
         center_x, center_y = center or (width / 2, height / 2)
-        line_width = max(1, round(1.5 * scale))
-        if icon == "light":
-            self.create_oval(
-                center_x - 4 * scale, center_y - 4 * scale,
-                center_x + 4 * scale, center_y + 4 * scale,
-                outline=color, width=line_width,
-            )
-            for angle in range(0, 360, 45):
-                radians = math.radians(angle)
-                inner = 7 * scale
-                outer = 9 * scale
-                self.create_line(
-                    center_x + math.cos(radians) * inner,
-                    center_y + math.sin(radians) * inner,
-                    center_x + math.cos(radians) * outer,
-                    center_y + math.sin(radians) * outer,
-                    fill=color, width=line_width, capstyle="round",
-                )
-        elif icon == "dark":
-            self.create_oval(
-                center_x - 7 * scale, center_y - 7 * scale,
-                center_x + 7 * scale, center_y + 7 * scale,
-                fill=color, outline=color,
-            )
-            self.create_oval(
-                center_x - 1 * scale, center_y - 9 * scale,
-                center_x + 11 * scale, center_y + 3 * scale,
-                fill=background, outline=background,
-            )
-        elif icon == "system":
-            self.create_rectangle(
-                center_x - 9 * scale, center_y - 7 * scale,
-                center_x + 9 * scale, center_y + 5 * scale,
-                outline=color, width=line_width,
-            )
-            self.create_line(
-                center_x, center_y + 5 * scale,
-                center_x, center_y + 8 * scale,
-                fill=color, width=line_width, capstyle="round",
-            )
-            self.create_line(
-                center_x - 4 * scale, center_y + 8 * scale,
-                center_x + 4 * scale, center_y + 8 * scale,
-                fill=color, width=line_width, capstyle="round",
-            )
-        elif icon == "settings":
-            points = []
-            tooth_radii = (7, 7, 10, 10)
-            for index in range(32):
-                angle = math.radians(index * 360 / 32 - 90)
-                radius = tooth_radii[index % len(tooth_radii)] * scale
-                points.extend((
-                    center_x + math.cos(angle) * radius,
-                    center_y + math.sin(angle) * radius,
-                ))
-            self.create_polygon(
-                points, fill=color, outline=color,
-            )
-            self.create_oval(
-                center_x - 3 * scale, center_y - 3 * scale,
-                center_x + 3 * scale, center_y + 3 * scale,
-                fill=background, outline=background,
-            )
-        elif icon == "undo":
-            self.create_line(
-                center_x + 7 * scale, center_y - 5 * scale,
-                center_x - 3 * scale, center_y - 5 * scale,
-                center_x - 8 * scale, center_y,
-                center_x - 3 * scale, center_y + 5 * scale,
-                fill=color, width=line_width, capstyle="round",
-                joinstyle="round",
-            )
-            self.create_line(
-                center_x - 7 * scale, center_y,
-                center_x + 3 * scale, center_y,
-                center_x + 7 * scale, center_y + 4 * scale,
-                fill=color, width=line_width, capstyle="round",
-                joinstyle="round",
-            )
-        elif icon == "trash":
-            self.create_rectangle(
-                center_x - 6 * scale, center_y - 5 * scale,
-                center_x + 6 * scale, center_y + 8 * scale,
-                outline=color, width=line_width,
-            )
-            self.create_line(
-                center_x - 8 * scale, center_y - 7 * scale,
-                center_x + 8 * scale, center_y - 7 * scale,
-                fill=color, width=line_width, capstyle="round",
-            )
-            self.create_line(
-                center_x - 3 * scale, center_y - 9 * scale,
-                center_x + 3 * scale, center_y - 9 * scale,
-                fill=color, width=line_width, capstyle="round",
-            )
-            for offset in (-2, 2):
-                self.create_line(
-                    center_x + offset * scale, center_y - 2 * scale,
-                    center_x + offset * scale, center_y + 5 * scale,
-                    fill=color, width=max(1, round(scale)),
-                )
+        draw_icon(
+            self, ICON_ASSETS[icon], round(20 * scale), color,
+            (center_x, center_y),
+        )
+
+
+def create_action_button(
+    parent, text, command, palette, primary=False, state="normal",
+    ui_scale=1.0, expand=False,
+):
+    button = RoundedButton(
+        parent,
+        tk.StringVar(master=parent, value=text),
+        command,
+        bold=primary,
+        variant="accent" if primary else "normal",
+        padx=14 if primary else 12,
+        pady=6,
+        radius=6,
+        background=palette["card"],
+        ui_scale=ui_scale,
+        fit_content=not expand,
+    )
+    button.set_theme(
+        background=palette["btn"],
+        border=palette["header_border"],
+        hover_background=palette["btn_hi"],
+        hover_border=palette["header_border_hi"],
+        foreground=palette["fg"],
+        muted=palette["muted"],
+        accent=palette["accent"],
+        accent_hover=palette["accent_hi"],
+        accent_foreground=palette["accent_text"],
+        canvas_background=palette["card"],
+    )
+    button.set_state(state)
+    button.configure(takefocus=1)
+    return button
 
 
 class ToolbarIconGroup(tk.Canvas):
-    def __init__(self, master, actions, ui_scale=1.0, cell_width=50):
+    def __init__(self, master, actions, ui_scale=1.0, cell_width=44):
         self.ui_scale = ui_scale
         self.actions = tuple(actions)
         self.cell_width = round(cell_width * ui_scale)
@@ -699,13 +691,13 @@ class ToolbarIconGroup(tk.Canvas):
                 else palette["foreground"]
             )
             icon = self.icons[name]
-            if icon in (
-                "light", "dark", "system", "settings", "undo", "trash",
-            ):
-                RoundedButton._draw_icon(
-                    self, icon, width, height, icon_color,
-                    palette["background"],
-                    center=((left + right) / 2, height / 2),
+            if icon in ICON_ASSETS:
+                draw_icon(
+                    self,
+                    ICON_ASSETS[icon],
+                    round(18 * _tk_scale(self)),
+                    icon_color,
+                    ((left + right) / 2, height / 2),
                 )
             if index:
                 self.create_line(
@@ -762,7 +754,7 @@ class SearchBox(tk.Frame):
         self.palette = palette
         self.canvas.configure(background=palette["header_bg"])
         self.entry.configure(
-            background=palette["chip"],
+            background=palette["bg"],
             foreground=(
                 palette["muted"] if self._showing_placeholder
                 else palette["fg"]
@@ -881,33 +873,18 @@ class SearchBox(tk.Frame):
         )
         draw_rounded_rectangle(
             canvas, 0, 0, width, height, 10,
-            palette["chip"], border, background=palette["header_bg"],
+            palette["bg"], border, background=palette["header_bg"],
         )
         scale = _tk_scale(self)
         icon_x, icon_y = round(18 * scale), height / 2
-        canvas.create_oval(
-            icon_x - 5 * scale, icon_y - 5 * scale,
-            icon_x + 5 * scale, icon_y + 5 * scale,
-            outline=palette["muted"], width=max(1, round(scale)),
-        )
-        canvas.create_line(
-            icon_x + 4 * scale, icon_y + 4 * scale,
-            icon_x + 9 * scale, icon_y + 9 * scale,
-            fill=palette["muted"], width=max(1, round(1.5 * scale)),
-            capstyle="round",
+        draw_icon(
+            canvas, "search", round(18 * scale), palette["muted"],
+            (icon_x, icon_y),
         )
         if self.get_query():
-            canvas.create_line(
-                width - 19 * scale, height / 2 - 4 * scale,
-                width - 11 * scale, height / 2 + 4 * scale,
-                fill=palette["muted"], width=max(1, round(1.5 * scale)),
-                capstyle="round",
-            )
-            canvas.create_line(
-                width - 11 * scale, height / 2 - 4 * scale,
-                width - 19 * scale, height / 2 + 4 * scale,
-                fill=palette["muted"], width=max(1, round(1.5 * scale)),
-                capstyle="round",
+            draw_icon(
+                canvas, "x", round(16 * scale), palette["muted"],
+                (width - 15 * scale, height / 2),
             )
             if self._count is not None:
                 canvas.create_text(
@@ -977,16 +954,6 @@ class ToolTip:
             self._hide()
 
 
-def _mix_color(start, end, amount):
-    start_rgb = tuple(int(start[index:index + 2], 16) for index in (1, 3, 5))
-    end_rgb = tuple(int(end[index:index + 2], 16) for index in (1, 3, 5))
-    values = tuple(
-        max(0, min(255, round(first + (last - first) * amount)))
-        for first, last in zip(start_rgb, end_rgb)
-    )
-    return "#" + "".join(f"{value:02x}" for value in values)
-
-
 class SegmentedModeToggle(tk.Canvas):
     def __init__(self, master, mode, on_select, font="TkDefaultFont",
                  background=None, fit_content=True, ui_scale=1.0,
@@ -1005,6 +972,7 @@ class SegmentedModeToggle(tk.Canvas):
         self.values = values
         self.horizontal_padding = 14
         self.vertical_padding = 8
+        self.segment_inset = 4
         self.fit_content = fit_content
         self.palette = {}
         self.position = 0.0 if mode == values[0] else 1.0
@@ -1030,11 +998,14 @@ class SegmentedModeToggle(tk.Canvas):
         scale = _tk_scale(self)
         widths = self._segment_widths()
         height = self.font.metrics("linespace") + (
-            2 * self.vertical_padding * scale
+            2 * (self.vertical_padding + self.segment_inset) * scale
         )
-        border = max(1, round(scale))
+        border = max(1, scale)
         size = (
-            round(sum(widths) + border * 2),
+            round(
+                sum(widths) + border * 2
+                + 2 * self.segment_inset * scale
+            ),
             round(height + border * 2),
         )
         if self.fit_content and (
@@ -1047,12 +1018,14 @@ class SegmentedModeToggle(tk.Canvas):
         self._draw()
 
     def set_theme(self, background, track, border, active, foreground, muted,
-                  accent_foreground=None, canvas_background=None):
+                  accent_foreground=None, canvas_background=None,
+                  active_border=None):
         self.palette = {
             "background": background,
             "track": track,
             "border": border,
             "active": active,
+            "active_border": active_border or border,
             "foreground": foreground,
             "muted": muted,
             "accent_foreground": accent_foreground or foreground,
@@ -1080,9 +1053,11 @@ class SegmentedModeToggle(tk.Canvas):
     def _on_click(self, event):
         self.focus_set()
         widths = self._segment_widths()
-        inset = max(1, _tk_scale(self)) / 2
-        available = self.winfo_width() - 1 - inset * 2
-        boundary = inset + available * widths[0] / sum(widths)
+        scale = _tk_scale(self)
+        border = max(1, scale)
+        start = border / 2 + self.segment_inset * scale
+        available = self.winfo_width() - 1 - border - 2 * self.segment_inset * scale
+        boundary = start + available * widths[0] / sum(widths)
         side = self.values[0] if event.x < boundary else self.values[1]
         self.on_select(side)
         return "break"
@@ -1112,72 +1087,66 @@ class SegmentedModeToggle(tk.Canvas):
             return
         widths = self._segment_widths()
         total_segment_width = sum(widths)
-        available_width = width - 1 - line_width
-        segment_widths = tuple(
-            available_width * part / total_segment_width for part in widths
-        )
+        segment_gap = self.segment_inset * scale
         outer_x1, outer_y1 = 0, 0
         outer_x2, outer_y2 = width - 1, height - 1
         inner_x1, inner_y1 = inset, inset
         inner_x2, inner_y2 = outer_x2 - inset, outer_y2 - inset
+        segment_x1 = inner_x1 + segment_gap
+        segment_x2 = inner_x2 - segment_gap
+        segment_y1 = inner_y1 + segment_gap
+        segment_y2 = inner_y2 - segment_gap
+        available_width = segment_x2 - segment_x1
+        segment_widths = tuple(
+            available_width * part / total_segment_width for part in widths
+        )
         self.delete("all")
         active_width = (
             segment_widths[0]
             + self.position * (segment_widths[1] - segment_widths[0])
         )
-        active_x = inner_x1 + self.position * (
-            (inner_x2 - inner_x1) - active_width
+        active_x = segment_x1 + self.position * (
+            (segment_x2 - segment_x1) - active_width
         )
         active_right = active_x + active_width
-        outer_left = abs(active_x - inner_x1) < 1
-        outer_right = abs(active_right - inner_x2) < 1
         active_radius = min(
-            max(0, 6 - inset / scale),
-            (inner_y2 - inner_y1) / (2 * scale),
+            max(0, 11),
+            (segment_y2 - segment_y1) / (2 * scale),
             active_width / (2 * scale),
         )
         if HAVE_PIL:
             draw_rounded_rectangle(
-                self, outer_x1, outer_y1, width, height, 6,
+                self, outer_x1, outer_y1, width, height, 14,
                 palette["track"], palette["border"],
             )
             draw_rounded_rectangle(
-                self, active_x, inner_y1, active_right, inner_y2,
-                active_radius, palette["active"], "",
-                corners=(outer_left, outer_right, outer_right, outer_left),
+                self, active_x, segment_y1, active_right, segment_y2,
+                active_radius, palette["active"],
+                palette["active_border"], width=1,
                 background=palette["track"],
-                state=("segment", outer_left, outer_right),
+                state="active-segment",
             )
         else:
             draw_rounded_rectangle(
-                self, outer_x1, outer_y1, outer_x2, outer_y2, 6,
-                palette["track"], "",
-            )
-            _draw_segment_fill(
-                self, active_x, inner_y1, active_right, inner_y2,
-                active_radius * scale, palette["active"],
-                outer_left, outer_right,
+                self, outer_x1, outer_y1, outer_x2, outer_y2,
+                14, palette["track"], palette["border"],
             )
             draw_rounded_rectangle(
-                self, outer_x1, outer_y1, outer_x2, outer_y2, 6,
-                "", palette["border"],
+                self, active_x, segment_y1, active_right, segment_y2,
+                active_radius, palette["active"],
+                palette["active_border"], width=1,
+                background=palette["track"], state="active-segment",
             )
-        segment_start = inner_x1
-        pill_center = active_x + active_width / 2
+        segment_start = segment_x1
         for index, label in enumerate(self.labels):
             segment_width = segment_widths[index]
             center = segment_start + segment_width / 2
-            emphasis = max(
-                0.0,
-                min(
-                    1.0,
-                    1 - abs(center - pill_center) / max(active_width, 1),
-                ),
-            )
-            text_color = _mix_color(
-                palette["muted"], palette.get(
+            text_color = (
+                palette.get(
                     "accent_foreground", palette["foreground"],
-                ), emphasis,
+                )
+                if index == (0 if self.mode == self.values[0] else 1)
+                else palette["muted"]
             )
             self.create_text(
                 center, height / 2, text=label, fill=text_color,
@@ -1204,10 +1173,12 @@ class SegmentedPillControl(tk.Canvas):
         self.selected = selected if selected in values else values[0]
         self.available = {value: True for value in values}
         self.palette = {}
+        self.segment_colors = {}
         self.font = tkfont.nametofont("TkDefaultFont")
-        self.horizontal_padding = 9
+        self.horizontal_padding = 12
         self.vertical_padding = 6
         self._hover_index = None
+        self._unavailable_foreground = None
         self.bind("<Configure>", self._draw)
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", self._on_leave)
@@ -1216,10 +1187,11 @@ class SegmentedPillControl(tk.Canvas):
 
     def _segment_widths(self):
         scale = _tk_scale(self)
-        return tuple(
+        widths = tuple(
             self.font.measure(label) + 2 * self.horizontal_padding * scale
             for label in self.labels
         )
+        return widths
 
     def _size_to_content(self):
         scale = _tk_scale(self)
@@ -1251,11 +1223,16 @@ class SegmentedPillControl(tk.Canvas):
         self._size_to_content()
         self._draw()
 
-    def set_available(self, available):
+    def set_available(self, available, unavailable_foreground=None):
         self.available = {
             value: bool(available.get(value, False))
             for value in self.values
         }
+        self._unavailable_foreground = unavailable_foreground
+        self._draw()
+
+    def set_segment_colors(self, colors):
+        self.segment_colors = dict(colors)
         self._draw()
 
     def _index_at(self, x):
@@ -1300,36 +1277,47 @@ class SegmentedPillControl(tk.Canvas):
             )
         draw_rounded_rectangle(
             self, 0, 0, width - 1, height - 1, 6,
-            palette["chip"], palette["chip_border"],
+            palette["switch_track"], palette["switch_border"],
             background=self.cget("background"),
         )
         for index, value in enumerate(self.values):
             left, right = positions[index], positions[index + 1]
             selected = value == self.selected
             hovered = index == self._hover_index and self.available[value]
+            segment_colors = self.segment_colors.get(value)
             if selected:
-                fill = palette["chip_active"]
+                fill = (
+                    segment_colors[1] if segment_colors
+                    else palette["switch_active"]
+                )
                 color = (
-                    palette["fg"] if self.available[value]
-                    else palette["muted"]
+                    segment_colors[0] if segment_colors
+                    else palette["header_accent"] if self.available[value]
+                    else (
+                        self._unavailable_foreground or palette["muted"]
+                    )
                 )
             elif hovered:
                 fill = palette["header_btn_hi"]
-                color = palette["fg"]
+                color = segment_colors[0] if segment_colors else palette["fg"]
             else:
-                fill = palette["chip"]
+                fill = palette["switch_track"]
                 color = (
-                    palette["fg"] if self.available[value]
+                    segment_colors[0] if segment_colors
+                    else palette["header_muted"] if self.available[value]
                     else palette["muted"]
                 )
             if selected or hovered:
                 draw_rounded_rectangle(
-                    self, left, 1, right, height - 1,
-                    6,
+                    self, left + 3 * scale, 3 * scale,
+                    right - 3 * scale, height - 3 * scale, 8,
                     fill,
-                    palette["header_accent"] if selected else "",
+                    (
+                        segment_colors[0] if segment_colors
+                        else palette["header_accent"]
+                    ) if selected else "",
                     corners=(True, True, True, True),
-                    background=palette["chip"],
+                    background=palette["switch_track"],
                     state=("source", value, selected, hovered),
                 )
             center = (left + right) / 2
@@ -1340,7 +1328,7 @@ class SegmentedPillControl(tk.Canvas):
             if index:
                 self.create_line(
                     left, 4 * scale, left, height - 4 * scale,
-                    fill=palette["chip_border"],
+                    fill=palette["switch_border"],
                     width=max(1, round(scale)),
                 )
 

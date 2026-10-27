@@ -6,24 +6,145 @@ from concurrent.futures import ThreadPoolExecutor
 from tkinter import ttk
 
 from ...core.tmdb import MAX_WORKERS
+from ..controls import RoundedCard, draw_rounded_rectangle
+from ..icons import draw_icon
 from ._common import APP_VERSION
 from .about import AboutTabMixin
 from .formatting import FormattingTabMixin
-from .matching import MatchingTabMixin
 from .providers import ProvidersTabMixin
 from .support import SettingsSupportMixin
 
 
+class SidebarNavItem(tk.Canvas):
+    def __init__(self, master, title, command, palette):
+        super().__init__(
+            master, height=40, highlightthickness=0, bd=0,
+            background=palette["header_bg"], cursor="hand2",
+        )
+        self.title = title
+        self.command = command
+        self.palette = palette
+        self.selected = False
+        self.hovered = False
+        self.bind("<Configure>", self._draw)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+
+    def set_active(self, selected):
+        self.selected = selected
+        self._draw()
+
+    def set_palette(self, palette):
+        self.palette = palette
+        self.configure(background=palette["header_bg"])
+        self._draw()
+
+    def _on_enter(self, _event):
+        self.hovered = True
+        self._draw()
+
+    def _on_leave(self, _event):
+        self.hovered = False
+        self._draw()
+
+    def _on_click(self, _event):
+        self.command()
+        return "break"
+
+    def _draw(self, _event=None):
+        if not self.winfo_exists():
+            return
+        palette = self.palette
+        width, height = self.winfo_width(), self.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        background = (
+            palette["logo_bg"] if self.selected else
+            palette["header_btn_hi"] if self.hovered else
+            palette["header_bg"]
+        )
+        foreground = (
+            palette["header_accent"] if self.selected else
+            palette["fg"] if self.hovered else
+            palette["header_muted"]
+        )
+        self.delete("all")
+        draw_rounded_rectangle(
+            self, 0, 0, width, height, 8,
+            background, "", background=palette["header_bg"],
+        )
+        if self.selected:
+            draw_rounded_rectangle(
+                self, 0, 8, 3, height - 8, 1,
+                palette["header_accent"], "",
+                background=background,
+            )
+        self.create_text(
+            20, height / 2, text=self.title, anchor="w",
+            fill=foreground, font=("TkDefaultFont", 11),
+        )
+
+
+class SidebarBackAction(tk.Canvas):
+    def __init__(self, master, command, palette):
+        self.command = command
+        self.palette = palette
+        self.hovered = False
+        super().__init__(
+            master, height=36, highlightthickness=0, bd=0,
+            background=palette["header_bg"],
+            cursor="hand2",
+        )
+        self.bind("<Configure>", self._draw)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+
+    def set_palette(self, palette):
+        self.palette = palette
+        self._draw()
+
+    def _on_enter(self, _event):
+        self.hovered = True
+        self._draw()
+
+    def _on_leave(self, _event):
+        self.hovered = False
+        self._draw()
+
+    def _on_click(self, _event):
+        self.command()
+        return "break"
+
+    def _draw(self, _event=None):
+        width, height = self.winfo_width(), self.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+        foreground = (
+            self.palette["fg"] if self.hovered
+            else self.palette["header_muted"]
+        )
+        self.configure(background=self.palette["header_bg"])
+        self.delete("all")
+        draw_icon(
+            self, "undo-2", 16, foreground, (19, height / 2),
+        )
+        self.create_text(
+            38, height / 2, text="Back", anchor="w",
+            fill=foreground, font=("TkTextFont", 10),
+        )
+
+
 class SettingsView(
-    SettingsSupportMixin, FormattingTabMixin, MatchingTabMixin,
-    ProvidersTabMixin, AboutTabMixin, ttk.Frame,
+    SettingsSupportMixin, FormattingTabMixin, ProvidersTabMixin,
+    AboutTabMixin, ttk.Frame,
 ):
     """Tabbed settings layout and asynchronous validation/update status."""
 
     _SECTIONS = (
         ("Sources", "Sources"),
         ("Formatting", "Formatting"),
-        ("Matching", "Matching"),
         ("Files & Safety", "Files & Safety"),
         ("About", "About"),
     )
@@ -50,6 +171,8 @@ class SettingsView(
         self._update_checking = False
         self._poll_id = None
         self._labels = []
+        self._settings_cards = []
+        self._settings_card_surfaces = []
         self._preset_cards = {"movie": [], "tv": []}
         self._format_preset_grids = {}
         self._format_grid_columns = {}
@@ -71,8 +194,10 @@ class SettingsView(
         self._configure_settings_styles()
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
-        self.sidebar = ttk.Frame(self, padding=(14, 16))
+        self.sidebar = ttk.Frame(self, padding=(10, 18, 10, 15))
         self.sidebar.grid(row=0, column=0, sticky="ns")
+        self.sidebar.configure(style="Settings.Sidebar.TFrame", width=220)
+        self.sidebar.pack_propagate(False)
         self.content = ttk.Frame(self, padding=(26, 20))
         self.content.grid(row=0, column=1, sticky="nsew")
         self.content.columnconfigure(0, weight=1)
@@ -94,17 +219,31 @@ class SettingsView(
             "<Configure>", self._update_scroll_region,
         )
         self._bind_scroll_events()
-        ttk.Button(
-            self.sidebar, text="←  Back", style="Settings.TButton",
-            command=self.app.leave_settings,
-        ).pack(fill="x", pady=(0, 20))
+        self.sidebar_brand = ttk.Frame(
+            self.sidebar, style="Settings.Sidebar.TFrame",
+        )
+        self.sidebar_brand.pack(fill="x", pady=(0, 30))
+        self.sidebar_brand_icon = tk.Canvas(
+            self.sidebar_brand, width=32, height=32,
+            background=self.app.pal["header_bg"],
+            highlightthickness=0, bd=0,
+        )
+        self.sidebar_brand_icon.pack(side="left", padx=(2, 8))
+        self._draw_sidebar_brand()
+        ttk.Label(
+            self.sidebar_brand, text="Moviq",
+            style="Settings.Brand.TLabel",
+        ).pack(side="left")
+        self.back_action = SidebarBackAction(
+            self.sidebar, self.app.leave_settings, self.app.pal,
+        )
+        self.back_action.pack(fill="x", pady=(0, 24))
         self.nav_buttons = {}
         for key, title in self._SECTIONS:
-            button = ttk.Button(
-                self.sidebar, text=title, style="Settings.TButton",
-                command=lambda name=key: (
-                    self._show_section(name)
-                ),
+            button = SidebarNavItem(
+                self.sidebar, title,
+                lambda name=key: self._show_section(name),
+                self.app.pal,
             )
             button.pack(fill="x", pady=3)
             self.nav_buttons[key] = button
@@ -116,11 +255,21 @@ class SettingsView(
             self.section_frames[name] = frame
         self._build_providers(self.section_frames["Sources"])
         self._build_formatting(self.section_frames["Formatting"])
-        self._build_matching(self.section_frames["Matching"])
         self._build_safety(self.section_frames["Files & Safety"])
         self._build_about(self.section_frames["About"])
 
     def _label(self, parent, text="", muted=False, **kwargs):
+        if "style" not in kwargs:
+            current = parent
+            while current is not None:
+                owner = getattr(current, "master", None)
+                if (
+                    isinstance(owner, RoundedCard)
+                    and owner.content is current
+                ):
+                    kwargs["style"] = "Settings.Card.TLabel"
+                    break
+                current = owner
         label = ttk.Label(parent, text=text, **kwargs)
         self._labels.append((label, muted))
         label.configure(foreground=(
@@ -137,12 +286,19 @@ class SettingsView(
         )
 
     def _group(self, parent, title):
-        frame = ttk.LabelFrame(
-            parent, text=title, padding=(14, 10),
-            style="Settings.TLabelframe",
+        palette = self.app.pal
+        card = RoundedCard(
+            parent, palette["bg"], palette["preset_surface"],
+            palette["preset_border"],
         )
-        frame.pack(fill="x", pady=(0, 14))
+        card.pack(fill="x", pady=(0, 14))
+        self._settings_cards.append(card)
+        frame = card.content
         frame.columnconfigure(1, weight=1)
+        self._label(
+            frame, title, font="TkHeadingFont",
+            style="Settings.Card.TLabel",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(8, 6))
         return frame
 
     def _configure_settings_styles(self, palette=None):
@@ -152,6 +308,27 @@ class SettingsView(
             "Settings.TLabelframe.Label",
             foreground=palette["fg"],
             font=("TkDefaultFont", 11, "bold"),
+        )
+        style.configure(
+            "Settings.Card.TLabel",
+            background=palette["preset_surface"],
+            foreground=palette["fg"],
+        )
+        style.map(
+            "Settings.Card.TLabel",
+            background=[
+                ("disabled", palette["preset_surface"]),
+                ("active", palette["preset_surface"]),
+                ("!disabled", palette["preset_surface"]),
+            ],
+        )
+        style.configure(
+            "Settings.Card.TFrame",
+            background=palette["preset_surface"],
+        )
+        style.configure(
+            "Settings.Card.TSeparator",
+            background=palette["preset_surface"],
         )
         format_switch_style = (
             "Moviq.Formatting.Switch.TCheckbutton" if self.app.have_sv
@@ -174,6 +351,36 @@ class SettingsView(
                 ("!disabled", palette["fg"]),
             ],
         )
+        safety_switch_style = "Settings.Safety.Switch.TCheckbutton"
+        style.configure(
+            safety_switch_style,
+            background=palette["preset_surface"],
+            foreground=palette["fg"],
+            padding=0,
+        )
+        style.map(
+            safety_switch_style,
+            background=[
+                ("disabled", palette["preset_surface"]),
+                ("active", palette["preset_surface"]),
+            ],
+            foreground=[
+                ("disabled", palette["muted"]),
+                ("!disabled", palette["fg"]),
+            ],
+        )
+        if self.app.have_sv and style.layout("Moviq.Switch.TCheckbutton"):
+            style.layout(
+                safety_switch_style,
+                style.layout("Moviq.Switch.TCheckbutton"),
+            )
+        style.configure(
+            "Settings.Safety.TEntry",
+            fieldbackground=palette["preset_surface"],
+            foreground=palette["fg"],
+            insertcolor=palette["fg"],
+            bordercolor=palette["preset_border"],
+        )
         style.configure(
             "Settings.TButton",
             background=palette["btn"],
@@ -188,7 +395,40 @@ class SettingsView(
             background=[
                 ("pressed", palette["accent"]),
                 ("active", palette["btn_hi"]),
+                ("disabled", palette["btn"]),
             ],
+            foreground=[
+                ("disabled", palette["muted"]),
+                ("!disabled", palette["fg"]),
+            ],
+        )
+        style.configure(
+            "Settings.Sidebar.TFrame",
+            background=palette["header_bg"],
+        )
+        style.configure(
+            "Settings.Brand.TLabel",
+            background=palette["header_bg"],
+            foreground=palette["fg"],
+            font=("TkDefaultFont", 13, "bold"),
+        )
+
+    def _draw_sidebar_brand(self):
+        canvas = self.sidebar_brand_icon
+        canvas.configure(background=self.app.pal["header_bg"])
+        canvas.delete("all")
+        color = self.app.pal["header_accent"]
+        background = self.app.pal["header_bg"]
+        draw_rounded_rectangle(
+            canvas, 3, 3, 29, 29, 5, background, color,
+            width=2, background=background,
+        )
+        draw_rounded_rectangle(
+            canvas, 8, 8, 24, 24, 3, background, color,
+            background=background,
+        )
+        canvas.create_line(
+            11, 16, 21, 16, fill=color, width=2, capstyle="round",
         )
 
     def _resize_scroll_content(self, event):
@@ -413,7 +653,10 @@ class SettingsView(
         self.key_eye_canvas.itemconfigure("slash", fill=palette["muted"])
 
     def _link(self, parent, text, url, style=None):
-        link = self._label(parent, text, cursor="hand2", style=style)
+        link = self._label(
+            parent, text, cursor="hand2",
+            style=style or "Settings.Card.TLabel",
+        )
         link.configure(foreground=self.app.pal["accent"])
         link.bind("<Button-1>", lambda _event, target=url: webbrowser.open(target))
         return link
@@ -541,12 +784,24 @@ class SettingsView(
             self._poll_id = self.after(100, self._poll)
 
     def _show_section(self, name):
+        if name == "Formatting":
+            width = self.content_canvas.winfo_width()
+            if width > 1:
+                self._layout_format_body("movie", width)
+                self._layout_format_body("tv", width)
         self._current_section = name
         for frame in self.section_frames.values():
             frame.grid_remove()
         self.section_frames[name].grid()
+        self._refresh_sidebar()
         self.content_canvas.yview_moveto(0)
         self.after_idle(self._update_scroll_region)
+
+    def _refresh_sidebar(self):
+        self.back_action.set_palette(self.app.pal)
+        for name, button in self.nav_buttons.items():
+            button.set_palette(self.app.pal)
+            button.set_active(name == self._current_section)
 
     def focus_provider_source(self, name):
         self._show_section("Sources")
@@ -563,11 +818,21 @@ class SettingsView(
 
     def recolor(self, palette):
         self._configure_settings_styles(palette)
+        self._draw_sidebar_brand()
+        self._refresh_sidebar()
         self.content_canvas.configure(background=palette["bg"])
+        self.recolor_safety(palette)
         self._set_format_selector_theme(palette)
         self._set_library_selector_theme(palette)
         self._recolor_styled_entries(palette)
         for surface in self._provider_card_surfaces:
+            surface.configure(background=palette["preset_surface"])
+        for card in self._settings_cards:
+            card.set_surface(
+                palette["bg"], palette["preset_surface"],
+                palette["preset_border"],
+            )
+        for surface in self._settings_card_surfaces:
             surface.configure(background=palette["preset_surface"])
         for name, row in self._provider_rows.items():
             row["number"].configure(
@@ -602,9 +867,8 @@ class SettingsView(
                 if card is self._provider_blocks.get(self._provider_drag_name)
                 else palette["preset_border"]
             )
-            card.configure(
-                highlightbackground=border,
-                highlightcolor=border,
+            card.set_surface(
+                palette["bg"], palette["preset_surface"], border,
             )
         for title in self._provider_card_titles:
             title.configure(

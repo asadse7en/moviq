@@ -10,6 +10,10 @@ def _search_words(value):
     return normalized
 
 
+def is_error_item(item):
+    return item.status == "error" or bool(getattr(item, "error", ""))
+
+
 def matches_list_filter(
     item, status_filter=None, media_mode=None, query="", new_name="",
     original_name="",
@@ -20,13 +24,16 @@ def matches_list_filter(
     status = item.status
     if status_filter not in (None, "all"):
         if status_filter == "ready":
-            if status not in ("auto", "manual"):
+            if is_error_item(item) or status not in ("auto", "manual"):
                 return False
         elif status_filter == "done":
-            if status not in ("done", "no_change"):
+            if is_error_item(item) or status not in ("done", "no_change"):
                 return False
         elif status_filter == "review":
-            if status not in ("review", "nomatch", "error"):
+            if status != "review" or is_error_item(item):
+                return False
+        elif status_filter == "nomatch":
+            if status != "nomatch" and not is_error_item(item):
                 return False
         elif status != status_filter:
             return False

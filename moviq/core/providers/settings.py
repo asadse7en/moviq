@@ -50,10 +50,10 @@ PROVIDER_INFO = {
     },
     "offline": {
         "label": "Offline Guess", "needs_key": False, "kinds": "Movies and TV",
-        "note": "From the file name only. Always sent to Review.",
+        "note": "Used only when online providers cannot be reached.",
         "description": (
-            "Guess from the file name when nothing else can help. "
-            "Always sent to Review."
+            "Guess from the file name only when online providers cannot "
+            "be reached. Guesses are sent to Review."
         ),
         "key_url": "",
     },

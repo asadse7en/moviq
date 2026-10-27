@@ -8,7 +8,7 @@ import requests
 
 from ..tmdb import (
     REQUEST_TIMEOUT, TMDB, TMDBAuthError, TMDBCancelled, TMDBError,
-    _TokenBucket,
+    TMDBNetworkError, _TokenBucket,
 )
 from ..tmdb_cache import get_cache
 
@@ -142,16 +142,25 @@ class Provider:
                 )
             except requests.exceptions.Timeout:
                 if attempt >= MAX_RETRIES:
-                    raise self._error("request timed out.") from None
+                    raise TMDBNetworkError(
+                        f"{self.label}: request timed out.",
+                        self.key or None,
+                    ) from None
                 self._wait(TMDB._backoff(attempt))
                 continue
             except requests.exceptions.ConnectionError:
                 if attempt >= MAX_RETRIES:
-                    raise self._error("could not connect.") from None
+                    raise TMDBNetworkError(
+                        f"{self.label}: could not connect.",
+                        self.key or None,
+                    ) from None
                 self._wait(TMDB._backoff(attempt))
                 continue
             except requests.exceptions.RequestException:
-                raise self._error("request failed.") from None
+                raise TMDBNetworkError(
+                    f"{self.label}: request failed.",
+                    self.key or None,
+                ) from None
             status = response.status_code
             if status in auth_statuses:
                 raise self._auth_error()

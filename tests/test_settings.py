@@ -63,19 +63,68 @@ class SettingsStoreTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_never_persists_key_when_remember_is_disabled(self):
+    def test_saves_tmdb_key_with_other_provider_keys(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             store = SettingsStore(
                 path, Path(directory) / "missing.json", save_delay=60,
             )
-            store.update({"key": "not-written", "remember": False})
+            store.update({
+                "key": "tmdb-test-key",
+                "provider_keys": {"omdb": "omdb-test-key"},
+            })
             store.save_now()
 
             saved = json.loads(path.read_text(encoding="utf-8"))
             self.assertNotIn("key", saved)
-            self.assertFalse(saved["remember"])
+            self.assertEqual(
+                saved["provider_keys"],
+                {"omdb": "omdb-test-key", "tmdb": "tmdb-test-key"},
+            )
             store.close()
+
+    def test_migrates_legacy_tmdb_key_to_provider_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                json.dumps({
+                    "key": "legacy-tmdb-key",
+                    "provider_keys": {"omdb": "omdb-test-key"},
+                }),
+                encoding="utf-8",
+            )
+            store = SettingsStore(
+                path, Path(directory) / "missing.json", save_delay=60,
+            )
+            try:
+                self.assertEqual(store.data["key"], "legacy-tmdb-key")
+                store.save_now()
+                saved = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("key", saved)
+                self.assertEqual(
+                    saved["provider_keys"],
+                    {
+                        "omdb": "omdb-test-key",
+                        "tmdb": "legacy-tmdb-key",
+                    },
+                )
+            finally:
+                store.close()
+
+    def test_loads_tmdb_key_from_provider_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(
+                json.dumps({"provider_keys": {"tmdb": "tmdb-test-key"}}),
+                encoding="utf-8",
+            )
+            store = SettingsStore(
+                path, Path(directory) / "missing.json", save_delay=60,
+            )
+            try:
+                self.assertEqual(store.data["key"], "tmdb-test-key")
+            finally:
+                store.close()
 
     def test_store_preserves_existing_unknown_values(self):
         with tempfile.TemporaryDirectory() as directory:

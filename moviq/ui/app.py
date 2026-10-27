@@ -35,7 +35,7 @@ from ..core.matching import (
     _is_generic_title, group_match_items, normalize_search_title, score,
     tv_match_is_applicable, tv_score,
 )
-from ..core.list_filter import matches_list_filter
+from ..core.list_filter import is_error_item, matches_list_filter
 from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
 from ..core.providers.ids import display_id, provider_of
@@ -64,9 +64,8 @@ from .popups import (
 )
 from ..core.settings_store import SettingsStore, resolve_system_theme
 from .settings import SettingsView
-from .table_layout import (
-    target_name_display, tv_target_name_display,
-)
+from .icons import draw_icon
+from .table_layout import target_name_display, tv_target_name_display
 from .main_page import (
     build_main_page as build_app_main_page,
 )
@@ -79,7 +78,10 @@ except ImportError:
     TkinterDnD = None
     HAVE_DND = False
 
-from .theme import HAVE_SV, apply_theme as apply_app_theme
+from .theme import (
+    HAVE_SV, apply_app_palette, apply_theme as apply_root_theme,
+    register_theme_listener, unregister_theme_listener,
+)
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
@@ -253,10 +255,12 @@ class App:
         )
         self.pal = PALETTES[self.mode]
         self._status_tooltip = TableTooltip(
-            root, self.pal.get("hover", "#f1f5f9"), self.pal["fg"],
+            root, self.pal["tooltip_bg"], self.pal["fg"],
             self.pal["chip_border"],
             self.pal["muted"],
         )
+        self._theme_listener = self._apply_theme_listener
+        register_theme_listener(root, self._theme_listener)
         self.have_sv = HAVE_SV
         self._toolbar_compact = False
         self._sum_pending = False
@@ -379,6 +383,7 @@ class App:
             show_warning(self, "Settings", f"Could not save settings:\n{error}")
         if hasattr(self, "settings_view"):
             self.settings_view.close()
+        unregister_theme_listener(self.root, self._theme_listener)
         self.root.destroy()
 
     # ---- UI ---------------------------------------------------------------
@@ -406,9 +411,11 @@ class App:
         )
 
     def apply_theme(self, mode):
-        result = apply_app_theme(self, mode)
+        return apply_root_theme(self.root, mode)
+
+    def _apply_theme_listener(self, mode):
+        apply_app_palette(self, mode)
         self.update_theme_button()
-        return result
 
     def update_theme_button(self):
         preference = self.theme_preference
@@ -459,12 +466,27 @@ class App:
                 accent_foreground=pal["accent_text"],
                 canvas_background=pal["header_bg"],
             )
+        self.rename_all_button.set_appearance(
+            pal["switch_active"],
+            pal["header_accent"],
+            pal["header_accent"],
+            active=True,
+        )
         self.toolbar_icon_group.set_theme(
             background=pal["header_btn"],
             border=pal["header_border"],
             hover_background=pal["header_btn_hi"],
             foreground=pal["fg"], muted=pal["header_muted"],
             canvas_background=pal["header_bg"],
+        )
+        self.header_icon_separator.configure(
+            background=pal["header_separator"],
+        )
+        self.header_mode_separator.configure(
+            background=pal["header_separator"],
+        )
+        self.header_match_separator.configure(
+            background=pal["header_separator"],
         )
         self.search_box.set_palette(pal)
         self._refresh_filter_chip_styles()
@@ -476,19 +498,17 @@ class App:
             logo_width / 2, logo_height / 2,
             image=self.logo_image,
         )
-        hover = pal.get("hover", "#f1f5f9")
-        self.tree.tag_configure("hover", background=hover)
-        self._status_cell_font = "TkHeadingFont"
-        for label in self._status_cell_labels.values():
-            label.configure(font=self._status_cell_font)
-        self._schedule_status_cells()
+        self._position_status_cells()
         self.empty_icon.configure(bg=pal["card"])
+        self.empty_icon.delete("all")
+        draw_icon(
+            self.empty_icon, "folder-plus", 36, pal["accent"], (32, 27),
+        )
         self.menu.configure(bg=pal["card"], fg=pal["fg"],
                             activebackground=pal["accent"],
                             activeforeground="#ffffff")
         if hasattr(self, "settings_view"):
             self.settings_view.recolor(pal)
-        self.refresh_all()
 
     # ---- settings values ----------------------------------------------------
     def language(self):
@@ -645,8 +665,14 @@ class App:
     def show_page(self, name):
         self.page_main.pack_forget()
         self.page_settings.pack_forget()
+        self.container.configure(
+            padding=(0, 0, 0, 0) if name == "settings"
+            else (20, 18, 20, 12),
+        )
         (self.page_main if name == "main" else self.page_settings).pack(
             fill="both", expand=True)
+        if name == "main":
+            self._schedule_status_cells()
 
     def leave_settings(self):
         try:
@@ -659,98 +685,33 @@ class App:
         return build_app_main_page(self, page)
 
     def fit_table_columns(self, _event=None):
-        if not hasattr(self, "_table_widths"):
+        if not hasattr(self, "tree"):
             return
-        if not self._table_columns_initialized:
-            self._table_columns_initialized = True
-            self._reset_table_widths()
-            return
-        if getattr(self, "_table_resize_active", False):
-            return
-        table_width = self.tree.winfo_width()
-        previous_width = getattr(self, "_last_table_widget_width", None)
-        if previous_width is not None and table_width != previous_width:
-            self._table_new_autofit = False
-            if not self._table_columns_customized:
-                self._table_widths = self._default_column_widths()
-                for column in ("#0", "status"):
-                    self.tree.column(
-                        column, width=self._table_widths[column],
-                    )
-        self._last_table_widget_width = table_width
-        columns = ("#0", *self.tree["columns"])
-        current = {column: int(self.tree.column(column, "width"))
-                   for column in columns}
-        for column in columns[:-1]:
-            if current[column] != self._table_widths.get(column):
-                self._table_widths[column] = max(
-                    self.table_min_widths[column], current[column],
-                )
-        available = max(0, self.tree.winfo_width() - 2)
-        fixed = sum(self._table_widths[column] for column in columns[:-1])
-        if not getattr(self, "_table_new_autofit", False):
-            self._table_widths["new"] = max(
-                self.tree.column("new", "minwidth"), available - fixed,
-            )
-        changed_widths = False
-        for column in columns:
-            width = max(
-                self.table_min_widths[column],
-                self._table_widths[column],
-            )
-            changed_widths |= width != current[column]
-            self.tree.column(column, width=width)
-            self._table_widths[column] = width
-        if changed_widths:
-            self._queue_table_reclip()
-        self._refresh_reset_columns_button()
+        available = max(
+            0, self.tree.winfo_width()
+            - self.status_column_width - self.source_column_width,
+        )
+        original_width = max(
+            self.table_name_min_width, available // 2,
+        )
+        new_width = max(
+            self.table_name_min_width, available - original_width,
+        )
+        changed = False
+        for column, width in (
+            ("#0", original_width), ("new", new_width),
+        ):
+            if int(self.tree.column(column, "width")) != width:
+                self.tree.column(column, width=width)
+                changed = True
+        if changed and hasattr(self, "items"):
+            self._schedule_status_cells()
 
-    def _queue_table_reclip(self):
-        if getattr(self, "_table_clip_after", None) is None:
-            self._table_clip_after = self.root.after_idle(
-                self._reclip_table_rows,
-            )
-
-    def _reclip_table_rows(self):
-        self._table_clip_after = None
-        with self._bulk_refresh():
-            for item in self.items:
-                if self.tree.exists(item.iid):
-                    self.refresh_row(item)
-
-    def _begin_table_resize(self, event):
+    def _ignore_column_separator(self, event):
         if self.tree.identify_region(event.x, event.y) == "separator":
-            self._table_resize_active = True
-            self._table_resize_column = self.tree.identify_column(event.x)
-
-    def _finish_table_resize(self):
-        self._table_resize_active = False
-        self._table_new_autofit = (
-            getattr(self, "_table_resize_column", None) == "#2"
-        )
-        self._table_resize_column = None
-        for column in ("#0", *self.tree["columns"]):
-            self._table_widths[column] = max(
-                self.table_min_widths[column],
-                int(self.tree.column(column, "width")),
-            )
-        defaults = self._default_column_widths()
-        self._table_columns_customized = any(
-            abs(self._table_widths[column] - defaults[column]) > 1
-            for column in ("#0", "status")
-        )
-        self.fit_table_columns()
-
-    def _default_column_widths(self):
-        available = max(0, self.tree.winfo_width() - 2)
-        status = self._status_column_width()
-        original = max(
-            self.table_min_widths["#0"],
-            min(int(available * 0.4), available - status
-                - self.table_min_widths["new"]),
-        )
-        new = max(self.table_min_widths["new"], available - original - status)
-        return {"#0": original, "status": status, "new": new}
+            self.tree.configure(cursor="arrow")
+            return "break"
+        return None
 
     @staticmethod
     def _table_status_key(status, error=False):
@@ -785,6 +746,37 @@ class App:
             "done": "Done",
             "error": "Error",
         }[key]
+
+    @staticmethod
+    def _table_status_chip(item):
+        if item.error or item.status == "error":
+            return "Error", "table_status_nomatch"
+        if item.status in ("auto", "manual"):
+            return "Ready", "table_status_ready"
+        if item.status in ("done", "no_change"):
+            return "Done", "table_status_done"
+        if item.status == "review":
+            return "Review", "table_status_review"
+        if item.status == "nomatch":
+            return "No match", "table_status_nomatch"
+        if item.status == "matching":
+            return "Matching", "table_status_ready"
+        return "Pending", "muted"
+
+    @staticmethod
+    def _table_source_label(item):
+        match = item.match or getattr(item, "review_match", None) or {}
+        match_id = match.get("id")
+        if match_id is not None:
+            try:
+                provider = PROVIDER_INFO[provider_of(match_id)]
+            except (KeyError, TypeError, ValueError):
+                pass
+            else:
+                return provider["label"]
+        if getattr(item, "match_source", None) == "manual":
+            return "Manual"
+        return "\u2014"
 
     def _safe_exception_message(self, message):
         message = str(message)
@@ -1212,75 +1204,6 @@ class App:
             return tv_score(match, item.query) * 100
         return score(match, item.query) * 100
 
-    def _status_column_width(self):
-        labels = (
-            "Pending", "Matched", "Confirmed", "No change", "Review",
-            "No match", "Done", "Error",
-        )
-        font = tkfont.nametofont("TkTextFont")
-        return max(110, max(font.measure(label) for label in labels) + 40)
-
-    def _refresh_reset_columns_button(self):
-        if not hasattr(self, "reset_columns_button"):
-            return
-        defaults = self._default_column_widths()
-        differs = any(
-            abs(int(self.tree.column(column, "width")) - width) > 1
-            for column, width in defaults.items()
-        )
-        if differs and not self.reset_columns_button.winfo_manager():
-            self.reset_columns_button.pack(side="right")
-        elif not differs and self.reset_columns_button.winfo_manager():
-            self.reset_columns_button.pack_forget()
-
-    def _reset_table_widths(self):
-        self._table_new_autofit = False
-        self._table_columns_customized = False
-        self._table_widths = self._default_column_widths()
-        for column, width in self._table_widths.items():
-            self.tree.column(column, width=width)
-        self._reclip_table_rows()
-        self._refresh_reset_columns_button()
-
-    def _auto_fit_column(self, column):
-        columns = ("#0", *self.tree["columns"])
-        if column not in columns:
-            return
-        font = tkfont.nametofont("TkTextFont")
-        heading = {
-            "#0": "\u2610  Original name",
-            "status": "Status",
-            "new": "New Name",
-        }[column]
-        widest = font.measure(heading)
-        if column == "#0":
-            contents = (
-                f"\u2610  {Path(item.orig_path).name}"
-                for item in self.items
-            )
-        elif column == "status":
-            contents = (
-                self._table_status_label(item.status, bool(item.error))
-                for item in self.items
-            )
-        else:
-            contents = (
-                self._row_tooltip_paths.get(item.iid, {}).get("display", "")
-                for item in self.items
-            )
-        for text in contents:
-            widest = max(widest, font.measure(text))
-        available = max(1, int((self.tree.winfo_width() - 2) * 0.6))
-        self._table_widths[column] = max(
-            self.table_min_widths[column],
-            min(widest + 36, available),
-        )
-        self.tree.column(column, width=self._table_widths[column])
-        self._table_new_autofit = column == "new"
-        self._table_columns_customized = True
-        self.fit_table_columns()
-        self._refresh_reset_columns_button()
-
     @staticmethod
     def _middle_clip(text, font, available):
         if font.measure(text) <= available:
@@ -1301,19 +1224,48 @@ class App:
         right = keep // 2
         return text[:left] + ellipsis + (text[-right:] if right else "")
 
+    def _destination_display(self, item, destination):
+        destination = Path(destination)
+        if item.media_type != "tv":
+            return (
+                target_name_display(destination)
+                if self.movie_folder.get() else destination.name
+            )
+        parts = []
+        make_show_folder = self.tv_create_show_folder.get()
+        make_season_folder = self.tv_create_season_folder.get()
+        if make_show_folder:
+            parts.append(
+                destination.parent.parent.name
+                if make_season_folder else destination.parent.name
+            )
+        if make_season_folder:
+            parts.append(destination.parent.name)
+        parts.append(destination.name)
+        return os.path.join(*parts)
+
     def _schedule_tree_tooltip(self, event):
         row = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)
         item = self.by_iid.get(row)
-        if not item or column != "#1":
+        if not item or column not in ("#0", "#1", "#2"):
             self._hide_tree_tooltip()
             return
-        cache_key = (row, item.status_detail, item.status, item.error_code)
-        if cache_key != self._status_card_cache_key:
+        cache_key = (
+            row, column, item.status_detail, item.status, item.error_code,
+        )
+        if column == "#1" and cache_key != self._status_card_cache_key:
             card = self._status_card(item)
             self._status_card_cache = card or item.status_detail
             self._status_card_cache_key = cache_key
-        content = self._status_card_cache
+        if column == "#0":
+            content = Path(item.orig_path).name
+        elif column == "#2":
+            content = self._row_tooltip_paths.get(
+                item.iid, {},
+            ).get("display", "")
+        else:
+            content = self._status_card_cache
         self._status_tooltip.schedule(
             (row, column, repr(content)), content,
             event.x_root, event.y_root,
@@ -1354,87 +1306,8 @@ class App:
 
     def _position_status_cells(self):
         self._status_cells_pending = False
-        if not self.tree.winfo_exists():
-            return
-        visible = set()
-        for item in self._rows_on_screen():
-            bounds = self.tree.bbox(item.iid, "status")
-            if not bounds:
-                continue
-            x, y, width, height = bounds
-            if width <= 0 or height <= 0:
-                continue
-            visible.add(item.iid)
-            status_key = self._table_status_key(
-                item.status, bool(item.error),
-            )
-            label = self._status_cell_labels.get(item.iid)
-            if label is None:
-                label = tk.Label(
-                    self.tree,
-                    anchor="w",
-                    borderwidth=0,
-                    padx=12,
-                    font=self._status_cell_font,
-                )
-                for sequence in (
-                    "<Button-1>", "<Double-1>", "<Button-3>",
-                    "<Motion>", "<MouseWheel>", "<Button-4>", "<Button-5>",
-                ):
-                    label.bind(
-                        sequence,
-                        lambda event, seq=sequence:
-                            self._forward_status_cell_event(event, seq),
-                    )
-                self._status_cell_labels[item.iid] = label
-            selected = item.iid in self.tree.selection()
-            hovered = "hover" in self.tree.item(item.iid, "tags")
-            background = (
-                self.pal.get("selection", self.pal["zone_hi"])
-                if selected else
-                self.pal.get("hover", "#f1f5f9")
-                if hovered else self.pal["bg"]
-            )
-            label.configure(
-                text=self._table_status_label(item.status, bool(item.error)),
-                foreground=self.pal["status_text"][status_key],
-                background=background,
-                font=self._status_cell_font,
-            )
-            label.place(x=x, y=y, width=width, height=height)
-        hidden = [iid for iid in self._status_cell_labels if iid not in visible]
-        for position, iid in enumerate(hidden):
-            label = self._status_cell_labels[iid]
-            label.place_forget()
-            if position >= 150 or not self.tree.exists(iid):
-                label.destroy()
-                del self._status_cell_labels[iid]
-
-    def _rows_on_screen(self):
-        """Rows in (or just outside) the visible part of the table."""
-        if not self.tree.winfo_viewable():
-            return []
-        children = self.tree.get_children("")
-        total = len(children)
-        if total <= 300:
-            rows = children
-        else:
-            top, bottom = self.tree.yview()
-            first = max(int(top * total) - 5, 0)
-            last = min(int(bottom * total) + 6, total)
-            rows = children[first:min(last, first + 300)]
-        return [self.by_iid[iid] for iid in rows if iid in self.by_iid]
-
-    def _forward_status_cell_event(self, event, sequence):
-        x = event.x + event.widget.winfo_rootx() - self.tree.winfo_rootx()
-        y = event.y + event.widget.winfo_rooty() - self.tree.winfo_rooty()
-        options = {"x": x, "y": y}
-        if hasattr(event, "state"):
-            options["state"] = event.state
-        if sequence == "<MouseWheel>":
-            options["delta"] = event.delta
-        self.tree.event_generate(sequence, **options)
-        return "break"
+        if self.tree.winfo_exists():
+            self.tree.redraw()
 
     def build_settings_page(self, page):
         variables = {
@@ -1477,25 +1350,62 @@ class App:
         self.update_action_labels()
         self.update_detail()
         n = len(self.items)
-        c = {}
-        for i in self.items:
-            c[i.status] = c.get(i.status, 0) + 1
         counts = {
             "all": n,
-            "ready": c.get("auto", 0) + c.get("manual", 0),
-            "review": (
-                c.get("review", 0) + c.get("nomatch", 0)
-                + c.get("error", 0)
+            "ready": sum(
+                item.status in ("auto", "manual")
+                and not is_error_item(item)
+                for item in self.items
             ),
-            "done": c.get("done", 0) + c.get("no_change", 0),
+            "review": sum(
+                item.status == "review" and not is_error_item(item)
+                for item in self.items
+            ),
+            "nomatch": sum(
+                item.status == "nomatch" and not is_error_item(item)
+                for item in self.items
+            ),
+            "error": sum(is_error_item(item) for item in self.items),
+            "done": sum(
+                item.status in ("done", "no_change")
+                and not is_error_item(item)
+                for item in self.items
+            ),
         }
         self._filter_counts = counts
+        if hasattr(self, "summary_var"):
+            summary_parts = []
+            if n:
+                summary_parts.append(f"{n} files")
+            for count, label in (
+                (counts["ready"], "ready"),
+                (counts["review"], "review"),
+                (counts["nomatch"], "no match"),
+                (counts["error"], "errors"),
+                (
+                    sum(
+                        item.status == "done" and not is_error_item(item)
+                        for item in self.items
+                    ),
+                    "renamed",
+                ),
+            ):
+                if count:
+                    summary_parts.append(f"{count} {label}")
+            self.summary_var.set(" \u00b7 ".join(summary_parts))
+            if summary_parts:
+                if not self.summary_label.winfo_manager():
+                    self.summary_label.pack(
+                        side="right", fill="y", padx=(8, 0),
+                    )
+            else:
+                self.summary_label.pack_forget()
         labels = {
             "all": "All", "ready": "Ready", "review": "Review",
-            "done": "Done",
+            "error": "Error", "done": "Done",
         }
         for key, count in counts.items():
-            if hasattr(self, "filter_vars"):
+            if hasattr(self, "filter_vars") and key in self.filter_vars:
                 self.filter_vars[key].set(f"{labels[key]} {count}")
         if hasattr(self, "filter_control"):
             self._refresh_filter_chip_styles()
@@ -1524,6 +1434,8 @@ class App:
                     "all": "No files added yet",
                     "ready": "Nothing ready",
                     "review": "Nothing to review",
+                    "nomatch": "No files without a match",
+                    "error": "No errors",
                     "done": "Nothing completed",
                 }[status_filter]
                 self.empty_title_var.set(title)
@@ -1582,7 +1494,7 @@ class App:
             else self.search_slot.winfo_width()
         )
         self.search_box.set_width(
-            min(round(420 * scale), max(round(220 * scale), available)),
+            max(1, min(round(360 * scale), available)),
         )
 
     def focus_search(self):
@@ -1628,13 +1540,19 @@ class App:
             f"{label} {counts.get(key, 0)}"
             for key, label in (
                 ("all", "All"), ("ready", "Ready"), ("review", "Review"),
-                ("done", "Done"),
+                ("error", "Error"), ("done", "Done"),
             )
         ))
-        self.filter_control.set_selected(selected)
-        self.filter_control.set_available({
-            key: counts.get(key, 0) > 0 for key in self.filter_control.values
+        palette = self.pal
+        colors = palette["status_colors"]
+        table_colors = palette["table_chip_colors"]
+        self.filter_control.set_segment_colors({
+            "ready": (table_colors["ready"][1], table_colors["ready"][0]),
+            "review": colors["review"],
+            "error": colors["error"],
+            "done": (table_colors["done"][1], table_colors["done"][0]),
         })
+        self.filter_control.set_selected(selected)
 
     def _item_sort_key(self):
         if self.media_mode.get() == "tv":
@@ -1658,16 +1576,15 @@ class App:
             item.iid for item in self.items if item.iid not in filtered_out
         ]
         get_children = getattr(self.tree, "get_children", None)
-        if get_children is not None and expected == list(get_children("")):
-            return
-        visible_index = 0
-        for item in self.items:
-            if (
-                self.tree.exists(item.iid)
-                and item.iid not in self._filtered_out
-            ):
-                self.tree.move(item.iid, "", visible_index)
-                visible_index += 1
+        if get_children is None or expected != list(get_children("")):
+            visible_index = 0
+            for item in self.items:
+                if (
+                    self.tree.exists(item.iid)
+                    and item.iid not in self._filtered_out
+                ):
+                    self.tree.move(item.iid, "", visible_index)
+                    visible_index += 1
 
     def _sort_name(self, item):
         cache = self.__dict__.setdefault("_sort_name_cache", {})
@@ -1695,15 +1612,9 @@ class App:
         if compact == self._toolbar_compact:
             return
         self._toolbar_compact = compact
-        self.match_actions.grid_configure(
-            row=1 if compact else 0,
-            column=0 if compact else 1,
-            columnspan=2 if compact else 1,
-            sticky="w" if compact else "e",
-            pady=(8, 0) if compact else 0,
-        )
         for button in self.toolbar_buttons:
-            button.set_padding(9 if compact else 12)
+            button.set_padding(2 if compact else 12)
+        self.rename_all_button.set_padding(8 if compact else 18)
         self.update_action_labels()
 
     def status(self, text):
@@ -1819,7 +1730,7 @@ class App:
         self._row_tooltip_paths.clear()
         self._search_new_names.clear()
         for item in self.items:
-            item.iid = self.tree.insert("", "end", values=("", ""))
+            item.iid = self.tree.insert("", "end", values=("", "", ""))
             self.by_iid[item.iid] = item
             self.refresh_row(item)
         self._restore_visible_row_order()
@@ -2255,7 +2166,7 @@ class App:
             while job["insert_pos"] < len(built) and time.perf_counter() < deadline:
                 it = built[job["insert_pos"]]
                 job["insert_pos"] += 1
-                it.iid = self.tree.insert("", "end", values=("", ""))
+                it.iid = self.tree.insert("", "end", values=("", "", ""))
                 self.by_iid[it.iid] = it
                 self.items.append(it)
                 self.refresh_row(it)
@@ -2552,10 +2463,6 @@ class App:
         self.schedule_summary()
         self._hide_tree_tooltip()
         self._update_no_change_status(item)
-        selected = getattr(self, "_bulk_selection", None)
-        if selected is None:
-            selected = self.tree.selection()
-        mark = "\u2611" if item.iid in selected else "\u2610"
         new = ""
         new_path = ""
         output_match = item.match
@@ -2583,11 +2490,7 @@ class App:
                 pass
             else:
                 new_path = str(target)
-                new = (
-                    tv_target_name_display(target)
-                    if item.media_type == "tv"
-                    else target_name_display(target)
-                )
+                new = target.name
         status_tooltip = ""
         if item.status == "review" and output_match:
             confidence = (
@@ -2605,30 +2508,23 @@ class App:
             "#0": str(Path(item.orig_path).absolute()),
             "#1": status_tooltip,
             "#2": str(Path(new_path).absolute()) if new_path else "",
-            "display": new,
+            "display": (
+                self._destination_display(item, new_path)
+                if new_path else new
+            ),
         }
         search_new_name = new
         item.status_detail = self._status_detail(item, new_path)
-        font = tkfont.nametofont("TkTextFont")
         original = Path(item.orig_path).name
-        original = self._middle_clip(
-            original, font,
-            max(
-                1,
-                int(self.tree.column("#0", "width"))
-                - font.measure(f"{mark}  ") - 36,
-            ),
+        status, _status_color = self._table_status_chip(item)
+        if item.status == "nomatch":
+            new = "No result found"
+        elif item.status == "matching":
+            new = "Matching..."
+        self.tree.item(
+            item.iid, text=original,
+            values=(status, new, self._table_source_label(item)),
         )
-        new = self._middle_clip(
-            new, font,
-            max(1, int(self.tree.column("new", "width")) - 36),
-        )
-        self.tree.item(item.iid, tags=(),
-                       text=f"{mark}  {original}",
-                       values=(
-                           "",
-                           new,
-                       ))
         self._search_new_names[item.iid] = search_new_name
         self._schedule_status_cells()
         self._sync_row_visibility(item)
@@ -2646,6 +2542,11 @@ class App:
             self._filtered_out.add(item.iid)
 
     def on_tree_hover(self, event):
+        if self.tree.identify_region(event.x, event.y) in (
+            "separator", "scrollbar",
+        ):
+            self.tree.configure(cursor="arrow")
+            return
         iid = self.tree.identify_row(event.y)
         item = self.by_iid.get(iid)
         self.tree.configure(
@@ -2654,28 +2555,13 @@ class App:
                 if item
                 and item.status != "done"
                 and self._is_manual_match_cell(iid, event.x)
-                else ""
+                else "arrow"
             ),
         )
-        if iid == getattr(self, "_hover_iid", None):
-            return
-        self.clear_tree_hover()
-        if iid:
-            tags = self.tree.item(iid, "tags")
-            self.tree.item(iid, tags=("hover", *tags))
-            self._hover_iid = iid
         self._schedule_status_cells()
 
     def clear_tree_hover(self, _event=None):
-        self.tree.configure(cursor="")
-        iid = getattr(self, "_hover_iid", None)
-        if iid and self.tree.exists(iid):
-            tags = tuple(
-                tag for tag in self.tree.item(iid, "tags")
-                if tag != "hover"
-            )
-            self.tree.item(iid, tags=tags)
-        self._hover_iid = None
+        self.tree.configure(cursor="arrow")
         self._schedule_status_cells()
 
     @contextlib.contextmanager
@@ -2686,10 +2572,14 @@ class App:
         self._bulk_selection = (
             set(tree.selection()) if tree is not None else None
         )
+        if tree is not None:
+            tree.begin_update()
         try:
             yield
         finally:
             self._bulk_selection = previous
+            if tree is not None:
+                tree.end_update()
 
     def refresh_all(self):
         with self._bulk_refresh():
@@ -3236,10 +3126,10 @@ class App:
     def on_click(self, event):
         """Click toggles a row; Shift+click selects a range; blank = deselect."""
         region = self.tree.identify_region(event.x, event.y)
-        if region == "separator":
+        if region in ("separator", "scrollbar"):
             return None
         if region == "heading":
-            if self.tree.identify_column(event.x) == "#0":
+            if self.tree.identify_checkbox(event.x, event.y):
                 self.toggle_all()
                 return "break"
             return None
@@ -3248,6 +3138,7 @@ class App:
         if not row:
             self.deselect()
             return "break"
+        self.tree.focus(row)
         item = self.by_iid.get(row)
         if (
             item
@@ -3269,14 +3160,18 @@ class App:
 
     def on_double(self, event):
         region = self.tree.identify_region(event.x, event.y)
-        if region == "separator":
-            self._auto_fit_column(self.tree.identify_column(event.x))
+        if region in ("separator", "scrollbar"):
+            return "break"
+        if self.tree.identify_checkbox(event.x, event.y):
+            if region == "heading":
+                self.toggle_all()
             return "break"
         if region not in ("cell", "tree"):
             return None
         row = self.tree.identify_row(event.y)
         if row:
             self.tree.selection_set(row)
+            self.tree.focus(row)
             item = self.by_iid.get(row)
             if item and item.error:
                 self.open_selected_file()
@@ -3310,27 +3205,7 @@ class App:
             self.select_all()
 
     def on_select(self, _e=None):
-        sel = set(self.tree.selection())
-        for it in self.items:
-            mark = "\u2611" if it.iid in sel else "\u2610"
-            font = tkfont.nametofont("TkTextFont")
-            original = self._middle_clip(
-                Path(it.orig_path).name,
-                font,
-                max(
-                    1,
-                    int(self.tree.column("#0", "width"))
-                    - font.measure(f"{mark}  ") - 36,
-                ),
-            )
-            self.tree.item(it.iid, text=f"{mark}  {original}")
-        visible = set(self._visible_item_iids())
-        selected_visible = visible.intersection(sel)
-        mark = (
-            "\u2611" if visible and len(selected_visible) == len(visible)
-            else "\u25e9" if selected_visible else "\u2610"
-        )
-        self.tree.heading("#0", text=f"{mark}  Original name")
+        self.tree.redraw()
         self.schedule_summary()
         self._schedule_status_cells()
 
@@ -3369,9 +3244,20 @@ class App:
                     "Double-click to show this file in its folder."
                 )
             elif not it.match:
-                text = "No match yet for this file."
+                preview_match = getattr(it, "review_match", None)
+                if not preview_match:
+                    text = "No match yet for this file."
+                else:
+                    try:
+                        destination = self.plan_for(it, preview_match).dest
+                    except ValueError as error:
+                        text = str(error)
+                    else:
+                        text = (
+                            f"{Path(it.orig_path).name}  \u2192  "
+                            f"{self._destination_display(it, destination)}"
+                        )
             else:
-                m = it.match
                 try:
                     dest = (
                         it.path if it.status == "done"
@@ -3380,7 +3266,10 @@ class App:
                 except ValueError as error:
                     text = str(error)
                 else:
-                    text = f"{m['title']} ({m['year'] or '????'})   \u2192   {dest}"
+                    text = (
+                        f"{Path(it.orig_path).name}  \u2192  "
+                        f"{self._destination_display(it, dest)}"
+                    )
         self.detail_var.set(text)
 
     def open_selected_file(self):
@@ -3401,12 +3290,8 @@ class App:
         self._hide_tree_tooltip()
         region = self.tree.identify_region(event.x, event.y)
         if region == "heading":
-            try:
-                self.column_menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                self.column_menu.grab_release()
             return "break"
-        if region == "separator":
+        if region in ("separator", "scrollbar"):
             return "break"
         iid = self.tree.identify_row(event.y)
         if iid and iid not in self.tree.selection():
@@ -3673,6 +3558,11 @@ class App:
         )
 
     def clear(self, record=True):
+        selected_items = self.selected() if record else []
+        if selected_items and len(selected_items) < len(self.items):
+            self.remove_selected()
+            self.status(f"Removed {len(selected_items)} files.")
+            return
         job = getattr(self, "_import_job", None)
         if job is not None:
             job["cancel"] = True

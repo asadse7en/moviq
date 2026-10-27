@@ -5,6 +5,7 @@ import webbrowser
 
 from ...core.providers.router import test_provider
 from ...core.providers.settings import PROVIDER_INFO
+from ..controls import RoundedCard
 
 _KEY_FIELDS = {
     "omdb": (("omdb", "API key"),),
@@ -60,24 +61,24 @@ class ProvidersTabMixin:
     def _build_provider_group(self, frame, name, settings):
         info = PROVIDER_INFO[name]
         surface = self.app.pal["preset_surface"]
-        card = tk.Frame(
-            frame, background=surface, highlightthickness=1,
-            highlightbackground=self.app.pal["preset_border"],
-            highlightcolor=self.app.pal["preset_border"],
-            padx=9, pady=0, height=68,
+        card = RoundedCard(
+            frame, self.app.pal["bg"], surface,
+            self.app.pal["preset_border"], height=96,
         )
-        card.grid_propagate(False)
-        card.columnconfigure(2, weight=1)
-        card.columnconfigure(3, minsize=180)
-        card.columnconfigure(4, minsize=65)
-        card.columnconfigure(5, minsize=160)
-        card.columnconfigure(6, minsize=45)
+        content = card.content
+        content.columnconfigure(2, weight=1)
+        content.columnconfigure(3, minsize=180)
+        content.columnconfigure(4, minsize=65)
+        content.columnconfigure(5, minsize=160)
+        content.columnconfigure(6, minsize=45)
         self._provider_blocks[name] = card
-        self._provider_card_surfaces.append(card)
-        self._provider_rows[name] = {"card": card, "surfaces": [card]}
+        self._provider_card_surfaces.append(content)
+        self._provider_rows[name] = {
+            "card": card, "surfaces": [content],
+        }
 
         handle = tk.Canvas(
-            card, width=20, height=32, background=surface,
+            content, width=20, height=32, background=surface,
             highlightthickness=0,
             cursor="fleur" if name != "offline" else "",
             takefocus=0,
@@ -116,7 +117,7 @@ class ProvidersTabMixin:
             )
 
         number = tk.Label(
-            card, text=str(self._provider_order.index(name) + 1),
+            content, text=str(self._provider_order.index(name) + 1),
             anchor="center", width=2,
             background=self.app.pal["preset_selected"],
             foreground=self.app.pal["muted"], font="TkTextFont",
@@ -124,7 +125,7 @@ class ProvidersTabMixin:
         )
         number.grid(row=0, column=1, sticky="w", padx=(0, 10))
         self._provider_rows[name].update(handle=handle, number=number)
-        identity = tk.Frame(card, background=surface)
+        identity = tk.Frame(content, background=surface)
         self._provider_card_surfaces.append(identity)
         self._provider_rows[name]["surfaces"].append(identity)
         identity.grid(row=0, column=2, sticky="ew", padx=(0, 10))
@@ -172,13 +173,13 @@ class ProvidersTabMixin:
             "Moviq.Formatting.Switch.TCheckbutton"
             if self.app.have_sv else "Formatting.TCheckbutton"
         )
-        self._switch(card, enabled, style=switch_style).grid(
+        self._switch(content, enabled, style=switch_style).grid(
             row=0, column=6, sticky="e", padx=(8, 0),
         )
         if name == "tmdb":
             key_var = tk.StringVar(value=self.vars["key"].get())
             self.key_entry_var = key_var
-            self._build_provider_key_control(card, name, "key", key_var)
+            self._build_provider_key_control(content, name, "key", key_var)
             self.key_entry_wrap = self._provider_key_wraps["key"]
             self.key_entry = self._provider_key_entries["key"]
             self.key_eye_canvas = self._provider_key_eyes["key"]
@@ -198,7 +199,7 @@ class ProvidersTabMixin:
                     self._provider_key_edited(field)
                 ),
             )
-            self._build_provider_key_control(card, name, key_field, key_var)
+            self._build_provider_key_control(content, name, key_field, key_var)
             self._provider_status[name] = tk.StringVar(
                 value=(
                     "Disabled" if name not in settings.enabled else (
@@ -221,11 +222,11 @@ class ProvidersTabMixin:
             card, name, self._provider_status[name].get(),
         )
         self._provider_test_buttons[name] = ttk.Button(
-            card, text="Test", style="Settings.TButton",
+            content, text="Test", style="Settings.TButton",
             command=test_command,
         )
         self._provider_test_buttons[name].grid(
-            row=0, column=4, padx=(6, 0),
+            row=0, column=4, padx=6,
         )
         self._set_provider_row_enabled(
             name, name in settings.enabled,
@@ -333,10 +334,12 @@ class ProvidersTabMixin:
 
     def _add_provider_status(self, card, name, status):
         variable = self._provider_status[name]
-        status_row = tk.Frame(card, background=self.app.pal["preset_surface"])
+        status_row = tk.Frame(
+            card.content, background=self.app.pal["preset_surface"],
+        )
         self._provider_card_surfaces.append(status_row)
         self._provider_rows[name]["surfaces"].append(status_row)
-        status_row.grid(row=0, column=5, sticky="w", padx=(8, 0))
+        status_row.grid(row=0, column=5, sticky="w", padx=(6, 0))
         dot = tk.Canvas(
             status_row, width=10, height=10,
             background=self.app.pal["preset_surface"],
@@ -406,13 +409,9 @@ class ProvidersTabMixin:
         for position, name in enumerate(self._provider_order, start=1):
             row = self._provider_rows[name]
             card = row["card"]
-            card.configure(
-                highlightbackground=(
-                    self.app.pal["accent"]
-                    if name == self._provider_drag_name
-                    else self.app.pal["preset_border"]
-                ),
-                highlightcolor=(
+            card.set_surface(
+                self.app.pal["bg"], self.app.pal["preset_surface"],
+                (
                     self.app.pal["accent"]
                     if name == self._provider_drag_name
                     else self.app.pal["preset_border"]

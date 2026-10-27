@@ -9,8 +9,10 @@ description = "A desktop app for matching and organizing movie files with TMDB"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "customtkinter>=5.2.2",
     "Pillow>=10",
     "requests>=2.31",
+    "resvg-py>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -21,7 +23,6 @@ gui = [
 build = [
     "pyinstaller>=6",
 ]
-
 [project.gui-scripts]
 moviq = "moviq.__main__:main"
 

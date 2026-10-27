@@ -6,7 +6,7 @@ from moviq.core.providers.anilist import AniListProvider
 from moviq.core.providers.offline import OfflineProvider
 from moviq.core.providers.router import ProviderRouter
 from moviq.core.providers.settings import ProviderSettings
-from moviq.core.tmdb import TMDBAuthError, TMDBError
+from moviq.core.tmdb import TMDBAuthError, TMDBError, TMDBNetworkError
 
 
 _CACHE_PATCH = patch("moviq.core.providers.base.get_cache", return_value=None)
@@ -170,13 +170,43 @@ class RouterTests(unittest.TestCase):
         with self.assertRaises(TMDBError):
             router.search_tv("Inception")
 
-    def test_missing_keys_are_skipped_and_offline_engages_as_last_resort(self):
+    def test_missing_keys_do_not_trigger_offline_guess(self):
         tmdb = Stub("tmdb", GOOD, needs_key=True, key="")
-        router = router_with(["tmdb"], {"tmdb": tmdb}, enabled=["tmdb"])
+        router = router_with(
+            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb", "offline"],
+        )
+        with self.assertRaises(TMDBAuthError):
+            router.search("the matrix", 1999)
+        self.assertEqual(tmdb.calls, 0)
+
+    def test_offline_guess_requires_network_failure(self):
+        tmdb = Stub("tmdb", error=TMDBNetworkError("could not connect"))
+        router = router_with(
+            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb", "offline"],
+        )
+
         result = router.search("the matrix", 1999)
+
         self.assertEqual(result[0]["provider"], "offline")
         self.assertEqual(result[0]["title"], "The Matrix")
-        self.assertEqual(tmdb.calls, 0)
+
+    def test_successful_empty_search_does_not_trigger_offline_guess(self):
+        tmdb = Stub("tmdb", [], needs_key=True)
+        router = router_with(
+            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb", "offline"],
+        )
+
+        self.assertEqual(router.search("Nothing Here"), [])
+
+    def test_empty_response_blocks_offline_after_other_provider_fails(self):
+        tmdb = Stub("tmdb", error=TMDBNetworkError("could not connect"))
+        tvmaze = Stub("tvmaze", [], kinds=("tv",))
+        router = router_with(
+            ["tmdb", "tvmaze"], {"tmdb": tmdb, "tvmaze": tvmaze},
+            enabled=["tmdb", "tvmaze", "offline"],
+        )
+
+        self.assertEqual(router.search_tv("Nothing Here"), [])
 
     def test_offline_is_not_used_when_a_general_provider_is_available(self):
         tmdb = Stub("tmdb", [], needs_key=True)

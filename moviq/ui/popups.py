@@ -6,17 +6,8 @@ from ctypes import wintypes
 from tkinter import ttk
 
 from .. import resource
-
-
-def set_window_icon(window):
-    try:
-        window._moviq_icon = tk.PhotoImage(
-            master=window,
-            file=resource("assets/moviq-icon-256.png"),
-        )
-        window.iconphoto(True, window._moviq_icon)
-    except (OSError, tk.TclError):
-        pass
+from .controls import create_action_button
+from .window_utils import set_window_icon
 
 
 def apply_titlebar_theme(window, dark):
@@ -25,9 +16,9 @@ def apply_titlebar_theme(window, dark):
     window._moviq_titlebar_theme = (
         dark,
         (
-            {"caption": "#1c1c1c", "text": "#edf2f7", "border": "#2b3b50"}
+            {"caption": "#1c1c1c", "text": "#edf2f7", "border": "#1c1c1c"}
             if dark else
-            {"caption": "#fafafa", "text": "#1f2937", "border": "#d1d5db"}
+            {"caption": "#fafafa", "text": "#1f2937", "border": "#fafafa"}
         ),
     )
 
@@ -37,7 +28,7 @@ def apply_titlebar_theme(window, dark):
         )
         return red | (green << 8) | (blue << 16)
 
-    def apply(_event=None):
+    def apply():
         try:
             if not window.winfo_exists():
                 return
@@ -80,14 +71,7 @@ def apply_titlebar_theme(window, dark):
         except (AttributeError, OSError, tk.TclError):
             return
 
-    try:
-        if not getattr(window, "_moviq_titlebar_bound", False):
-            window.bind("<Map>", apply, add="+")
-            window._moviq_titlebar_bound = True
-        if window.winfo_viewable():
-            apply()
-    except tk.TclError:
-        pass
+    apply()
 
 
 class MatchProgressPopup:
@@ -323,7 +307,6 @@ class MatchProgressPopup:
             self.footer,
             "Cancel",
             self.on_cancel,
-            cancel=True,
         ).pack(side="right")
 
     def _set_completed_footer(self, matched, flagged):
@@ -349,52 +332,12 @@ class MatchProgressPopup:
         ).pack(side="right", padx=(0, 8))
 
     def _footer_button(
-        self, parent, text, command, primary=False, cancel=False,
-        state="normal",
+        self, parent, text, command, primary=False, state="normal",
     ):
-        palette = self.palette
-        enabled = state == "normal"
-        background = (
-            palette["accent"] if primary and enabled
-            else palette["btn"]
+        return create_action_button(
+            parent, text, command, self.palette, primary, state,
+            self.app.UI_SCALE,
         )
-        button = tk.Button(
-            parent,
-            text=text,
-            command=command,
-            state=state,
-            font="TkHeadingFont" if primary else "TkDefaultFont",
-            bg=background,
-            fg="#ffffff" if primary and enabled else palette["fg"],
-            activebackground=(
-                "#dc2626" if cancel else
-                palette["accent_hi"] if primary else palette["btn_hi"]
-            ),
-            activeforeground=(
-                "#ffffff" if primary or cancel else palette["fg"]
-            ),
-            disabledforeground=palette["muted"],
-            relief="flat",
-            bd=0,
-            padx=14 if primary else 12,
-            pady=4,
-            highlightthickness=0,
-            takefocus=True,
-        )
-        if cancel:
-            button.bind(
-                "<Enter>",
-                lambda _event: button.configure(
-                    bg="#dc2626", fg="#ffffff",
-                ),
-            )
-            button.bind(
-                "<Leave>",
-                lambda _event: button.configure(
-                    bg=palette["btn"], fg=palette["fg"],
-                ),
-            )
-        return button
 
     def update_progress(
         self, current, completed, total, matched, flagged, failed,
@@ -585,27 +528,13 @@ class AppPopup(tk.Toplevel):
         footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(20, 0))
         for index, (label, value) in enumerate(self.buttons):
             is_default = index == self.default
-            foreground = (
-                palette.get("accent_text", "#ffffff")
-                if is_default else palette["fg"]
-            )
-            button = tk.Button(
+            button = create_action_button(
                 footer,
-                text=label,
-                bg=palette["accent"] if is_default else palette["btn"],
-                fg=foreground,
-                activebackground=(
-                    palette["accent_hi"] if is_default else palette["btn_hi"]
-                ),
-                activeforeground=foreground,
-                disabledforeground=palette["muted"],
-                relief="flat",
-                borderwidth=0,
-                padx=17 if is_default else 15,
-                pady=7,
-                font="TkHeadingFont" if is_default else "TkDefaultFont",
-                highlightthickness=0,
-                command=lambda selected=value: self._choose(selected),
+                label,
+                lambda selected=value: self._choose(selected),
+                palette,
+                primary=is_default,
+                ui_scale=self.app.UI_SCALE,
             )
             button.pack(side="right", padx=(8, 0))
             if index == self.default:

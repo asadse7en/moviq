@@ -12,6 +12,12 @@ asset_files = [
     for path in asset_root.rglob("*")
     if path.is_file()
 ]
+ui_asset_root = project_root / "moviq" / "ui" / "assets"
+asset_files.extend(
+    (str(path), str(path.parent.relative_to(project_root)))
+    for path in ui_asset_root.rglob("*")
+    if path.is_file()
+)
 entry_script = spec_dir / "run_moviq.py"
 
 a = Analysis(

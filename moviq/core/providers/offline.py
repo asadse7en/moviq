@@ -1,7 +1,7 @@
-"""Offline fallback: builds a match from the file name alone.
+"""Network-failure fallback that builds a match from the file name alone.
 
-No network and no key. Every result is sent to Review because nothing was
-verified. Ids are not stable, so they are never remembered across sessions.
+Guesses are sent to Review because nothing was verified. Ids are not stable,
+so they are never remembered across sessions.
 """
 import threading
 import zlib

@@ -3,10 +3,82 @@ import struct
 import tkinter as tk
 import tkinter.font as tkfont
 import zlib
+from weakref import WeakKeyDictionary, WeakSet
 from tkinter import ttk
 
+import customtkinter as ctk
+from PIL import ImageGrab, ImageTk
+
+from ..core.settings_store import resolve_system_theme
 from .design import PALETTES
 from .popups import apply_titlebar_theme
+
+_THEME_LISTENERS = WeakKeyDictionary()
+_THEME_CHANGES_IN_PROGRESS = WeakSet()
+
+
+def register_theme_listener(root, listener):
+    listeners = _THEME_LISTENERS.setdefault(root, [])
+    if listener not in listeners:
+        listeners.append(listener)
+
+
+def unregister_theme_listener(root, listener):
+    listeners = _THEME_LISTENERS.get(root)
+    if listeners is None:
+        return
+    if listener in listeners:
+        listeners.remove(listener)
+    if not listeners:
+        del _THEME_LISTENERS[root]
+
+
+def apply_theme(root, mode):
+    if root in _THEME_CHANGES_IN_PROGRESS:
+        return None
+    if mode == "system":
+        mode = resolve_system_theme()
+    if mode not in PALETTES:
+        raise ValueError(f"Unknown theme mode: {mode}")
+
+    cover = tk.Frame(
+        root, bg=PALETTES[mode]["bg"], bd=0, highlightthickness=0,
+    )
+    _THEME_CHANGES_IN_PROGRESS.add(root)
+    cover_scheduled_for_removal = False
+    try:
+        if root.winfo_viewable():
+            bounds = (
+                root.winfo_rootx(),
+                root.winfo_rooty(),
+                root.winfo_rootx() + root.winfo_width(),
+                root.winfo_rooty() + root.winfo_height(),
+            )
+            try:
+                snapshot = ImageGrab.grab(bbox=bounds)
+            except OSError:
+                snapshot = None
+            if snapshot is not None:
+                cover.snapshot = ImageTk.PhotoImage(snapshot, master=cover)
+                tk.Label(
+                    cover, image=cover.snapshot, bd=0, highlightthickness=0,
+                ).place(relx=0, rely=0, relwidth=1, relheight=1)
+        cover.place(relx=0, rely=0, relwidth=1, relheight=1)
+        cover.lift()
+        root.update_idletasks()
+        ctk.set_appearance_mode(mode.capitalize())
+        for listener in tuple(_THEME_LISTENERS.get(root, ())):
+            listener(mode)
+        apply_titlebar_theme(root, mode == "dark")
+        root.update_idletasks()
+        root.after(80, cover.destroy)
+        cover_scheduled_for_removal = True
+        return mode
+    finally:
+        _THEME_CHANGES_IN_PROGRESS.discard(root)
+        if not cover_scheduled_for_removal:
+            cover.destroy()
+
 
 try:
     import sv_ttk
@@ -223,19 +295,20 @@ def _replace_scale_slider(layout, slider_element):
 
 
 def _configure_scale_style(app, style, palette):
+    style.configure(
+        "Moviq.Horizontal.TScale",
+        background=palette["preset_surface"],
+        troughcolor=palette["preset_border"],
+    )
+    style.map(
+        "Moviq.Horizontal.TScale",
+        background=[
+            ("disabled", palette["preset_surface"]),
+            ("active", palette["preset_surface"]),
+            ("!disabled", palette["preset_surface"]),
+        ],
+    )
     if not HAVE_SV:
-        style.configure(
-            "Moviq.Horizontal.TScale",
-            background=palette["accent"],
-            troughcolor=palette["preset_border"],
-        )
-        style.map(
-            "Moviq.Horizontal.TScale",
-            background=[
-                ("disabled", palette["muted"]),
-                ("active", palette["accent_hi"]),
-            ],
-        )
         return
 
     mode = app.mode
@@ -251,19 +324,19 @@ def _configure_scale_style(app, style, palette):
             "normal": tk.PhotoImage(
                 master=root,
                 data=_scale_thumb_png(
-                    palette["accent"], palette["card"],
+                    palette["accent"], palette["preset_surface"],
                 ),
             ),
             "hover": tk.PhotoImage(
                 master=root,
                 data=_scale_thumb_png(
-                    palette["accent_hi"], palette["card"],
+                    palette["accent_hi"], palette["preset_surface"],
                 ),
             ),
             "disabled": tk.PhotoImage(
                 master=root,
                 data=_scale_thumb_png(
-                    palette["muted"], palette["card"],
+                    palette["muted"], palette["preset_surface"],
                 ),
             ),
         }
@@ -294,11 +367,32 @@ def _tk_photoimage(root, track_color, knob_color, active):
     )
 
 
-def apply_theme(app, mode):
+def _configure_table_fonts(app):
+    family = tkfont.nametofont("TkTextFont").actual("family")
+    for attribute, name, size, weight in (
+        ("table_name_font", "MoviqTableNameFont", 16, "normal"),
+        ("table_aux_font", "MoviqTableAuxFont", 13.5, "normal"),
+        ("table_heading_font", "MoviqTableHeadingFont", 13.5, "bold"),
+    ):
+        font = getattr(app, attribute, None)
+        options = {
+            "family": family,
+            "size": round(size * 0.75),
+            "weight": weight,
+        }
+        if font is None:
+            font = tkfont.Font(app.root, name=name, **options)
+            setattr(app, attribute, font)
+        else:
+            font.configure(**options)
+
+
+def apply_app_palette(app, mode):
     app.mode, app.pal = mode, PALETTES[mode]
     pal = app.pal
+    _configure_table_fonts(app)
     app._status_tooltip.set_theme(
-        pal.get("hover", "#f1f5f9"), pal["fg"], pal["chip_border"],
+        pal["tooltip_bg"], pal["fg"], pal["chip_border"],
         pal["muted"],
     )
     style = ttk.Style()
@@ -315,14 +409,11 @@ def apply_theme(app, mode):
                         borderwidth=0, relief="flat")
         style.map("TButton", background=[("active", pal["btn_hi"])])
         style.configure("Accent.TButton", background=pal["accent"],
-                        foreground="#ffffff", padding=(20, 8),
+                        foreground=pal["accent_text"], padding=(20, 8),
                         font="TkHeadingFont")
         style.map("Accent.TButton",
                   background=[("active", pal["accent_hi"])])
         style.configure("TEntry", padding=6)
-        style.configure("Treeview", background=pal["card"],
-                        fieldbackground=pal["card"], foreground=pal["fg"],
-                        borderwidth=0)
     style.configure(".", font="TkDefaultFont")
     for style_name in (
         "TLabel", "TButton", "TCheckbutton",
@@ -332,14 +423,6 @@ def apply_theme(app, mode):
     _configure_switch_style(app, style, pal)
     _configure_scale_style(app, style, pal)
     if not HAVE_SV:
-        style.configure(
-            "Treeview.Heading", background=pal["btn"],
-            foreground=pal["fg"], relief="flat", padding=(8, 8),
-        )
-        style.map(
-            "Treeview", background=[("selected", pal["accent"])],
-            foreground=[("selected", "#ffffff")],
-        )
         style.configure(
             "Horizontal.TProgressbar",
             background=pal["accent"], troughcolor=pal["btn"],
@@ -380,24 +463,11 @@ def apply_theme(app, mode):
         background=[("active", pal["btn_hi"])],
     )
     style.configure(
-        "ResetColumns.TButton",
-        background=pal["header_bg"],
-        foreground=pal["header_muted"],
-        borderwidth=0,
-        padding=(3, 1),
-        font="TkDefaultFont",
-    )
-    style.map(
-        "ResetColumns.TButton",
-        background=[("active", pal["header_bg"])],
-        foreground=[("active", pal["muted"])],
-    )
-    style.configure(
         "Table.TFrame",
-        background=pal["border"],
-        bordercolor=pal["border"],
-        lightcolor=pal["border"],
-        darkcolor=pal["border"],
+        background=pal["header_separator"],
+        bordercolor=pal["header_separator"],
+        lightcolor=pal["header_separator"],
+        darkcolor=pal["header_separator"],
         borderwidth=1,
         relief="solid",
     )
@@ -434,25 +504,9 @@ def apply_theme(app, mode):
         font="TkDefaultFont",
     )
     style.configure(
-        "Treeview",
-        background=pal["bg"],
-        fieldbackground=pal["bg"],
-        foreground=pal["rowfg"],
-        borderwidth=0,
-        font="TkTextFont",
-        rowheight=tkfont.nametofont("TkTextFont").metrics("linespace") + 12,
-        padding=(12, 2),
-        indent=0,
-    )
-    style.map(
-        "Treeview",
-        background=[("selected", pal.get("selection", pal["zone_hi"]))],
-        foreground=[("selected", pal["fg"])],
-    )
-    style.configure(
         "Accent.TButton",
         background=pal["accent"],
-        foreground="#ffffff",
+        foreground=pal["accent_text"],
         padding=(20, 8),
         borderwidth=0,
         font="TkHeadingFont",
@@ -466,13 +520,15 @@ def apply_theme(app, mode):
         ],
         foreground=[
             ("disabled", pal["muted"]),
-            ("active", "#ffffff"),
-            ("!disabled", "#ffffff"),
+            ("active", pal["accent_text"]),
+            ("!disabled", pal["accent_text"]),
         ],
     )
-    style.configure("Treeview.Heading", font="TkHeadingFont",
-                    padding=(14, 10), background=pal["card"],
-                    foreground=pal["fg"], borderwidth=0)
+    if hasattr(app, "tree"):
+        app.tree.set_theme(
+            pal, app.table_name_font, app.table_aux_font,
+            app.table_heading_font,
+        )
     style.configure(
         "Title.TLabel", font="MoviqTitleFont",
         background=pal["header_bg"], foreground=pal["fg"],
@@ -528,13 +584,13 @@ def apply_theme(app, mode):
         "HeaderDivider.TSeparator", background=pal["header_border"],
     )
     app.media_mode_selector.set_theme(
-        background=pal["header_bg"], track=pal["header_bg"],
-        border=pal["header_accent"], active=pal["header_accent"],
+        background=pal["header_bg"], track=pal["switch_track"],
+        border=pal["switch_border"], active=pal["switch_active"],
         foreground=pal["fg"],
         muted=pal["header_muted"],
-        accent_foreground=pal["accent_text"],
+        accent_foreground=pal["header_accent"],
         canvas_background=pal["header_bg"],
+        active_border=pal["header_accent"],
     )
     app.media_mode_selector.set_mode(app.media_mode.get(), animate=False)
     app._apply_header_theme()
-    apply_titlebar_theme(app.root, mode == "dark")

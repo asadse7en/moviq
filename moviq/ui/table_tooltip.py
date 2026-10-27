@@ -1,7 +1,7 @@
 import tkinter as tk
 import tkinter.font as tkfont
 
-from .popups import set_window_icon
+from .window_utils import set_window_icon
 
 
 class TableTooltip:

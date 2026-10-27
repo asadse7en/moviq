@@ -40,6 +40,10 @@ class TMDBError(Exception):
         super().__init__(message)
 
 
+class TMDBNetworkError(TMDBError):
+    """Raised when a provider request cannot reach its server."""
+
+
 class TMDBAuthError(TMDBError):
     """Raised when TMDB rejects the configured API credential."""
 
@@ -254,20 +258,22 @@ class TMDB:
                 )
             except requests.exceptions.Timeout:
                 if attempt >= MAX_RETRIES:
-                    raise TMDBError(
+                    raise TMDBNetworkError(
                         "TMDB request timed out.", self.key,
                     ) from None
                 self._wait(self._backoff(attempt))
                 continue
             except requests.exceptions.ConnectionError:
                 if attempt >= MAX_RETRIES:
-                    raise TMDBError(
+                    raise TMDBNetworkError(
                         "Could not connect to TMDB.", self.key,
                     ) from None
                 self._wait(self._backoff(attempt))
                 continue
             except requests.exceptions.RequestException:
-                raise TMDBError("TMDB request failed.", self.key) from None
+                raise TMDBNetworkError(
+                    "TMDB request failed.", self.key,
+                ) from None
 
             status = response.status_code
             if status == 401:

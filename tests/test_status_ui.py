@@ -605,6 +605,29 @@ class StatusPresentationTests(unittest.TestCase):
             light["accent"], "#ccfbf1",
         ))
 
+    def test_filter_chips_use_visible_status_colors(self):
+        app = App.__new__(App)
+        app._status_filter = None
+        app._filter_counts = {
+            "all": 0, "ready": 0, "review": 0, "error": 0, "done": 0,
+        }
+        app.filter_control = Mock()
+        app.pal = PALETTES["dark"]
+
+        app._refresh_filter_chip_styles()
+
+        app.filter_control.set_labels.assert_called_once_with(
+            ("All 0", "Ready 0", "Review 0", "Error 0", "Done 0"),
+        )
+        table_colors = app.pal["table_chip_colors"]
+        app.filter_control.set_segment_colors.assert_called_once_with({
+            "ready": (table_colors["ready"][1], table_colors["ready"][0]),
+            "review": app.pal["status_colors"]["review"],
+            "error": app.pal["status_colors"]["error"],
+            "done": (table_colors["done"][1], table_colors["done"][0]),
+        })
+        app.filter_control.set_selected.assert_called_once_with("all")
+
 
 class MatchCancellationTests(unittest.TestCase):
     def test_cancel_restores_unfinished_rows_and_keeps_completed_matches(self):
@@ -862,24 +885,28 @@ class SelectionActionTests(unittest.TestCase):
             SimpleNamespace(status="review"),
             SimpleNamespace(status="error"),
             SimpleNamespace(status="done"),
+            SimpleNamespace(status="review", error="network failure"),
         ]
         app.tree = SimpleNamespace(selection=lambda: ())
         app.filter_vars = {
             key: Mock()
-            for key in ("all", "ready", "review", "nomatch", "done")
+            for key in (
+                "all", "ready", "review", "error", "done",
+            )
         }
         app.update_action_labels = Mock()
         app.update_detail = Mock()
         app._schedule_status_cells = Mock()
+        app._matches_current_filter = Mock(return_value=True)
         app._status_filter = None
         app.empty_state = Mock()
 
         app.update_summary()
 
-        app.filter_vars["all"].set.assert_called_once_with("All 4")
+        app.filter_vars["all"].set.assert_called_once_with("All 5")
         app.filter_vars["ready"].set.assert_called_once_with("Ready 1")
         app.filter_vars["review"].set.assert_called_once_with("Review 1")
-        app.filter_vars["nomatch"].set.assert_called_once_with("No match 0")
+        app.filter_vars["error"].set.assert_called_once_with("Error 2")
         app.filter_vars["done"].set.assert_called_once_with("Done 1")
         app.empty_state.place_forget.assert_called_once_with()
 
@@ -891,16 +918,32 @@ class SelectionActionTests(unittest.TestCase):
             ("pending", "review", False),
             ("review", "review", True),
             ("error", "review", False),
+            ("error", "error", True),
+            ("review_error", "review", False),
+            ("review_error", "error", True),
             ("nomatch", "nomatch", True),
+            ("nomatch", "review", False),
+            ("nomatch_error", "nomatch", False),
+            ("nomatch_error", "error", True),
+            ("auto_error", "ready", False),
             ("done", "done", True),
             ("no_change", "done", True),
-            ("nomatch", "review", False),
+            ("done_error", "done", False),
             ("done", "ready", False),
         ):
             with self.subTest(status=status, filter=selected_filter):
+                status_value, error = {
+                    "review_error": ("review", "provider error"),
+                    "nomatch_error": ("nomatch", "provider error"),
+                    "auto_error": ("auto", "provider error"),
+                    "done_error": ("done", "provider error"),
+                }.get(status, (status, ""))
                 self.assertEqual(
                     App._matches_status_filter(
-                        SimpleNamespace(status=status), selected_filter,
+                        SimpleNamespace(
+                            status=status_value, error=error,
+                        ),
+                        selected_filter,
                     ),
                     expected,
                 )

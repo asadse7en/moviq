@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from ..controls import SegmentedModeToggle
+from ..controls import RoundedCard, SegmentedModeToggle
 from ._common import (
     CUSTOM_ID, MOVIE_DEFAULT_ID, MOVIE_FORMATS, MOVIE_SAMPLE,
     TV_DEFAULT_ID, TV_FORMATS, TV_SAMPLE, format_pattern, render_pattern,
@@ -103,13 +103,14 @@ class FormattingTabMixin:
     def _set_format_selector_theme(self, palette):
         self.format_selector.set_theme(
             background=palette["header_bg"],
-            track=palette["header_bg"],
-            border=palette["header_accent"],
-            active=palette["header_accent"],
+            track=palette["switch_track"],
+            border=palette["switch_border"],
+            active=palette["switch_active"],
             foreground=palette["fg"],
             muted=palette["header_muted"],
-            accent_foreground=palette["accent_text"],
+            accent_foreground=palette["header_accent"],
             canvas_background=palette["header_bg"],
+            active_border=palette["header_accent"],
         )
         self.format_selector.set_mode(
             self.format_selector.mode, animate=False,
@@ -143,22 +144,19 @@ class FormattingTabMixin:
         )
         hint.grid(row=0, column=1, sticky="e")
         self._format_header_hints[kind] = hint
-        right_panel = tk.Frame(
-            right_pane,
-            background=self.app.pal["preset_surface"],
-            highlightthickness=1,
-            highlightbackground=self.app.pal["preset_border"],
-            highlightcolor=self.app.pal["preset_border"],
-            padx=12,
-            pady=10,
+        right_panel = RoundedCard(
+            right_pane, self.app.pal["bg"],
+            self.app.pal["preset_surface"],
+            self.app.pal["preset_border"],
         )
         right_panel.grid(row=1, column=0, sticky="nsew")
-        right_panel.columnconfigure(0, weight=1)
+        panel_content = right_panel.content
+        panel_content.columnconfigure(0, weight=1)
         self._format_panels[kind] = right_panel
         self._format_panel_labels[kind] = {
             "primary": [], "muted": [], "accent": [],
         }
-        self._format_panel_surfaces[kind] = [right_panel]
+        self._format_panel_surfaces[kind] = [panel_content]
         preset_var = self.vars[f"{kind}_preset_id"]
         setattr(self, f"{kind}_preset_var", preset_var)
         self._label(
@@ -199,7 +197,7 @@ class FormattingTabMixin:
             field_row_index = index * 2
             field_variable = self.vars[variable_key]
             field_row = tk.Frame(
-                right_panel, background=self.app.pal["preset_surface"],
+                panel_content, background=self.app.pal["preset_surface"],
             )
             field_row.grid(
                 row=field_row_index, column=0, sticky="ew", pady=(2, 0),
@@ -227,7 +225,7 @@ class FormattingTabMixin:
                 checkbox.grid(row=0, column=1, sticky="e", padx=(8, 0))
                 self._format_folder_toggles[kind][create_key] = checkbox
             entry_wrap, entry = self.make_styled_entry(
-                right_panel, field_variable,
+                panel_content, field_variable,
             )
             entry.configure(font=("Consolas", 9))
             entry.grid_configure(padx=7, pady=3)
@@ -251,7 +249,9 @@ class FormattingTabMixin:
             "movie_file_pattern" if kind == "movie" else "tv_file_pattern"
         ]
         token_row = len(field_definitions) * 2
-        token_bar = ttk.Frame(right_panel)
+        token_bar = ttk.Frame(
+            panel_content, style="Settings.Card.TFrame",
+        )
         token_bar.grid(row=token_row, column=0, sticky="w", pady=(2, 5))
         self._format_token_rows[kind] = token_bar
         tokens = (
@@ -269,11 +269,14 @@ class FormattingTabMixin:
             )
             button.pack(side="left", padx=(0, 4))
             self._format_token_buttons[kind].append(button)
-        ttk.Separator(right_panel, orient="horizontal").grid(
+        ttk.Separator(
+            panel_content, orient="horizontal",
+            style="Settings.Card.TSeparator",
+        ).grid(
             row=token_row + 1, column=0, sticky="ew", pady=(2, 7),
         )
         preview_heading = tk.Label(
-            right_panel, text="Preview", font="TkHeadingFont",
+            panel_content, text="Preview", font="TkHeadingFont",
             background=self.app.pal["preset_surface"],
             foreground=self.app.pal["fg"],
         )
@@ -282,7 +285,7 @@ class FormattingTabMixin:
         )
         self._format_panel_labels[kind]["primary"].append(preview_heading)
         preview = tk.Frame(
-            right_panel, background=self.app.pal["preset_surface"],
+            panel_content, background=self.app.pal["preset_surface"],
         )
         preview.grid(row=token_row + 3, column=0, sticky="new")
         self._format_panel_surfaces[kind].extend((preview,))
@@ -375,9 +378,8 @@ class FormattingTabMixin:
         surface = palette["preset_surface"]
         for widget in self._format_panel_surfaces[kind]:
             widget.configure(background=surface)
-        self._format_panels[kind].configure(
-            highlightbackground=palette["preset_border"],
-            highlightcolor=palette["preset_border"],
+        self._format_panels[kind].set_surface(
+            palette["bg"], surface, palette["preset_border"],
         )
         for widget in self._format_panel_labels[kind]["primary"]:
             widget.configure(background=surface, foreground=palette["fg"])
@@ -395,12 +397,12 @@ class FormattingTabMixin:
     def _make_format_preset_card(
         self, parent, kind, preset, custom=False,
     ):
-        card = tk.Frame(
-            parent, bd=0,
-            highlightthickness=1, takefocus=True,
+        card = RoundedCard(
+            parent, self.app.pal["bg"], self.app.pal["preset_surface"],
+            self.app.pal["preset_border"], radius=7,
         )
-        content = tk.Frame(card, bd=0, highlightthickness=0)
-        content.pack(fill="both", expand=True, padx=10, pady=8)
+        content = card.content
+        card.configure(takefocus=True)
         title_row = tk.Frame(content, bd=0, highlightthickness=0)
         title_row.grid(row=0, column=0, columnspan=2, sticky="ew")
         title_row.columnconfigure(1, weight=1)
@@ -630,12 +632,10 @@ class FormattingTabMixin:
             )
             foreground = palette["fg"]
             muted = palette["muted"]
-            record["card"].configure(
-                background=background,
-                highlightbackground=border,
-                highlightcolor=border,
-                cursor="hand2",
+            record["card"].set_surface(
+                palette["bg"], background, border,
             )
+            record["card"].configure(cursor="hand2")
             record["text_block"].configure(background=background)
             record["title_row"].configure(background=background)
             record["indicator"].configure(
