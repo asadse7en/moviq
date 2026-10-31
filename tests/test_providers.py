@@ -149,6 +149,16 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result[0]["provider"], "omdb")
         self.assertEqual(result[0]["id"], ids.encode("omdb", 1))
 
+    def test_provider_callback_reports_sources_as_they_are_tried(self):
+        a, b = Stub("tmdb", OTHER), Stub("omdb", GOOD, needs_key=True)
+        router = router_with(["tmdb", "omdb"], {"tmdb": a, "omdb": b})
+        tried = []
+        router.on_provider = tried.append
+
+        router.search("Inception", 2010)
+
+        self.assertEqual(tried, ["tmdb", "omdb"])
+
     def test_weak_results_are_kept_when_nothing_better_exists(self):
         a, b = Stub("tmdb", OTHER), Stub("omdb", [], needs_key=True)
         router = router_with(["tmdb", "omdb"], {"tmdb": a, "omdb": b})

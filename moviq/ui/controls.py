@@ -438,10 +438,17 @@ class RoundedButton(tk.Canvas):
         if self._appearance is not None:
             fill, border, foreground, active = self._appearance
             if (self._hover or self._pressed) and not disabled:
-                fill = palette["hover_background"]
-                if not active:
+                if active:
+                    fill = palette["accent_hover"]
+                    border = palette["accent_hover"]
+                    foreground = palette["accent_foreground"]
+                else:
+                    fill = palette["hover_background"]
                     border = palette["hover_border"]
             if disabled:
+                if active:
+                    fill = palette["background"]
+                    border = palette["border"]
                 foreground = palette["muted"]
         elif self.variant == "accent":
             fill = (
@@ -547,6 +554,13 @@ def create_action_button(
         canvas_background=palette["card"],
     )
     button.set_state(state)
+    if primary:
+        button.set_appearance(
+            background=palette["switch_active"],
+            border=palette["header_accent"],
+            foreground=palette["header_accent"],
+            active=True,
+        )
     button.configure(takefocus=1)
     return button
 

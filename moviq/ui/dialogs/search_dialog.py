@@ -13,8 +13,9 @@ from ...core.naming import similarity
 from ...core.show_resolver import ShowState
 from ...core.providers.ids import display_id, parse_typed_id
 from ...core.tmdb import MAX_WORKERS, TMDBOperationCache
-from ..popups import apply_titlebar_theme, set_window_icon
+from ..controls import create_action_button
 from ..icons import draw_icon
+from ..popups import apply_titlebar_theme, set_window_icon
 from ._common import ID_RE, _match_dialog_sizes
 from .details_panel import DetailsPanelMixin
 from .poster_loader import PosterLoaderMixin
@@ -479,58 +480,15 @@ class SearchDialog(
 
     def _action_button(self, parent, text, command, role):
         palette = self.app.pal
-        is_primary = role == "primary"
-        background = palette["accent"] if is_primary else palette["btn"]
-        foreground = (
-            palette["accent_text"] if is_primary else palette["fg"]
+        return create_action_button(
+            parent, text, command, palette,
+            primary=role == "primary",
+            ui_scale=self.app.UI_SCALE,
+            expand=True,
         )
-        hover_background = (
-            palette["accent_hi"] if is_primary else palette["btn_hi"]
-        )
-        button = tk.Button(
-            parent,
-            text=text,
-            command=command,
-            bg=background,
-            fg=foreground,
-            activebackground=hover_background,
-            activeforeground=foreground,
-            disabledforeground=(
-                palette["muted"] if is_primary else foreground
-            ),
-            relief="flat",
-            overrelief="flat",
-            borderwidth=0,
-            highlightthickness=0,
-            padx=16,
-            pady=8,
-            font="TkHeadingFont" if is_primary else "TkDefaultFont",
-            cursor="hand2",
-            takefocus=True,
-        )
-        button.bind(
-            "<Enter>",
-            lambda _event: button.configure(
-                bg=hover_background,
-            ) if str(button.cget("state")) != "disabled" else None,
-        )
-        button.bind(
-            "<Leave>",
-            lambda _event: button.configure(
-                bg=background,
-            ) if str(button.cget("state")) != "disabled" else None,
-        )
-        return button
 
     def _set_match_button_state(self, enabled):
-        palette = self.app.pal
-        self.update_button.configure(
-            state="normal" if enabled else "disabled",
-            bg=palette["accent"] if enabled else palette["btn"],
-            fg=palette["accent_text"] if enabled else palette["muted"],
-            disabledforeground=palette["muted"],
-            cursor="hand2" if enabled else "arrow",
-        )
+        self.update_button.set_state("normal" if enabled else "disabled")
 
     def _center(self):
         self.app.root.update_idletasks()

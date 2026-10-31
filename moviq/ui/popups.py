@@ -2,11 +2,13 @@ import ctypes
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
+import time
 from ctypes import wintypes
 from tkinter import ttk
 
 from .. import resource
-from .controls import create_action_button
+from ..core.providers.settings import PROVIDER_INFO
+from .controls import RoundedCard, create_action_button
 from .window_utils import set_window_icon
 
 
@@ -75,13 +77,19 @@ def apply_titlebar_theme(window, dark):
 
 
 class MatchProgressPopup:
-    def __init__(self, app, on_cancel, on_rename, on_review, on_close):
+    def __init__(
+        self, app, on_cancel, on_rename, on_review, on_close,
+        task="matching",
+    ):
         self.app = app
         self.on_cancel = on_cancel
         self.on_rename = on_rename
         self.on_review = on_review
         self.on_close = on_close
         self.palette = app.pal
+        self.surface = self.palette["preset_surface"]
+        self.task = task
+        self.started_at = time.monotonic()
         self.completed = False
 
         self.backdrop = tk.Toplevel(app.root)
@@ -96,7 +104,9 @@ class MatchProgressPopup:
         self.window = tk.Toplevel(app.root)
         set_window_icon(self.window)
         self.window.withdraw()
-        self.window.title("Matching Files with TMDb")
+        self.window.title(
+            "Renaming files" if task == "rename" else "Matching files",
+        )
         self.window.configure(bg=self.palette["bg"])
         self.window.transient(app.root)
         self.window.resizable(False, False)
@@ -121,121 +131,211 @@ class MatchProgressPopup:
     def _configure_styles(self):
         palette = self.palette
         style = ttk.Style(self.window)
-        style.configure("MatchPopup.TFrame", background=palette["card"])
+        style.configure("MatchPopup.TFrame", background=self.surface)
         style.configure(
             "MatchPopup.Title.TLabel",
-            background=palette["card"],
+            background=self.surface,
             foreground=palette["fg"],
             font="TkHeadingFont",
         )
         style.configure(
             "MatchPopup.Muted.TLabel",
-            background=palette["card"],
+            background=self.surface,
             foreground=palette["muted"],
             font="TkTextFont",
         )
         style.configure(
             "MatchPopup.Count.TLabel",
-            background=palette["card"],
+            background=self.surface,
             foreground=palette["fg"],
             font="TkHeadingFont",
         )
+        style.configure(
+            "MatchPopup.Divider.TSeparator",
+            background=palette["header_border"],
+        )
+
     def _build_content(self):
         palette = self.palette
-        card = ttk.Frame(
+        self.card_surface = RoundedCard(
             self.window,
-            style="MatchPopup.TFrame",
-            padding=(22, 18, 22, 14),
+            background=palette["bg"],
+            surface=self.surface,
+            border=palette["header_border"],
+            radius=8,
         )
+        self.card_surface.pack(fill="both", expand=True)
+        card = self.card_surface.content
+        card.configure(padx=22, pady=20)
         self.card = card
-        card.pack(fill="both", expand=True)
         card.columnconfigure(1, weight=1)
-
-        header = ttk.Frame(card, style="MatchPopup.TFrame")
-        header.grid(row=0, column=1, columnspan=2, sticky="ew")
-        header.columnconfigure(0, weight=1)
         self.icon_label = tk.Label(
             card,
             text="\u27f3",
-            bg=palette["card"],
+            bg=self.surface,
             fg=palette["accent"],
             font="MoviqTitleFont",
             width=2,
         )
-        self.icon_label.grid(
-            row=0, column=0, rowspan=3, sticky="n", padx=(0, 12),
-        )
-        self.title_var = tk.StringVar(value="Matching Files with TMDb")
+        self.icon_label.grid(row=0, column=0, rowspan=2, sticky="n",
+                             padx=(0, 12))
+        heading = ttk.Frame(card, style="MatchPopup.TFrame")
+        heading.grid(row=0, column=1, sticky="ew")
+        heading.columnconfigure(0, weight=1)
+        self.title_var = tk.StringVar(value="Matching files")
         ttk.Label(
-            header,
+            heading,
             textvariable=self.title_var,
             style="MatchPopup.Title.TLabel",
         ).grid(row=0, column=0, sticky="w")
         self.percent_var = tk.StringVar(value="0%")
         ttk.Label(
-            header,
+            heading,
             textvariable=self.percent_var,
             style="MatchPopup.Count.TLabel",
         ).grid(row=0, column=1, sticky="e", padx=(12, 0))
 
-        self.current_var = tk.StringVar(value="Preparing files...")
-        ttk.Label(
+        if self.task == "rename":
+            subtitle = "Keep Moviq open until this finishes."
+            source_label = ""
+        else:
+            source_label = "Waiting"
+            subtitle = ""
+        self.subtitle_var = tk.StringVar(value=subtitle)
+        self.subtitle_label = ttk.Label(
             card,
-            textvariable=self.current_var,
+            textvariable=self.subtitle_var,
             style="MatchPopup.Muted.TLabel",
-            wraplength=0,
-        ).grid(
-            row=1, column=1, columnspan=2, sticky="w", pady=(6, 10),
         )
+        if subtitle:
+            self.subtitle_label.grid(
+                row=1, column=1, sticky="w", pady=(3, 18),
+            )
 
         self.progress_canvas = tk.Canvas(
             card,
-            height=12,
-            bg=palette["card"],
+            height=14,
+            bg=self.surface,
             bd=0,
             highlightthickness=0,
         )
-        self.progress_canvas.grid(
-            row=2, column=1, columnspan=2, sticky="ew",
-        )
+        self.progress_canvas.grid(row=2, column=0, columnspan=2, sticky="ew")
         self.progress_canvas.bind(
             "<Configure>", self._draw_progress, add="+",
         )
         self._progress_value = 0.0
         self._progress_target = 0.0
+        self._progress_start = 0.0
+        self._progress_started_at = 0.0
+        self._progress_duration = 0.32
         self._progress_after = None
 
+        progress_details = ttk.Frame(card, style="MatchPopup.TFrame")
+        progress_details.grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 12),
+        )
+        progress_details.columnconfigure(0, weight=1)
+        self.progress_count_var = tk.StringVar(value="0 of 0")
+        ttk.Label(
+            progress_details, textvariable=self.progress_count_var,
+            style="MatchPopup.Count.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            progress_details, textvariable=self.percent_var,
+            style="MatchPopup.Muted.TLabel",
+        ).grid(row=0, column=1, sticky="e")
+        self.percent_var.set("0%")
+
+        current_panel = tk.Frame(
+            card, bg=palette["header_bg"], padx=12, pady=10,
+        )
+        current_panel.grid(
+            row=4, column=0, columnspan=2, sticky="ew",
+        )
+        current_panel.columnconfigure(0, weight=1)
+        self.current_var = tk.StringVar(value="Preparing files...")
+        self.current_label = tk.Label(
+            current_panel,
+            textvariable=self.current_var,
+            bg=palette["header_bg"],
+            fg=palette["fg"],
+            font="TkTextFont",
+            anchor="w",
+        )
+        self.current_label.grid(row=0, column=0, sticky="ew")
+        self.source_var = tk.StringVar(value=source_label)
+        self.source_label = tk.Label(
+            current_panel,
+            textvariable=self.source_var,
+            bg=palette["btn"],
+            fg=palette["accent"],
+            font="TkDefaultFont",
+            padx=10,
+            pady=3,
+        )
+        if self.task == "matching":
+            self.source_label.grid(row=0, column=1, sticky="e", padx=(12, 0))
+
+        ttk.Separator(
+            card, orient="horizontal",
+            style="MatchPopup.Divider.TSeparator",
+        ).grid(row=5, column=0, columnspan=2, sticky="ew", pady=(18, 14))
+
         counters = ttk.Frame(card, style="MatchPopup.TFrame")
-        counters.grid(
-            row=3, column=1, columnspan=2, sticky="ew", pady=(12, 0),
-        )
-        for index in range(3):
+        counters.grid(row=6, column=0, columnspan=2, sticky="ew")
+        for index in (0, 2, 4):
             counters.columnconfigure(index, weight=1)
-        self.counter_vars = [
-            tk.StringVar(value="Matched  0"),
-            tk.StringVar(value="Needs Review  0"),
-            tk.StringVar(value="Failed  0"),
-        ]
-        counter_colors = (
-            palette["status_colors"]["auto"][0],
-            palette["status_colors"]["review"][0],
-            palette["status_colors"]["error"][0],
-        )
-        for index, (value, color) in enumerate(
-            zip(self.counter_vars, counter_colors),
-        ):
-            label = ttk.Label(
-                counters,
-                textvariable=value,
-                style="MatchPopup.Count.TLabel",
-                foreground=color,
-                anchor="center",
+        if self.task == "rename":
+            counter_labels = ("Renamed", "Skipped", "Failed")
+            counter_colors = (
+                palette["accent"],
+                palette["muted"],
+                palette["status_colors"]["error"][0],
             )
-            label.grid(row=0, column=index, sticky="ew", padx=(0, 8))
+        else:
+            counter_labels = ("Ready", "Review", "No match / failed")
+            counter_colors = (
+                palette["status_colors"]["auto"][0],
+                palette["status_colors"]["review"][0],
+                palette["status_colors"]["error"][0],
+            )
+        self.counter_vars = []
+        self.counter_label_vars = []
+        for index, (label_text, color) in enumerate(
+            zip(counter_labels, counter_colors),
+        ):
+            cell = ttk.Frame(counters, style="MatchPopup.TFrame")
+            cell.grid(row=0, column=index * 2, sticky="ew")
+            count_var = tk.StringVar(value="0")
+            name_var = tk.StringVar(value=label_text)
+            self.counter_vars.append(count_var)
+            self.counter_label_vars.append(name_var)
+            ttk.Label(
+                cell, textvariable=count_var,
+                style="MatchPopup.Count.TLabel",
+                foreground=color, anchor="center",
+                font="MoviqTitleFont",
+            ).pack()
+            ttk.Label(
+                cell, textvariable=name_var,
+                style="MatchPopup.Muted.TLabel",
+                anchor="center",
+            ).pack()
+            if index < 2:
+                tk.Frame(
+                    counters, bg=palette["header_border"], width=1,
+                ).grid(row=0, column=index * 2 + 1, sticky="ns", padx=12)
+
+        self.message_var = tk.StringVar(value="")
+        ttk.Label(
+            card, textvariable=self.message_var,
+            style="MatchPopup.Muted.TLabel",
+            wraplength=520,
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
         self.footer = ttk.Frame(card, style="MatchPopup.TFrame")
         self.footer.grid(
-            row=4, column=0, columnspan=3, sticky="ew", pady=(16, 0),
+            row=8, column=0, columnspan=2, sticky="ew", pady=(18, 0),
         )
         self._set_running_footer()
 
@@ -269,16 +369,20 @@ class MatchProgressPopup:
                     end - height, 0, end, height, fill=color, outline="",
                 )
 
-        capsule(width, self.palette["btn"])
+        capsule(width, self.palette["header_btn"])
         capsule(width * self._progress_value, self.palette["accent"])
 
     def _animate_progress(self):
         self._progress_after = None
-        delta = self._progress_target - self._progress_value
-        if abs(delta) < 0.004:
+        elapsed = time.monotonic() - self._progress_started_at
+        fraction = min(1.0, elapsed / self._progress_duration)
+        eased = 1 - (1 - fraction) ** 3
+        self._progress_value = (
+            self._progress_start
+            + (self._progress_target - self._progress_start) * eased
+        )
+        if fraction >= 1:
             self._progress_value = self._progress_target
-        else:
-            self._progress_value += delta * 0.28
         self._draw_progress()
         if self._progress_value != self._progress_target:
             self._progress_after = self.progress_canvas.after(
@@ -286,32 +390,51 @@ class MatchProgressPopup:
             )
 
     def _set_progress(self, percent):
-        self._progress_target = max(0.0, min(1.0, percent / 100))
-        if self._progress_after is None:
-            self._animate_progress()
+        target = max(0.0, min(1.0, percent / 100))
+        if self._progress_after is not None:
+            self.progress_canvas.after_cancel(self._progress_after)
+        self._progress_start = self._progress_value
+        self._progress_target = target
+        self._progress_started_at = time.monotonic()
+        self._progress_after = self.progress_canvas.after(
+            16, self._animate_progress,
+        )
 
     def _truncate_current_text(self, text):
-        if self.current_font.measure(text) <= 440:
+        if self.current_font.measure(text) <= 620:
             return text
         shortened = text
         while shortened and self.current_font.measure(
             shortened + "...",
-        ) > 440:
+        ) > 620:
             shortened = shortened[:-1]
         return f"{shortened.rstrip()}..." if shortened else "..."
 
     def _set_running_footer(self):
         for child in self.footer.winfo_children():
             child.destroy()
-        self._footer_button(
+        self.cancel_button = self._footer_button(
             self.footer,
             "Cancel",
             self.on_cancel,
-        ).pack(side="right")
+        )
+        self.cancel_button.pack(side="right")
 
     def _set_completed_footer(self, matched, flagged):
         for child in self.footer.winfo_children():
             child.destroy()
+        if self.task == "rename":
+            self._footer_button(
+                self.footer, "Done", self._close, primary=True,
+            ).pack(side="right")
+            self._footer_button(
+                self.footer, "Undo", self._undo_rename,
+                state=(
+                    "normal" if getattr(self, "can_undo", False)
+                    else "disabled"
+                ),
+            ).pack(side="right", padx=(0, 8))
+            return
         self._footer_button(
             self.footer,
             "Close",
@@ -341,39 +464,81 @@ class MatchProgressPopup:
 
     def update_progress(
         self, current, completed, total, matched, flagged, failed,
+        source=None,
     ):
         if self.completed:
             return
-        total = max(total, 1)
-        percent = min(100, int(100 * completed / total))
+        total = max(total, 0)
+        progress = min(100.0, 100 * completed / max(total, 1))
+        percent = int(progress)
+        self.progress_count_var.set(f"{completed} of {total}")
         self.percent_var.set(f"{percent}%")
-        self._set_progress(percent)
-        current_text = (
-            f"Matching file {min(completed + 1, total)} of {total}: {current}"
-            if current else f"Matching {completed} of {total} files..."
+        self._set_progress(progress)
+        self.current_var.set(
+            self._truncate_current_text(current or "Preparing files..."),
         )
-        self.current_var.set(self._truncate_current_text(current_text))
-        self.counter_vars[0].set(f"Matched  {matched}")
-        self.counter_vars[1].set(f"Needs Review  {flagged}")
-        self.counter_vars[2].set(f"Failed  {failed}")
+        if source:
+            self.source_var.set(
+                PROVIDER_INFO.get(source, {"label": source})["label"],
+            )
+        for variable, value in zip(
+            self.counter_vars, (matched, flagged, failed),
+        ):
+            variable.set(str(value))
+        if self.window.winfo_exists():
+            self.window.update_idletasks()
+            if self.task == "rename":
+                self.window.update()
 
     def complete(
         self, completed, total, matched, flagged, failed, cancelled=False,
     ):
         self.completed = True
-        self.title_var.set("Matching Complete")
-        total = max(total, 1)
+        total = max(total, 0)
         percent = 100 if not cancelled else min(
-            100, int(100 * completed / total),
+            100, int(100 * completed / max(total, 1)),
         )
+        elapsed = max(0, round(time.monotonic() - self.started_at))
+        if self.task == "rename":
+            self.title_var.set("Rename complete" if not cancelled else
+                               "Rename stopped")
+            noun = "file" if matched == 1 else "files"
+            second = "second" if elapsed == 1 else "seconds"
+            self.subtitle_var.set(
+                f"{matched} {noun} renamed in {elapsed} {second}."
+            )
+            self.message_var.set(
+                "Rename stopped. Completed files can be undone."
+                if cancelled else
+                "Renamed files are marked Done in the list."
+            )
+        else:
+            self.title_var.set("Matching complete")
+            noun = "file" if completed == 1 else "files"
+            second = "second" if elapsed == 1 else "seconds"
+            self.subtitle_var.set(
+                f"{completed} {noun} checked in {elapsed} {second}."
+            )
+            self.message_var.set(
+                "Matching was canceled."
+                if cancelled else
+                (
+                    f"{flagged} files need a quick look in the Review tab."
+                    if flagged else "All files are ready to rename."
+                )
+            )
         self.percent_var.set(f"{percent}%")
+        self.progress_count_var.set(f"{completed} of {total}")
         self._set_progress(percent)
-        self.counter_vars[0].set(f"Matched  {matched}")
-        self.counter_vars[1].set(f"Needs Review  {flagged}")
-        self.counter_vars[2].set(f"Failed  {failed}")
-        self.current_var.set(
-            "Matching canceled." if cancelled else "All matching tasks finished."
-        )
+        for variable, value in zip(
+            self.counter_vars, (matched, flagged, failed),
+        ):
+            variable.set(str(value))
+        self.current_var.set("")
+        self.window.title(self.title_var.get())
+        if self.task == "matching":
+            self.source_label.grid_remove()
+        self.icon_label.configure(text="\u2713")
         self._set_completed_footer(matched, flagged)
         self.window.protocol("WM_DELETE_WINDOW", self._close)
         self.window.bind("<Escape>", lambda _event: self._close())
@@ -385,8 +550,8 @@ class MatchProgressPopup:
         self.app.root.update_idletasks()
         self.window.update_idletasks()
         parent = self.app.root
-        width = max(480, self.card.winfo_reqwidth())
-        height = max(190, self.card.winfo_reqheight() + 2)
+        width = max(820, self.card.winfo_reqwidth() + 16)
+        height = max(300, self.card.winfo_reqheight() + 16)
         x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
         self.window.geometry(f"{width}x{height}+{x}+{y}")
@@ -414,6 +579,10 @@ class MatchProgressPopup:
         self._close()
         self.on_rename()
 
+    def _undo_rename(self):
+        self._close()
+        self.on_undo()
+
     def _review(self):
         self._close()
         self.on_review()
@@ -421,11 +590,33 @@ class MatchProgressPopup:
     def _close(self):
         if not self.window.winfo_exists():
             return
+        if self._progress_after is not None:
+            self.progress_canvas.after_cancel(self._progress_after)
+            self._progress_after = None
         self.window.grab_release()
         self.app.root.unbind("<Configure>", self._configure_binding)
         self.window.destroy()
         self.backdrop.destroy()
         self.on_close(self)
+
+
+class RenameProgressPopup(MatchProgressPopup):
+    def __init__(self, app, on_undo):
+        self.cancel_requested = False
+        self.on_undo = on_undo
+        super().__init__(
+            app,
+            on_cancel=self.cancel,
+            on_rename=lambda: None,
+            on_review=lambda: None,
+            on_close=lambda _dialog: None,
+            task="rename",
+        )
+
+    def cancel(self):
+        self.cancel_requested = True
+        if hasattr(self, "current_var") and self.window.winfo_exists():
+            self.current_var.set("Stopping after the current file...")
 
 
 class AppPopup(tk.Toplevel):

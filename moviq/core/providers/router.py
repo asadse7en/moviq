@@ -39,6 +39,7 @@ class ProviderRouter:
         self.operation_cache = operation_cache
         self.notices = []
         self._session = session
+        self.on_provider = None
         self._built = {}
         self._failed = {}
 
@@ -139,6 +140,8 @@ class ProviderRouter:
         online_search_succeeded = False
         other_provider_error = False
         for name in online_names:
+            if self.on_provider is not None:
+                self.on_provider(name)
             provider = self._provider(name)
             try:
                 results = getattr(provider, method)(query, year)
@@ -174,6 +177,8 @@ class ProviderRouter:
             and not other_provider_error
             and offline_enabled
         ):
+            if self.on_provider is not None:
+                self.on_provider("offline")
             provider = self._provider("offline")
             return [
                 self._tag("offline", result)

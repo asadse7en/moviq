@@ -59,8 +59,8 @@ from .controls import (
 )
 from .dialogs import SearchDialog
 from .popups import (
-    MatchProgressPopup, RenameConfirmationDialog, ask_yes_no, show_error,
-    show_info, show_warning,
+    MatchProgressPopup, RenameConfirmationDialog, RenameProgressPopup,
+    ask_yes_no, show_error, show_info, show_warning,
 )
 from ..core.settings_store import SettingsStore, resolve_system_theme
 from .settings import SettingsView
@@ -1494,7 +1494,7 @@ class App:
             else self.search_slot.winfo_width()
         )
         self.search_box.set_width(
-            max(1, min(round(360 * scale), available)),
+            max(1, min(round(320 * scale), available)),
         )
 
     def focus_search(self):
@@ -2792,6 +2792,9 @@ class App:
                     tmdb._provider(selected_source)
                     if selected_source != "automatic" else None
                 )
+                tmdb.on_provider = lambda name: self.results.put(
+                    ("provider", run_id, first_item, name),
+                )
                 if (
                     selected_provider is not None
                     and first_item.media_type not in selected_provider.kinds
@@ -2872,6 +2875,11 @@ class App:
                         continue
                     if kind == "started":
                         run["current"] = item
+                        pending["progress"] = True
+                        continue
+                    if kind == "provider":
+                        run["current"] = item
+                        run["source"] = result[0]
                         pending["progress"] = True
                         continue
                     if kind == "auth_error":
@@ -3010,7 +3018,7 @@ class App:
         if self._match_progress_dialog:
             self._match_progress_dialog.update_progress(
                 filename, run["done"], run["total"],
-                matched, flagged, failed,
+                matched, flagged, failed, source=run.get("source"),
             )
         elif run["total"]:
             suffix = (
@@ -3777,6 +3785,14 @@ class App:
             self._update_undo_button()
             return
         ops, errors = [], []
+        skipped_count = max(
+            0, len(scope) - len(todo) - len(conflicts_by_item),
+        )
+        rename_total = len(todo) + len(conflicts_by_item)
+        rename_progress = RenameProgressPopup(self, on_undo=self.undo)
+        renamed_count = 0
+        failed_count = len(conflicts_by_item)
+        processed_count = 0
 
         def apply_folder_renames(start):
             for operation in ops[start:]:
@@ -3789,7 +3805,23 @@ class App:
                     if path != other.path or root != other.root:
                         other.path, other.root = path, root
 
+        rename_progress.update_progress(
+            "", failed_count, rename_total,
+            renamed_count, skipped_count, failed_count,
+        )
         for it in todo:
+            if rename_progress.cancel_requested:
+                break
+            rename_progress.update_progress(
+                it.path.name,
+                failed_count + processed_count,
+                rename_total,
+                renamed_count,
+                skipped_count,
+                failed_count,
+            )
+            if rename_progress.cancel_requested:
+                break
             plan = plans[id(it)]
             new_path, error = apply_item_plan(
                 it, plan, ops, self.rename_subtitles.get(),
@@ -3802,30 +3834,58 @@ class App:
                 it.status = "error"
                 errors.append(f"{it.path.name}: {e}")
                 self.refresh_row(it)
-                continue
-            it.path, it.status, it.error = new_path, "done", ""
-            it.error_code = None
-            pending_show = getattr(it, "_pending_manual_show", None)
-            if pending_show:
-                choice, details = pending_show
-                try:
-                    self.remember_show(it, choice, details)
-                except (RuntimeError, ValueError) as error:
-                    errors.append(
-                        f"{it.path.name}: Could not remember TV show: {error}"
-                    )
-                else:
-                    it._pending_manual_show = None
+                failed_count += 1
+            else:
+                it.path, it.status, it.error = new_path, "done", ""
+                it.error_code = None
+                renamed_count += 1
+                pending_show = getattr(it, "_pending_manual_show", None)
+                if pending_show:
+                    choice, details = pending_show
+                    try:
+                        self.remember_show(it, choice, details)
+                    except (RuntimeError, ValueError) as error:
+                        errors.append(
+                            f"{it.path.name}: Could not remember TV show: "
+                            f"{error}"
+                        )
+                    else:
+                        it._pending_manual_show = None
+            processed_count += 1
+            rename_progress.update_progress(
+                it.path.name,
+                failed_count + processed_count,
+                rename_total,
+                renamed_count,
+                skipped_count,
+                failed_count,
+            )
         self._vcount.clear()
-        self._push_rename_undo(rename_before, ops, len(todo))
+        if ops or renamed_count:
+            self._push_rename_undo(rename_before, ops, renamed_count)
         self.refresh_all()
-        msg = f"Done. {sum(1 for o in ops if o[0] == 'move')} file(s) moved/renamed."
-        if errors:
-            msg += "\n\nProblems:\n" + "\n".join(errors[:8])
-        self.status("Applied.")
+        cancelled = processed_count < len(todo)
+        rename_progress.can_undo = bool(ops or renamed_count)
+        rename_progress.complete(
+            failed_count + processed_count,
+            rename_total,
+            renamed_count,
+            skipped_count,
+            failed_count,
+            cancelled=cancelled,
+        )
+        self.status(
+            "Rename stopped. Completed files can be undone."
+            if cancelled else "Applied."
+        )
         self._rename_running = False
         self._update_undo_button()
-        show_info(self, "Finished", msg)
+        if errors:
+            show_warning(
+                self,
+                "Rename completed with problems",
+                "\n".join(errors[:8]),
+            )
 
     def _push_rename_undo(self, records, ops, file_count):
         if not records:

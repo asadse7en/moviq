@@ -194,7 +194,7 @@ def build_main_page(app, page):
         values=tuple(app.filter_vars),
     )
     filter_count_width = sum(
-        app.filter_control.font.measure(f"{label} 000000")
+        app.filter_control.font.measure(f"{label} 000")
         + 2 * app.filter_control.horizontal_padding * app.UI_SCALE
         for label in ("All", "Ready", "Review", "Error", "Done")
     ) + 2
