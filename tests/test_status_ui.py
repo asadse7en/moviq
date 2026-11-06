@@ -487,6 +487,36 @@ class MediaModeDetectionTests(unittest.TestCase):
 
             self.assertEqual(_detect_media_mode([folder], "movie"), "tv")
 
+    def test_detects_numeric_episodes_from_show_folder_in_movie_mode(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            season = folder / "Attack on Titan" / "Season 01"
+            season.mkdir(parents=True)
+            for episode in ("01.mkv", "02.mkv", "03.mkv"):
+                (season / episode).touch()
+
+            self.assertEqual(_detect_media_mode([folder], "movie"), "tv")
+
+    def test_import_mode_detection_precedes_known_file_filtering(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            season = folder / "Attack on Titan" / "Season 01"
+            season.mkdir(parents=True)
+            files = [season / name for name in ("01.mkv", "02.mkv", "03.mkv")]
+            for path in files:
+                path.touch()
+            job = {
+                "paths": [folder],
+                "media_type": "movie",
+                "scanned": {},
+                "detect": True,
+                "known": set(files),
+            }
+
+            App._import_worker(job)
+
+            self.assertEqual(job["detected"], "tv")
+
     def test_detects_year_named_movies_added_in_tv_mode(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
@@ -547,6 +577,46 @@ class MediaModeDetectionTests(unittest.TestCase):
 
 
 class StatusPresentationTests(unittest.TestCase):
+    def test_missing_episode_explanation_names_a_missing_season(self):
+        app = App.__new__(App)
+        app._row_tooltip_paths = {}
+        item = SimpleNamespace(
+            status="review",
+            error="",
+            review_reason="episode_missing",
+            season_episode_count=0,
+            season_number=7,
+            episode_number=2,
+            match={},
+            review_match=None,
+            query="Better Call Saul",
+            title_score=1.0,
+            media_type="tv",
+            iid="missing-season",
+        )
+
+        expected = (
+            "Season 7 does not exist on TMDB, so episode 2 doesn't exist "
+            "there."
+        )
+
+        self.assertIn(expected, app._status_detail(item))
+        self.assertIn(("Why", expected), app._status_card(item))
+
+    def test_missing_episode_explanation_reports_existing_season_count(self):
+        app = App.__new__(App)
+        item = SimpleNamespace(
+            season_episode_count=24,
+            season_number=7,
+            episode_number=25,
+        )
+
+        self.assertEqual(
+            App._episode_missing_detail(item),
+            "Season 7 has only 24 episodes on TMDB, so episode 25 "
+            "doesn't exist there.",
+        )
+
     def test_dark_theme_uses_one_background_for_all_surfaces(self):
         dark = PALETTES["dark"]
 
@@ -824,6 +894,31 @@ class MatchCountTests(unittest.TestCase):
 
         self.assertEqual(item.status, "review")
         self.assertIsNone(item.match)
+
+    def test_finished_result_keeps_filename_while_other_work_continues(self):
+        current_item = Item(Path("Currently matching.mkv"), Path("Movies"))
+        finished_item = Item(Path("Finished.mkv"), Path("Movies"))
+        app = App.__new__(App)
+        app.results = queue.Queue()
+        app.results.put(("finished", 1, finished_item, "review", None, ""))
+        app._matching_run = {
+            "id": 1,
+            "completed": set(),
+            "current": current_item,
+            "done": 0,
+            "total": 2,
+        }
+        app.items = [current_item, finished_item]
+        app.job_done = 0
+        app.refresh_row = Mock()
+        app._status_title_score = Mock(return_value=0)
+        app._safe_exception_message = Mock(side_effect=lambda error: error)
+        app._restore_visible_row_order = Mock()
+        app._update_match_progress = Mock()
+
+        app._process_match_events()
+
+        self.assertIs(app._matching_run["current"], current_item)
 
 
 class MatchProgressTextTests(unittest.TestCase):

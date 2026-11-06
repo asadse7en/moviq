@@ -200,6 +200,8 @@ def rank_tv(results, query):
 def is_confident_tv(ranked, query, year, threshold=0.9):
     if not ranked or tv_score(ranked[0], query) < threshold:
         return False
+    if year and tv_score(ranked[0], query) >= 1.0:
+        return True
     if year:
         result_year = tv_year_of(ranked[0])
         return result_year is not None and abs(result_year - year) <= 1
@@ -219,8 +221,11 @@ def tv_episode_candidates(ranked, query, year, threshold=0.9):
         candidates = [
             result for result in candidates
             if (
-                tv_year_of(result) is not None
-                and abs(tv_year_of(result) - year) <= 1
+                tv_score(result, query) >= 1.0
+                or (
+                    tv_year_of(result) is not None
+                    and abs(tv_year_of(result) - year) <= 1
+                )
             )
         ]
     return candidates

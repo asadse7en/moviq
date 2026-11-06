@@ -18,6 +18,11 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, ttk
 
+try:  # DEBUG-TRACE
+    import debug_trace as dbg  # DEBUG-TRACE
+except Exception:  # DEBUG-TRACE
+    dbg = None  # DEBUG-TRACE
+
 from .. import __version__ as APP_VERSION
 from ..core.config import (
     ERROR_LOG_FILE, IMAGE_EXT, SIDECAR_EXT, VIDEO_EXT,
@@ -155,28 +160,25 @@ def _show_in_file_manager(path):
 
 
 def _detect_media_mode(paths, current_mode):
-    """Infer a clear mode mismatch from episode markers or movie years."""
+    """Infer a clear mode mismatch from parsed media types."""
     files = []
     for raw_path in paths:
         path = Path(raw_path)
         if path.is_dir():
-            files.extend(scan_dir(path))
+            files.extend((file_path, path) for file_path in scan_dir(path))
         elif path.suffix.lower() in VIDEO_EXT:
-            files.append(path)
+            files.append((path, path.parent))
     return _detect_mode_from_files(files, current_mode)
 
 
 def _detect_mode_from_files(files, current_mode):
     episodes = 0
     movies = 0
-    for path in files:
-        parsed_tv = parse_tv_name(path)
-        if (
-            has_explicit_episode_marker(path)
-            and parsed_tv[2] is not None and parsed_tv[3] is not None
-        ):
+    for path, root in files:
+        item = Item(path, root)
+        if item.media_type == "tv":
             episodes += 1
-        elif parse_name(path.stem)[1]:
+        elif item.movie_like or parse_name(path.stem)[1]:
             movies += 1
 
     if current_mode == "movie" and episodes > movies:
@@ -248,6 +250,7 @@ class App:
             "%(asctime)s %(levelname)s %(name)s: %(message)s",
         ))
         logging.getLogger().addHandler(self._file_log_handler)
+        self._workers_closing = False
         self.theme_preference = self.cfg.get("theme", "dark")
         self.mode = (
             resolve_system_theme() if self.theme_preference == "system"
@@ -289,8 +292,8 @@ class App:
                 str(self.show_resolver.load_error),
             )
         self._worker_pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-        for _ in range(MAX_WORKERS):
-            self._worker_pool.submit(self.worker)
+        self._worker_futures = []
+        self._ensure_match_workers()
         root.after(100, self.poll)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self._system_theme_after = root.after(
@@ -360,6 +363,7 @@ class App:
 
     def on_close(self):
         self._hide_tree_tooltip()
+        self._workers_closing = True
         if self._search_after is not None:
             self.root.after_cancel(self._search_after)
             self._search_after = None
@@ -804,6 +808,20 @@ class App:
             return "bad_path"
         return "unknown"
 
+    @staticmethod
+    def _episode_missing_detail(item):
+        count = getattr(item, "season_episode_count", 0)
+        if count == 0:
+            return (
+                f"Season {item.season_number} does not exist on TMDB, "
+                f"so episode {item.episode_number} doesn't exist there."
+            )
+        noun = "episode" if count == 1 else "episodes"
+        return (
+            f"Season {item.season_number} has only {count} {noun} on TMDB, "
+            f"so episode {item.episode_number} doesn't exist there."
+        )
+
     def _status_detail(self, item, new_path=""):
         status_key = self._table_status_key(item.status, bool(item.error))
         if status_key == "pending":
@@ -860,11 +878,9 @@ class App:
                     "to the filename."
                 )
             if reason == "episode_missing":
-                count = getattr(item, "season_episode_count", 0)
                 return (
-                    f"Season {item.season_number} has only {count} "
-                    f"episode(s) on TMDB, so episode {item.episode_number} "
-                    "doesn't exist there. Check it with Manual Match."
+                    f"{self._episode_missing_detail(item)} "
+                    "Check it with Manual Match."
                 )
             if reason == "year_title":
                 explanation = (
@@ -1080,12 +1096,7 @@ class App:
                     f'Episode title "{item.episode_title}" isn\'t unique '
                     f"for {item.query}."
                 ),
-                "episode_missing": (
-                    f"Season {item.season_number} has only "
-                    f"{getattr(item, 'season_episode_count', 0)} "
-                    f"episode(s) on TMDB, so episode {item.episode_number} "
-                    "doesn't exist there."
-                ),
+                "episode_missing": self._episode_missing_detail(item),
                 "year_title": (
                     "The file name is only a number, so the title is a guess."
                 ),
@@ -2039,9 +2050,11 @@ class App:
                     if path.is_dir():
                         if raw not in scanned:
                             scanned[raw] = scan_dir(path)
-                        files.extend(scanned[raw])
+                        files.extend(
+                            (file_path, path) for file_path in scanned[raw]
+                        )
                     elif path.suffix.lower() in VIDEO_EXT:
-                        files.append(path)
+                        files.append((path, path.parent))
                 job["detected"] = _detect_mode_from_files(files, media_type)
                 if job["detected"]:
                     return
@@ -2618,9 +2631,15 @@ class App:
 
     # ---- matching (background thread) -------------------------------------
     @staticmethod
-    def _auto_match_eligible(item, selected_source="automatic"):
+    def _auto_match_eligible(
+        item, selected_source="automatic", retry_offline=False,
+    ):
         media_type = getattr(item, "media_type", "movie")
-        match = getattr(item, "match", None) or {}
+        match = (
+            getattr(item, "match", None)
+            or getattr(item, "review_match", None)
+            or {}
+        )
         match_id = match.get("id")
         selected_source_mismatch = (
             selected_source != "automatic"
@@ -2629,17 +2648,31 @@ class App:
             and not isinstance(match_id, bool)
             and provider_of(match_id) != selected_source
         )
+        offline_retry = (
+            retry_offline and item.status in ("auto", "no_change")
+            and App._is_offline_guess(item)
+        )
         return (
             getattr(item, "match_source", None) != "manual"
             and (
                 item.status not in ("done", "auto", "manual", "no_change")
-                or selected_source_mismatch
+                or selected_source_mismatch or offline_retry
             )
             and item.error_code not in (
                 "wrong_mode_movie_in_tv", "wrong_mode_tv_in_movies",
             )
             and (media_type != "tv" or getattr(item, "is_tv_episode", False))
         )
+
+    @staticmethod
+    def _is_offline_guess(item):
+        match = getattr(item, "match", None)
+        if not match:
+            match = getattr(item, "review_match", None) or {}
+        match_id = match.get("id")
+        if isinstance(match_id, int) and not isinstance(match_id, bool):
+            return provider_of(match_id) == "offline"
+        return getattr(item, "review_reason", None) == "offline"
 
     @staticmethod
     def _review_reason(match, query, year, ranked, threshold, is_tv):
@@ -2672,11 +2705,13 @@ class App:
             item for item in items
             if self._auto_match_eligible(
                 item, self.provider_settings.selected,
+                retry_offline=self._is_offline_guess(item),
             )
         ]
         key = self.key_var.get().strip()
         self._configure_resolver()
         if not items:
+            self._export_diagnostic_report()
             return
         if items:
             self._clear_review_filter()
@@ -2690,6 +2725,7 @@ class App:
                 "originals": {},
                 "history_before": {},
                 "completed": set(),
+                "progress_items": set(),
                 "done": 0,
                 "total": 0,
                 "current": None,
@@ -2748,7 +2784,16 @@ class App:
 
     def match_run(self):
         """Match selected rows, or all eligible rows if nothing is selected."""
+        selected = self.selected()
         chosen = self._action_scope_items()
+        if not selected:
+            offline_items = [
+                item for item in self.items
+                if self._is_offline_guess(item)
+            ]
+            for item in offline_items:
+                if item not in chosen:
+                    chosen.append(item)
         self.start_match(chosen, show_dialog=True)
 
     def rematch_selected(self):
@@ -2771,6 +2816,9 @@ class App:
             for item in items:
                 self.results.put(("started", run_id, item))
             try:
+                retry_offline = any(
+                    self._is_offline_guess(item) for item in items
+                )
                 if (
                     tmdb is None
                     or tmdb.key != key
@@ -2778,11 +2826,13 @@ class App:
                     or tmdb.cancel_event is not cancel_event
                     or tmdb.operation_cache is not operation_cache
                     or tmdb.settings != self.provider_settings
+                    or tmdb.retry_offline != retry_offline
                 ):
                     tmdb = ProviderRouter(
                         self.provider_settings, key, lang,
                         cancel_event=cancel_event,
                         operation_cache=operation_cache,
+                        retry_offline=retry_offline,
                     )
 
                 first_item = items[0]
@@ -2792,8 +2842,18 @@ class App:
                     tmdb._provider(selected_source)
                     if selected_source != "automatic" else None
                 )
-                tmdb.on_provider = lambda name: self.results.put(
-                    ("provider", run_id, first_item, name),
+
+                def report_provider(name):
+                    self.results.put(("provider", run_id, first_item, name))
+                    if hasattr(self, "_diagnostic_provider_used"):
+                        for provider_item in items:
+                            self.results.put((
+                                "provider_used", run_id, provider_item, name,
+                            ))
+
+                tmdb.on_provider = report_provider
+                report_item_progress = lambda item: self.results.put(
+                    ("item_progress", run_id, item),
                 )
                 if (
                     selected_provider is not None
@@ -2816,18 +2876,24 @@ class App:
                     results = match_tv_items(
                         tmdb, self.show_resolver, items, operation_cache,
                         thr, self._review_reason,
+                        on_item_complete=report_item_progress,
                     )
                 else:
                     results = match_movie_items(
                         tmdb, items, thr, search_query,
+                        on_item_complete=report_item_progress,
                     )
             except TMDBAuthError as error:
+                for item in items:  # DEBUG-TRACE
+                    dbg and dbg.trace_end(str(item.path), ("error", None, str(error)))  # DEBUG-TRACE
                 cancel_event.set()
                 self.results.put((
                     "auth_error", run_id, items[0], str(error),
                 ))
                 continue
             except TMDBCancelled:
+                for item in items:  # DEBUG-TRACE
+                    dbg and dbg.trace_end(str(item.path), ("error", None, "cancelled"))  # DEBUG-TRACE
                 continue
             except Exception as e:
                 logging.getLogger(__name__).exception(
@@ -2835,6 +2901,8 @@ class App:
                 )
                 if sys.stderr is not None:
                     traceback.print_exc(file=sys.stderr)
+                for item in items:  # DEBUG-TRACE
+                    dbg and dbg.trace_end(str(item.path), ("error", None, str(e)))  # DEBUG-TRACE
                 results = [
                     ("error", None, str(e))
                     for _item in items
@@ -2844,8 +2912,48 @@ class App:
                     self.results.put(("finished", run_id, item, *out))
 
     def poll(self):
-        self._process_match_events()
-        self.root.after(15 if not self.results.empty() else 100, self.poll)
+        try:
+            self._ensure_match_workers()
+            self._process_match_events()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not process matching progress events.",
+            )
+        finally:
+            self.root.after(
+                15 if not self.results.empty() else 100, self.poll,
+            )
+
+    def _ensure_match_workers(self):
+        active = []
+        for future in self._worker_futures:
+            if not future.done():
+                active.append(future)
+                continue
+            if self._workers_closing:
+                continue
+            if future.cancelled():
+                logging.getLogger(__name__).warning(
+                    "Matching worker was canceled unexpectedly; restarting it.",
+                )
+                continue
+            error = future.exception()
+            if error is not None:
+                logging.getLogger(__name__).error(
+                    "Matching worker exited unexpectedly; restarting it.",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+            else:
+                logging.getLogger(__name__).warning(
+                    "Matching worker stopped unexpectedly; restarting it.",
+                )
+        self._worker_futures = active
+        if self._workers_closing:
+            return
+        self._worker_futures.extend(
+            self._worker_pool.submit(self.worker)
+            for _ in range(MAX_WORKERS - len(active))
+        )
 
     def _process_match_events(self, budget=0.012):
         """Handle queued matching events for at most `budget` seconds.
@@ -2880,6 +2988,18 @@ class App:
                     if kind == "provider":
                         run["current"] = item
                         run["source"] = result[0]
+                        pending["progress"] = True
+                        continue
+                    if kind == "provider_used":
+                        provider_used = getattr(
+                            self, "_diagnostic_provider_used", None,
+                        )
+                        if provider_used is not None:
+                            provider_used[str(item.path)] = result[0]
+                        continue
+                    if kind == "item_progress":
+                        run["progress_items"].add(id(item))
+                        run["current"] = item
                         pending["progress"] = True
                         continue
                     if kind == "auth_error":
@@ -2919,7 +3039,6 @@ class App:
                     run["completed"].add(item)
                     run["done"] = len(run["completed"])
                     self.job_done = run["done"]
-                    run["current"] = None
                     pending["progress"] = True
                     if run["done"] >= run["total"]:
                         flush()
@@ -3005,6 +3124,12 @@ class App:
         )
         return matched, flagged, failed
 
+    @staticmethod
+    def _match_progress_count(run):
+        return max(
+            run["done"], len(run.get("progress_items", ())),
+        )
+
     def _update_match_progress(self):
         run = self._matching_run
         if not run:
@@ -3016,17 +3141,19 @@ class App:
             self._show_match_progress()
             return
         if self._match_progress_dialog:
+            progress_done = self._match_progress_count(run)
             self._match_progress_dialog.update_progress(
-                filename, run["done"], run["total"],
+                filename, progress_done, run["total"],
                 matched, flagged, failed, source=run.get("source"),
             )
         elif run["total"]:
+            progress_done = self._match_progress_count(run)
             suffix = (
                 f" \u00b7 {run['manual_kept']} manual matches kept"
                 if run["manual_kept"] else ""
             )
             self.status(
-                f"Matching {run['done']}/{run['total']}...{suffix}",
+                f"Matching {progress_done}/{run['total']}...{suffix}",
             )
 
     def _finish_match_run(self, run):
@@ -3049,6 +3176,20 @@ class App:
         self._matching_run = None
         self.job_total = self.job_done = 0
         self._update_undo_button()
+        self._export_diagnostic_report()
+
+    def _export_diagnostic_report(self):
+        exporter = getattr(self, "_diagnostic_export_after_match", None)
+        if exporter is None:
+            return
+        try:
+            exporter(self)
+        except Exception as error:
+            logging.getLogger(__name__).exception(
+                "Could not export matching diagnostics.",
+            )
+            self.status(f"Could not export matching diagnostics: {error}")
+            show_error(self, "Export failed", str(error))
 
     def _record_match_history(self, run):
         items = [item for item in run["completed"] if item in self.items]
@@ -3103,13 +3244,14 @@ class App:
                     self.refresh_row(item)
         self._record_match_history(run)
         matched, flagged, failed = self._match_counts(run)
+        progress_done = self._match_progress_count(run)
         if self._match_progress_dialog:
             self._match_progress_dialog.complete(
-                run["done"], run["total"], matched, flagged, failed,
+                progress_done, run["total"], matched, flagged, failed,
                 cancelled=True,
             )
         self.status(
-            f"Matching canceled after {run['done']} of {run['total']} files.",
+            f"Matching canceled after {progress_done} of {run['total']} files.",
         )
         self._matching_run = None
         self.job_total = self.job_done = 0
@@ -3319,21 +3461,8 @@ class App:
                     "No files are available for Manual Match.",
                 )
                 return
-        if sel[0].error_code in (
-            "wrong_mode_movie_in_tv", "wrong_mode_tv_in_movies",
-        ):
-            self.status(sel[0].status_detail)
-            return
         if sel[0].status == "done":
             show_info(self, "Already applied", "Use Undo to reverse the Rename.")
-            return
-        if sel[0].media_type == "tv" and not sel[0].is_tv_episode:
-            show_info(
-                self,
-                "Episode information needed",
-                "This TV filename needs a season and episode number before "
-                "it can be matched or organized.",
-            )
             return
         self._configure_resolver()
         self._start_manual_matches([sel[0]])

@@ -180,10 +180,10 @@ class RouterTests(unittest.TestCase):
         with self.assertRaises(TMDBError):
             router.search_tv("Inception")
 
-    def test_missing_keys_do_not_trigger_offline_guess(self):
+    def test_missing_keys_raise_when_offline_guess_is_disabled(self):
         tmdb = Stub("tmdb", GOOD, needs_key=True, key="")
         router = router_with(
-            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb", "offline"],
+            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb"],
         )
         with self.assertRaises(TMDBAuthError):
             router.search("the matrix", 1999)
@@ -199,6 +199,77 @@ class RouterTests(unittest.TestCase):
 
         self.assertEqual(result[0]["provider"], "offline")
         self.assertEqual(result[0]["title"], "The Matrix")
+
+    def test_offline_retry_does_not_fall_back_after_keyed_source_failure(self):
+        tmdb = Stub(
+            "tmdb", error=TMDBNetworkError("could not connect"),
+            needs_key=True,
+        )
+        router = router_with(
+            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb", "offline"],
+        )
+        router.retry_offline = True
+
+        with self.assertRaises(TMDBNetworkError):
+            router.search("The Matrix")
+
+        self.assertEqual(tmdb.calls, 1)
+
+    def test_offline_retry_uses_available_keyed_source(self):
+        tmdb = Stub("tmdb", GOOD, needs_key=True)
+        router = router_with(
+            ["tmdb"], {"tmdb": tmdb}, enabled=["tmdb", "offline"],
+        )
+        router.retry_offline = True
+
+        result = router.search("Inception")
+
+        self.assertEqual(result[0]["provider"], "tmdb")
+
+    def test_auto_uses_offline_instead_of_anilist_without_api_key_sources(self):
+        tvmaze = Stub("tvmaze", [], kinds=("tv",))
+        anilist = Stub("anilist", [{
+            "id": 7, "name": "Wrong Result",
+        }], kinds=("tv",))
+        offline = Stub("offline", [{
+            "id": 1, "name": "The Office",
+        }], kinds=("movie", "tv"))
+        router = router_with(
+            ["tvmaze", "anilist", "offline"],
+            {"tvmaze": tvmaze, "anilist": anilist, "offline": offline},
+            enabled=["tvmaze", "anilist", "offline"],
+        )
+
+        result = router.search_tv("The Office")
+
+        self.assertEqual(result[0]["provider"], "offline")
+        self.assertEqual(anilist.calls, 0)
+        self.assertEqual(tvmaze.calls, 1)
+
+    def test_auto_keeps_anilist_fallback_when_keyed_source_is_available(self):
+        tmdb = Stub("tmdb", [], needs_key=True)
+        anilist = Stub("anilist", [{"id": 7, "name": "Anime"}])
+        router = router_with(
+            ["tmdb", "anilist"], {"tmdb": tmdb, "anilist": anilist},
+            enabled=["tmdb", "anilist"],
+        )
+
+        result = router.search("Anime")
+
+        self.assertEqual(result[0]["provider"], "anilist")
+        self.assertEqual(tmdb.calls, 1)
+
+    def test_explicit_anilist_selection_is_preserved_without_api_keys(self):
+        anilist = Stub("anilist", [{"id": 7, "name": "Anime"}])
+        router = router_with(
+            ["anilist"], {"anilist": anilist}, enabled=["anilist"],
+        )
+        router.settings = router.settings.with_selected("anilist")
+
+        result = router.search("Anime")
+
+        self.assertEqual(result[0]["provider"], "anilist")
+        self.assertEqual(anilist.calls, 1)
 
     def test_successful_empty_search_does_not_trigger_offline_guess(self):
         tmdb = Stub("tmdb", [], needs_key=True)

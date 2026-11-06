@@ -4,22 +4,46 @@ from ...core.providers.ids import display_id
 
 class DetailsPanelMixin:
     def _season_episode(self, show_id):
-        season = self.tmdb.season(show_id, self.item.season_number) or {}
+        coordinates = getattr(self, "_selected_tv_coordinates", None)
+        if coordinates:
+            season_number, episode_number, _end = coordinates()
+        else:
+            season_number, episode_number = (
+                self.item.season_number, self.item.episode_number,
+            )
+        if season_number is None or episode_number is None:
+            return None
+        season = self.tmdb.season(show_id, season_number) or {}
         for episode in season.get("episodes") or []:
-            if episode.get("episode_number") == self.item.episode_number:
+            if episode.get("episode_number") == episode_number:
                 episode = dict(episode)
-                episode.setdefault("season_number", self.item.season_number)
+                episode.setdefault("season_number", season_number)
                 return episode
         return None
 
     def _episode_details_for_show(self, show_id):
-        numbers = self.item.episode_numbers or (self.item.episode_number,)
-        season_number = self.item.season_number
-        use_absolute = not self.item.season_was_explicit
-        if not use_absolute:
+        coordinates = getattr(self, "_selected_tv_coordinates", None)
+        if coordinates:
+            season_number, episode_number, _end = coordinates()
+        else:
+            season_number, episode_number = (
+                self.item.season_number, self.item.episode_number,
+            )
+        if season_number is None or episode_number is None:
+            return None, "Enter a season and episode number.", None
+        numbers = (
+            (episode_number,)
+            if getattr(self, "_error_edit", False)
+            else self.item.episode_numbers or (episode_number,)
+        )
+        use_absolute = (
+            not self.item.season_was_explicit
+            and not getattr(self, "_error_edit", False)
+        )
+        if not use_absolute and not getattr(self, "_error_edit", False):
             season = self.tmdb.season(show_id, season_number) or {}
             use_absolute = (
-                self.item.episode_number
+                episode_number
                 > len(season.get("episodes") or [])
             )
         if use_absolute:
@@ -43,7 +67,7 @@ class DetailsPanelMixin:
                 )
             ):
                 return None, (
-                    f"Absolute episode number {self.item.episode_number} "
+                    f"Absolute episode number {episode_number} "
                     "couldn't be mapped."
                 ), None
             season_number = episodes[0]["season_number"]
@@ -61,7 +85,7 @@ class DetailsPanelMixin:
             if not all(episodes):
                 return None, (
                     "TMDb episode information is unavailable for "
-                    f"S{season_number:02d}E{self.item.episode_number:02d}."
+                    f"S{season_number:02d}E{episode_number:02d}."
                 ), None
         titles = [episode.get("name") for episode in episodes]
         if not all(titles):
@@ -177,15 +201,19 @@ class DetailsPanelMixin:
 
         if self.is_tv:
             episode_title = result.get("episode_title")
-            season = result.get(
-                "_episode_season_number", self.item.season_number,
-            )
-            episode = result.get(
-                "_episode_number", self.item.episode_number,
-            )
-            episode_end = result.get(
-                "_episode_end_number", self.item.episode_end_number,
-            )
+            coordinates = getattr(self, "_selected_tv_coordinates", None)
+            if coordinates:
+                season, episode, episode_end = coordinates()
+            else:
+                season, episode, episode_end = (
+                    self.item.season_number,
+                    self.item.episode_number,
+                    self.item.episode_end_number,
+                )
+            if not getattr(self, "_error_edit", False):
+                season = result.get("_episode_season_number", season)
+                episode = result.get("_episode_number", episode)
+                episode_end = result.get("_episode_end_number", episode_end)
             if (
                 season is not None and episode is not None
             ):
@@ -204,10 +232,16 @@ class DetailsPanelMixin:
             self._set_match_button_state(
                 bool(
                     result.get("id")
-                    and self.item.season_number is not None
-                    and self.item.episode_number is not None
-                    and not result.get("_episode_mapping_pending")
-                    and not result.get("_absolute_unmapped")
+                    and season is not None
+                    and episode is not None
+                    and (
+                        getattr(self, "_error_edit", False)
+                        or not result.get("_episode_mapping_pending")
+                    )
+                    and (
+                        getattr(self, "_error_edit", False)
+                        or not result.get("_absolute_unmapped")
+                    )
                 ),
             )
         else:

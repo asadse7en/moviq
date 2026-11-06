@@ -2,20 +2,66 @@ from .matching import NO_MATCH_FLOOR, _is_generic_title
 from .matching import is_confident, is_year_like_title, rank, score
 from .matching import to_choice, to_tv_choice, year_of
 from .naming import norm, similarity
-from .show_resolver import ShowState
+from .providers.ids import provider_of
+from .show_resolver import ShowResolver, ShowState
+
+try:  # DEBUG-TRACE
+    import debug_trace as dbg  # DEBUG-TRACE
+except Exception:  # DEBUG-TRACE
+    dbg = None  # DEBUG-TRACE
 
 
-def match_movie_items(tmdb, items, threshold, search_query):
+def _append_result(results, item, result, on_item_complete):
+    results.append(result)
+    dbg and dbg.trace_end(str(item.path), result)  # DEBUG-TRACE
+    if on_item_complete is not None:
+        on_item_complete(item)
+
+
+def match_movie_items(
+    tmdb, items, threshold, search_query, on_item_complete=None,
+):
+    original_items = list(items)
+    skipped = {}
+    matching_items = []
+    skipped_results = []
+    for item in original_items:
+        if getattr(item, "kind", None) in ("extra", "special"):
+            result = ("nomatch", None, "")
+            skipped[item] = result
+            _append_result(
+                skipped_results, item, result, on_item_complete,
+            )
+        else:
+            matching_items.append(item)
+    if not matching_items:
+        return [skipped[item] for item in original_items]
+    items = matching_items
+
+    def restore_order(results):
+        by_item = dict(skipped)
+        by_item.update(zip(items, results))
+        return [by_item[item] for item in original_items]
+
     for item in items:
         item.match_method = "title only"
     if _is_generic_title(items[0].query):
-        return [("nomatch", None, "") for _item in items]
+        results = []
+        for item in items:
+            _append_result(
+                results, item, ("nomatch", None, ""), on_item_complete,
+            )
+        return restore_order(results)
+    dbg and dbg.trace_stage([str(item.path) for item in items], "provider_query", search_query)  # DEBUG-TRACE
     search_results = tmdb.search(search_query, items[0].year)
     results = []
     for item in items:
         ranked = rank(search_results, item.query, item.year)
+        dbg and dbg.trace_stage(str(item.path), "top_candidates", [(candidate, score(candidate, item.query)) for candidate in ranked[:5]])  # DEBUG-TRACE
         if not ranked or score(ranked[0], item.query) < NO_MATCH_FLOOR:
-            results.append(("nomatch", None, ""))
+            _append_result(
+                results, item, ("nomatch", None, ""), on_item_complete,
+            )
             continue
         confident = is_confident(
             ranked, item.query, item.year, threshold,
@@ -47,22 +93,30 @@ def match_movie_items(tmdb, items, threshold, search_query):
                 review_reason = "similar"
             else:
                 review_reason = "partial"
-        results.append((status, choice, "", review_reason))
-    return results
+        _append_result(
+            results, item, (status, choice, "", review_reason),
+            on_item_complete,
+        )
+    return restore_order(results)
 
 
 def match_tv_items(
     tmdb, show_resolver, items, operation_cache, threshold, review_reason,
+    on_item_complete=None,
 ):
-    def get_season(show_id, season_number):
+    def get_season(show_id, season_number, provider_season=None):
+        if provider_season is not None:
+            season_number = provider_season
         return tmdb.season(show_id, season_number) or {}
 
-    def get_season_episode(show_id, season_number, episode_number):
-        season = get_season(show_id, season_number)
+    def get_season_episode(
+        show_id, season_number, episode_number, provider_season=None,
+    ):
+        season = get_season(show_id, season_number, provider_season)
         for episode in season.get("episodes") or []:
             if episode.get("episode_number") == episode_number:
                 episode = dict(episode)
-                episode.setdefault("season_number", season_number)
+                episode["season_number"] = season_number
                 return episode
         return None
 
@@ -78,11 +132,12 @@ def match_tv_items(
             key=lambda season: season["season_number"],
         )
         remaining = number
-        for season in seasons:
+        for season_index, season in enumerate(seasons, start=1):
             count = season.get("episode_count") or 0
             if 0 < remaining <= count:
                 return get_season_episode(
-                    show_id, season["season_number"], remaining,
+                    show_id, season_index, remaining,
+                    season["season_number"],
                 )
             remaining -= count
         return None
@@ -90,18 +145,36 @@ def match_tv_items(
     results = []
     for item in items:
         item.match_method = None
-        resolved = show_resolver.resolve_show(
-            item.query, item.year, operation_cache,
-        )
+        if getattr(item, "kind", None) in ("extra", "special"):
+            _append_result(
+                results, item, ("nomatch", None, ""), on_item_complete,
+            )
+            continue
+        dbg and dbg.trace_stage(str(item.path), "show_query", item.query)  # DEBUG-TRACE
+        if isinstance(show_resolver, ShowResolver):
+            resolved = show_resolver.resolve_show(
+                item.query, item.year, operation_cache,
+                season_hint=getattr(item, "season_hint", None),
+                episode_number=item.episode_number,
+                season_number=item.season_number,
+            )
+        else:
+            resolved = show_resolver.resolve_show(
+                item.query, item.year, operation_cache,
+            )
         item.show_result = resolved
         if resolved.state == ShowState.NOT_FOUND:
-            results.append(("nomatch", None, ""))
+            _append_result(
+                results, item, ("nomatch", None, ""), on_item_complete,
+            )
             continue
         if resolved.state == ShowState.ERROR:
-            results.append((
-                "error", None,
-                resolved.error or "TV show lookup failed.",
-            ))
+            _append_result(
+                results, item, (
+                    "error", None,
+                    resolved.error or "TV show lookup failed.",
+                ), on_item_complete,
+            )
             continue
         show = dict(resolved.candidate or {})
         show.update({
@@ -110,10 +183,80 @@ def match_tv_items(
             "year": resolved.year,
         })
         show_id = resolved.tmdb_id
-        season_number = item.season_number
+        is_anilist = provider_of(show_id) == "anilist"
+        provider_season_number = 1 if is_anilist else None
+        anime_season_index = show.get("_anime_season_index", 1)
+        season_number = (
+            anime_season_index if is_anilist else item.season_number
+        )
+        season_mismatch = bool(
+            is_anilist
+            and (
+                show.get("_anime_season_mismatch")
+                or (
+                    isinstance(item.season_hint, int)
+                    and item.season_hint != anime_season_index
+                )
+            )
+        )
         episode_numbers = item.episode_numbers
+        if item.air_date and item.episode_number is None:
+            item.match_method = "air date"
+            dbg and dbg.trace_stage(  # DEBUG-TRACE
+                str(item.path), "episode_lookup",
+                {"air_date": item.air_date},
+            )
+            episodes = tmdb.episodes_by_date(show_id, item.air_date) or []
+            episodes = [
+                episode for episode in episodes
+                if (episode.get("air_date") or "")[:10] == item.air_date
+                and isinstance(episode.get("season_number"), int)
+                and isinstance(episode.get("episode_number"), int)
+            ]
+            if len(episodes) != 1:
+                _append_result(
+                    results, item, (
+                        "review", to_tv_choice(show, None, None), "",
+                        "air_date",
+                    ), on_item_complete,
+                )
+                continue
+            episode = episodes[0]
+            season_number = episode["season_number"]
+            episode_number = episode["episode_number"]
+            episode_title = episode.get("name") or None
+            item.season_number = season_number
+            item.episode_number = episode_number
+            item.episode_numbers = (episode_number,)
+            item.episode_end_number = None
+            item.episode_title = episode_title
+            item.season_was_explicit = True
+            choice = to_tv_choice(
+                show, season_number, episode_number, episode_title,
+            )
+            status = (
+                "auto"
+                if resolved.confidence >= threshold
+                and episode_title and not show.get("offline")
+                and not season_mismatch and not resolved.ambiguous
+                else "review"
+            )
+            reason = review_reason(
+                choice, item.query, item.year, [choice], threshold, True,
+            )
+            if show.get("offline"):
+                reason = "offline"
+            _append_result(
+                results, item, (status, choice, "", reason),
+                on_item_complete,
+            )
+            continue
         if item.episode_number is None and item.episode_title:
             item.match_method = "episode title"
+            dbg and dbg.trace_stage(  # DEBUG-TRACE
+                str(item.path), "episode_lookup",
+                {"episode_title": item.episode_title},
+            )
             show_details = tmdb.tv(show_id) or {}
             title_matches = []
             for season in show_details.get("seasons") or []:
@@ -122,6 +265,7 @@ def match_tv_items(
                     continue
                 season_data = get_season(
                     show_id, season_number_for_match,
+                    provider_season_number,
                 )
                 for episode in season_data.get("episodes") or []:
                     episode_name = episode.get("name")
@@ -150,10 +294,11 @@ def match_tv_items(
                             episode["_matched_by_code"] = True
                         title_matches.append(episode)
             if len(title_matches) != 1:
-                results.append((
-                    "review", None, "",
-                    "episode_title",
-                ))
+                _append_result(
+                    results, item, (
+                        "review", None, "", "episode_title",
+                    ), on_item_complete,
+                )
                 continue
             matched_episode = title_matches[0]
             if matched_episode.get("_matched_by_code"):
@@ -167,36 +312,152 @@ def match_tv_items(
                 show, season_number, mapped_numbers[0], episode_title,
             )
             confident = resolved.confidence >= threshold
-            status = "auto" if confident else "review"
+            status = (
+                "auto" if confident and not season_mismatch
+                and not resolved.ambiguous else "review"
+            )
             reason = review_reason(
                 choice, item.query, item.year, [choice], threshold, True,
             )
             if show.get("offline"):
                 status, reason = "review", "offline"
-            results.append((status, choice, "", reason))
+            _append_result(
+                results, item, (status, choice, "", reason),
+                on_item_complete,
+            )
             continue
-        absolute_needed = not item.season_was_explicit
-        if not absolute_needed:
+        compact_number = getattr(item, "compact_episode_number", None)
+        compact_handled = False
+        if compact_number is not None:
+            item.match_method = "compact season and episode"
+            dbg and dbg.trace_stage(  # DEBUG-TRACE
+                str(item.path), "episode_lookup",
+                {
+                    "season": season_number,
+                    "episode": item.episode_number,
+                    "compact_number": compact_number,
+                },
+            )
+            show_details = tmdb.tv(show_id) or {}
+            max_season = max(
+                (
+                    season.get("season_number", 0)
+                    for season in show_details.get("seasons") or []
+                    if isinstance(season.get("season_number"), int)
+                ),
+                default=0,
+            )
+            season_data = (
+                get_season(
+                    show_id, season_number, provider_season_number,
+                )
+                if (
+                    season_number is not None
+                    and (
+                        provider_season_number is not None
+                        or season_number <= max_season
+                    )
+                )
+                else {}
+            )
+            item.season_episode_count = len(
+                season_data.get("episodes") or [],
+            )
+            matched_compact = next(
+                (
+                    dict(episode)
+                    for episode in season_data.get("episodes") or []
+                    if episode.get("episode_number")
+                    == item.episode_number
+                ),
+                None,
+            )
+            if matched_compact:
+                matched_compact.setdefault(
+                    "season_number", season_number,
+                )
+            if matched_compact:
+                episodes = [matched_compact]
+                mapped_numbers = [item.episode_number]
+                compact_handled = True
+            else:
+                item.match_method = "absolute number"
+                absolute_episode = (
+                    cumulative_episode(show_id, compact_number)
+                    or tmdb.absolute_episode(show_id, compact_number)
+                )
+                if (
+                    absolute_episode
+                    and isinstance(
+                        absolute_episode.get("season_number"), int,
+                    )
+                    and isinstance(
+                        absolute_episode.get("episode_number"), int,
+                    )
+                ):
+                    episodes = [absolute_episode]
+                    season_number = absolute_episode["season_number"]
+                    mapped_numbers = [
+                        absolute_episode["episode_number"],
+                    ]
+                    compact_handled = True
+                else:
+                    choice = to_tv_choice(
+                        show, item.season_number, item.episode_number,
+                    )
+                    _append_result(
+                        results, item, (
+                            "review", choice, "", "episode_missing",
+                        ), on_item_complete,
+                    )
+                    continue
+        if compact_handled:
+            absolute_needed = False
+        else:
+            absolute_needed = not item.season_was_explicit
+        if not compact_handled and not absolute_needed:
+            dbg and dbg.trace_stage(  # DEBUG-TRACE
+                str(item.path), "episode_lookup",
+                {"season": season_number, "episodes": episode_numbers},
+            )
             season_data = get_season(
-                show_id, season_number,
+                show_id, season_number, provider_season_number,
             )
             item.season_episode_count = len(
                 season_data.get("episodes") or []
             )
-            absolute_needed = (
-                item.episode_number > item.season_episode_count
+            if (
+                item.season_episode_count
+                and item.episode_number > item.season_episode_count
+            ):
+                item.match_method = "season and episode in file name"
+                choice = to_tv_choice(
+                    show, item.season_number, item.episode_number,
+                )
+                _append_result(
+                    results, item, (
+                        "review", choice, "", "episode_missing",
+                    ), on_item_complete,
+                )
+                continue
+        if not compact_handled:
+            item.match_method = (
+                "absolute number" if absolute_needed
+                else "season and episode in file name"
             )
-        item.match_method = (
-            "absolute number" if absolute_needed
-            else "season and episode in file name"
-        )
-        episodes = []
         if absolute_needed:
+            dbg and dbg.trace_stage(  # DEBUG-TRACE
+                str(item.path), "episode_lookup",
+                {"absolute_episodes": episode_numbers},
+            )
+        if not compact_handled:
+            episodes = []
+        if not compact_handled and absolute_needed:
             episodes = [
-                tmdb.absolute_episode(show_id, number)
+                cumulative_episode(show_id, number)
                 or (
-                    None if item.season_was_explicit
-                    else cumulative_episode(show_id, number)
+                    tmdb.absolute_episode(show_id, number)
+                    if not item.season_was_explicit else None
                 )
                 for number in episode_numbers
             ]
@@ -220,24 +481,29 @@ def match_tv_items(
             )
             if not mapped:
                 choice = to_tv_choice(
-                    show, None, None,
+                    show,
+                    item.season_number if item.season_was_explicit else None,
+                    item.episode_number if item.season_was_explicit else None,
                 )
-                results.append((
-                    "review", choice, "",
-                    "episode_missing" if item.season_was_explicit
-                    else "absolute",
-                ))
+                _append_result(
+                    results, item, (
+                        "review", choice, "",
+                        "episode_missing" if item.season_was_explicit
+                        else "absolute",
+                    ), on_item_complete,
+                )
                 continue
             season_number = episodes[0]["season_number"]
             mapped_numbers = [
                 episode["episode_number"]
                 for episode in episodes
             ]
-        else:
+        elif not compact_handled:
             mapped_numbers = list(episode_numbers)
             episodes = [
                 get_season_episode(
                     show_id, season_number, number,
+                    provider_season_number,
                 )
                 for number in mapped_numbers
             ]
@@ -263,7 +529,8 @@ def match_tv_items(
         )
         confident = resolved.confidence >= threshold
         status = (
-            "auto" if confident and episode_title else "review"
+            "auto" if confident and episode_title
+            and not season_mismatch and not resolved.ambiguous else "review"
         )
         error = "" if episode_title else (
             "TMDB episode title unavailable; review this "
@@ -276,7 +543,8 @@ def match_tv_items(
         )
         if show.get("offline"):
             status, reason, error = "review", "offline", ""
-        results.append((
-            status, choice, error, reason,
-        ))
+        _append_result(
+            results, item, (status, choice, error, reason),
+            on_item_complete,
+        )
     return results

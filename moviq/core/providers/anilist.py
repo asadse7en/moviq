@@ -69,18 +69,20 @@ class AniListProvider(Provider):
 
     def _shape(self, raw, kind):
         name, original = _names(raw)
+        native = (raw.get("title") or {}).get("native") or ""
         base = {
             "id": raw["id"], "popularity": float(raw.get("popularity") or 0) / 1000,
             "poster_path": (raw.get("coverImage") or {}).get("large") or "",
             "overview": strip_html(raw.get("description")),
             "genres": [{"name": g} for g in raw.get("genres") or []],
+            "format": raw.get("format") or "",
         }
         if kind == "movie":
             base.update(title=name, original_title=original,
                         release_date=_date(raw))
         else:
             base.update(name=name, original_name=original,
-                        first_air_date=_date(raw))
+                        native_name=native, first_air_date=_date(raw))
         return base
 
     def _results(self, query, year, formats, kind, strict):

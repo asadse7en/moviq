@@ -5,3 +5,4 @@ release/
 docs/
 .env
 REFACTOR_RULES.md
+CHANGELOG.md

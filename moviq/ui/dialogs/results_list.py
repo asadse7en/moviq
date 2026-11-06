@@ -8,11 +8,19 @@ class ResultsListMixin:
     def _result_title(self, result):
         title = self._title(result, self.is_tv)
         if self.is_tv and result.get("_matched_episode_query"):
-            title += (
-                f"  ·  S{self.item.season_number:02d}"
-                f"E{self.item.episode_number:02d}"
-                f"  ·  {result['episode_title']}"
-            )
+            coordinates = getattr(self, "_selected_tv_coordinates", None)
+            if coordinates:
+                season, episode, _end = coordinates()
+            else:
+                season, episode = (
+                    getattr(self.item, "season_number", None),
+                    getattr(self.item, "episode_number", None),
+                )
+            if season is not None and episode is not None:
+                title += (
+                    f"  ·  S{season:02d}E{episode:02d}"
+                    f"  ·  {result['episode_title']}"
+                )
         year = self._year(result) or result.get("year")
         if year:
             title += f" ({year})"
@@ -191,7 +199,19 @@ class ResultsListMixin:
         self.selected_index = index
         self.selected_result = self.results[index]
         self.selected_details = dict(details or self.selected_result)
-        if self.is_tv and not self.selected_details.get("episode_title"):
+        coordinates = getattr(self, "_selected_tv_coordinates", None)
+        if coordinates:
+            season, episode, _end = coordinates()
+        else:
+            season, episode = (
+                getattr(self.item, "season_number", None),
+                getattr(self.item, "episode_number", None),
+            )
+        has_episode = season is not None and episode is not None
+        if (
+            self.is_tv and has_episode
+            and not self.selected_details.get("episode_title")
+        ):
             self.selected_details["_episode_mapping_pending"] = True
         if self.is_tv and same_result and previous_details:
             for key in (
@@ -220,6 +240,7 @@ class ResultsListMixin:
         movie_id = self.selected_result.get("id")
         if (
             self.is_tv
+            and has_episode
             and movie_id
             and not self.selected_details.get("episode_title")
             and self._requested_episode_id != movie_id
@@ -235,10 +256,18 @@ class ResultsListMixin:
 
     def _known_episode_title(self, result):
         match = self.item.match or {}
+        coordinates = getattr(self, "_selected_tv_coordinates", None)
+        if coordinates:
+            season, episode, _end = coordinates()
+        else:
+            season, episode = (
+                getattr(self.item, "season_number", None),
+                getattr(self.item, "episode_number", None),
+            )
         if (
             match.get("id") == result.get("id")
-            and match.get("season_number") == self.item.season_number
-            and match.get("episode_number") == self.item.episode_number
+            and match.get("season_number") == season
+            and match.get("episode_number") == episode
         ):
             return match.get("episode_title")
         return None

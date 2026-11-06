@@ -7,9 +7,10 @@ import tkinter.font as tkfont
 from tkinter import ttk
 
 from ...core.matching import (
-    score, to_choice, to_tv_choice, tv_score, tv_year_of, year_of,
+    normalize_search_title, score, to_choice, to_tv_choice, tv_score,
+    tv_year_of, year_of,
 )
-from ...core.naming import similarity
+from ...core.naming import _clean_tv_title, similarity
 from ...core.show_resolver import ShowState
 from ...core.providers.ids import display_id, parse_typed_id
 from ...core.tmdb import MAX_WORKERS, TMDBOperationCache
@@ -32,6 +33,7 @@ class SearchDialog(
         self.item = item
         self.on_close = on_close
         self.is_tv = item.media_type == "tv"
+        self._error_edit = item.status == "error" or bool(item.error)
         self.operation_cache = operation_cache or TMDBOperationCache()
         self._owns_operation_cache = operation_cache is None
         self.tmdb = app.tmdb(operation_cache=self.operation_cache)
@@ -81,14 +83,86 @@ class SearchDialog(
 
         self._display_current_match()
         self.query_var.trace_add("write", self._on_query_changed)
-        initial_query = item.match.get("title") if item.match else item.query
-        initial_year = (item.match or {}).get("year") or item.year
+        if self._error_edit:
+            initial_query = item.query
+        elif item.match:
+            initial_query = item.match.get("title") or item.query
+        else:
+            initial_query = item.query
+        initial_query = (initial_query or "").strip()
+        if not initial_query:
+            initial_query = (
+                _clean_tv_title(item.path.stem)
+                or normalize_search_title(item.path.stem)
+                or item.path.stem
+            )
+        initial_year = (
+            item.year if self._error_edit
+            else (item.match or {}).get("year") or item.year
+        )
         if initial_year and not self._split_query(initial_query)[1]:
             initial_query = f"{initial_query} {initial_year}"
         self.query_var.set(initial_query)
         self._update_placeholder()
         self._poll_results()
         self._schedule_search(delay=100)
+
+    def _selected_tv_coordinates(self):
+        if self._error_edit and self.is_tv:
+            return self._manual_tv_coordinates
+        return (
+            self.item.season_number,
+            self.item.episode_number,
+            self.item.episode_end_number,
+        )
+
+    def _read_manual_tv_coordinates(self):
+        try:
+            season = int(self.season_var.get())
+            episode = int(self.episode_var.get())
+        except (TypeError, ValueError):
+            return None, None, None
+        if season < 0 or episode < 1:
+            return None, None, None
+        return season, episode, None
+
+    def _change_manual_media_type(self, _event=None):
+        self.is_tv = self.media_type_var.get() == "TV"
+        if self.is_tv:
+            self._manual_tv_coordinates = self._read_manual_tv_coordinates()
+        self.heading_var.set(
+            "Edit TV show match" if self.is_tv else "Edit movie match",
+        )
+        if self.is_tv:
+            self.tv_section_title.grid()
+            self.tv_info_label.grid()
+        else:
+            self.tv_section_title.grid_remove()
+            self.tv_info_label.grid_remove()
+        self._schedule_search(delay=0)
+
+    def _manual_episode_changed(self, _event=None):
+        self._manual_tv_coordinates = self._read_manual_tv_coordinates()
+        if not self.selected_result or not self.selected_details:
+            return
+        season, episode, _end = self._selected_tv_coordinates()
+        if season is None or episode is None:
+            self._set_match_button_state(False)
+            return
+        self.selected_details.pop("episode_title", None)
+        self.selected_details.pop("_episode_error", None)
+        self.selected_details["_episode_season_number"] = season
+        self.selected_details["_episode_number"] = episode
+        self.selected_details["_episode_end_number"] = None
+        self.selected_details["_episode_mapping_pending"] = True
+        self.selected_details["_absolute_unmapped"] = False
+        self._requested_episode_id = None
+        self._show_selected_details(self.selected_details)
+        self._requested_episode_id = self.selected_result.get("id")
+        self._executor.submit(
+            self._load_episode, self._search_generation,
+            self.selected_result.get("id"),
+        )
 
     def _configure_styles(self):
         palette = self.app.pal
@@ -131,9 +205,12 @@ class SearchDialog(
         header = ttk.Frame(self, style="EditPanel.TFrame", padding=(14, 10, 14, 6))
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
+        self.heading_var = tk.StringVar(
+            value="Edit TV show match" if self.is_tv else "Edit movie match",
+        )
         ttk.Label(
             header,
-            text="Edit TV show match" if self.is_tv else "Edit movie match",
+            textvariable=self.heading_var,
             style="EditTitle.TLabel",
             font="TkHeadingFont",
         ).grid(row=0, column=0, sticky="w")
@@ -151,6 +228,62 @@ class SearchDialog(
             style="EditMuted.TLabel",
             wraplength=680,
         ).grid(row=2, column=0, sticky="w", pady=(3, 0))
+        if self._error_edit:
+            manual_row = ttk.Frame(header, style="EditPanel.TFrame")
+            manual_row.grid(row=3, column=0, sticky="ew", pady=(5, 0))
+            ttk.Label(
+                manual_row, text="Media type", style="EditMuted.TLabel",
+            ).pack(side="left", padx=(0, 5))
+            self.media_type_var = tk.StringVar(
+                value="TV" if self.is_tv else "Movie",
+            )
+            media_type = ttk.Combobox(
+                manual_row,
+                textvariable=self.media_type_var,
+                values=("Movie", "TV"),
+                state="readonly",
+                width=8,
+            )
+            media_type.pack(side="left", padx=(0, 12))
+            media_type.bind(
+                "<<ComboboxSelected>>", self._change_manual_media_type,
+            )
+            ttk.Label(
+                manual_row, text="Season", style="EditMuted.TLabel",
+            ).pack(side="left", padx=(0, 4))
+            self.season_var = tk.StringVar(
+                value=str(self.item.season_number)
+                if self.item.season_number is not None else "",
+            )
+            season_entry = ttk.Entry(
+                manual_row, textvariable=self.season_var, width=5,
+            )
+            season_entry.pack(side="left", padx=(0, 8))
+            ttk.Label(
+                manual_row, text="Episode", style="EditMuted.TLabel",
+            ).pack(side="left", padx=(0, 4))
+            self.episode_var = tk.StringVar(
+                value=str(self.item.episode_number)
+                if self.item.episode_number is not None else "",
+            )
+            self._manual_tv_coordinates = self._read_manual_tv_coordinates()
+            episode_entry = ttk.Entry(
+                manual_row, textvariable=self.episode_var, width=5,
+            )
+            episode_entry.pack(side="left")
+            for entry in (season_entry, episode_entry):
+                entry.bind("<Return>", self._manual_episode_changed)
+                entry.bind("<FocusOut>", self._manual_episode_changed)
+            self.error_note_var = tk.StringVar(
+                value=self.item.error or self.item.status_detail
+                or getattr(self.item, "error_code", None) or "",
+            )
+            ttk.Label(
+                header,
+                textvariable=self.error_note_var,
+                style="EditMuted.TLabel",
+                wraplength=680,
+            ).grid(row=4, column=0, sticky="w", pady=(3, 0))
 
         body = tk.Frame(
             self,
@@ -658,10 +791,16 @@ class SearchDialog(
                     results = []
             else:
                 results = self.tmdb.search(title, year)
+            coordinates = getattr(self, "_selected_tv_coordinates", None)
+            if coordinates:
+                season, episode, _end = coordinates()
+            else:
+                season, episode = (
+                    self.item.season_number, self.item.episode_number,
+                )
             if (
                 is_tv and not results
-                and self.item.season_number is not None
-                and self.item.episode_number is not None
+                and season is not None and episode is not None
             ):
                 results = self._search_current_episode_title(title)
             error = None
@@ -808,23 +947,65 @@ class SearchDialog(
         if not self.selected_result or not self.selected_details:
             return
         if self.is_tv:
+            coordinates = getattr(self, "_selected_tv_coordinates", None)
+            if coordinates:
+                season, episode, episode_end = coordinates()
+            else:
+                season, episode, episode_end = (
+                    self.item.season_number,
+                    self.item.episode_number,
+                    self.item.episode_end_number,
+                )
+            error_edit = getattr(self, "_error_edit", False)
+            if error_edit and (season is None or episode is None):
+                return
+            episode_title = (
+                self.selected_details.get("episode_title")
+                or self.item.episode_title
+            )
+            if error_edit and (
+                self.selected_details.get("_episode_season_number"),
+                self.selected_details.get("_episode_number"),
+            ) != (season, episode):
+                episode_title = None
             choice = to_tv_choice(
                 self.selected_details,
-                self.selected_details.get(
-                    "_episode_season_number", self.item.season_number,
+                season if error_edit else self.selected_details.get(
+                    "_episode_season_number", season,
                 ),
-                self.selected_details.get(
-                    "_episode_number", self.item.episode_number,
+                episode if error_edit else self.selected_details.get(
+                    "_episode_number", episode,
                 ),
-                self.selected_details.get("episode_title")
-                or self.item.episode_title,
-                self.selected_details.get(
-                    "_episode_end_number", self.item.episode_end_number,
+                episode_title
+                or (f"Episode {episode:02d}" if episode else None),
+                episode_end if error_edit
+                else self.selected_details.get(
+                    "_episode_end_number", episode_end,
                 ),
             )
         else:
             choice = to_choice(self.selected_details)
         choice["genres"] = self.selected_details.get("genres", [])
+        if getattr(self, "_error_edit", False):
+            query_title, query_year = self._split_query(
+                self.query_var.get().strip(),
+            )
+            if query_title:
+                self.item.query = query_title
+                self.item.show_title = query_title
+            if query_year is not None:
+                self.item.year = query_year
+            if self.is_tv:
+                self.item.media_type = "tv"
+                self.item.is_tv_episode = True
+                self.item.season_number = season
+                self.item.episode_number = episode
+                self.item.episode_numbers = (episode,)
+                self.item.episode_end_number = episode_end
+                self.item.season_was_explicit = True
+            else:
+                self.item.media_type = "movie"
+                self.item.is_tv_episode = False
         if self.is_tv:
             self.item._pending_manual_show = (
                 choice, dict(self.selected_details),

@@ -82,6 +82,21 @@ class Provider:
     def season(self, show_id, season_number):
         return None
 
+    def episodes_by_date(self, show_id, air_date):
+        details = self.tv(show_id) or {}
+        matches = []
+        for season in details.get("seasons") or []:
+            season_number = season.get("season_number")
+            if not isinstance(season_number, int):
+                continue
+            data = self.season(show_id, season_number) or {}
+            for episode in data.get("episodes") or []:
+                if (episode.get("air_date") or "")[:10] == air_date:
+                    episode = dict(episode)
+                    episode.setdefault("season_number", season_number)
+                    matches.append(episode)
+        return matches
+
     def episode(self, show_id, season_number, episode_number):
         season = self.season(show_id, season_number) or {}
         for episode in season.get("episodes") or []:

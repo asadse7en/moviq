@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from datetime import date
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -7,10 +8,15 @@ from .formatting import _avoid_windows_reserved_name
 from .providers import ids as provider_ids
 
 
-YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
-FILE_NUMBER_RE = re.compile(r"^\s*\d{1,3}\s+-\s+")
+YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2}|2100)(?!\d)")
+AIR_DATE_RE = re.compile(
+    r"(?<![a-z0-9])(?:\d{4}[-.]\d{2}[-.]\d{2}|\d{8}|"
+    r"\d{2}[.-]\d{2}[.-]\d{4})(?![a-z0-9])",
+    re.IGNORECASE,
+)
+FILE_NUMBER_RE = re.compile(r"^\s*0\d{0,2}\s+-\s+")
 TV_EPISODE_RE = re.compile(
-    r"(?i)(?<![a-z0-9])S(?P<season>\d{1,2})[ ._-]*E(?P<episode>\d{1,4})"
+    r"(?i)(?<![a-z0-9])S(?P<season>\d{1,2})[x ._-]*E(?P<episode>\d{1,4})"
     r"(?:(?:-?E|-)(?P<episode_end>\d{1,4}))?(?!\d)"
     r"|(?<!\d)(?P<season_x>\d{1,2})[xX](?P<episode_x>\d{1,4})"
     r"(?:-(?P<episode_end_x>\d{1,4}))?(?!\d)"
@@ -31,22 +37,46 @@ CONTEXT_NUMBERED_TITLE_RE = re.compile(
 TRAILING_EPISODE_RE = re.compile(
     r"(?:^|[\s._-])(?P<episode>\d{1,4})$",
 )
+ANIME_EPISODE_RE = re.compile(
+    r"(?i)(?<!\d\.)(?<![a-z0-9])(?P<episode>\d{1,4})"
+    r"(?:v\d+)?(?:\s+(?:END|FINAL))?\s*$",
+)
 TV_NAME_MARKER_RE = re.compile(
     r"(?i)(?<![a-z0-9])"
-    r"(?:S(?P<season>\d{1,2})[ ._-]*E(?P<episode>\d{1,4})"
+    r"(?:S(?P<season>\d{1,2})[x ._-]*E(?P<episode>\d{1,4})"
     r"(?:(?:-?E|-)(?P<episode_end>\d{1,4}))?"
     r"|(?P<season_x>\d{1,2})[xX](?P<episode_x>\d{1,4})"
     r"(?:-(?P<episode_end_x>\d{1,4}))?"
     r"|Season[ ._-]*(?P<season_word>\d{1,2})"
     r"[ ._-]*Episode[ ._-]*(?P<episode_word>\d{1,4})"
-    r"|E(?P<bare_episode>\d{1,4}))(?!\d)"
+    r"|(?:Ep(?:isode)?[ ._-]*|E[ ._-]*)0*"
+    r"(?P<bare_episode>\d{1,4}))(?!\d)"
 )
 TV_SEASON_MARKER_RE = re.compile(
     r"(?i)(?<![a-z0-9])(?:season[ ._-]*|s)(\d{1,2})(?!\d)",
 )
 CJK_EPISODE_RE = re.compile(
     r"第\s*(?P<episode_cjk>\d{1,4})\s*[話话集回]"
+    r"|(?<!\d)(?P<episode_jp>\d{1,4})\s*話"
     r"|(?<!\d)(?P<episode_ko>\d{1,4})\s*[화회]"
+)
+_ANIME_EXTRA_RE = re.compile(
+    r"(?i)(?:^|[\s._-])(?P<token>"
+    r"NCOP\s*\d*|NCED\s*\d*|OP\s*\d*|ED\s*\d*|"
+    r"Web\s+Preview|Picture\s+Drama|"
+    r"PV|CM|Bonus|Extra|Interview|Making(?:\s+Of)?|Menu|Preview|"
+    r"Recap|Teaser|Trailer|SP\s*\d*|Specials?\s*\d*|OVA\s*\d*|"
+    r"Ep(?:isode)?\s*0+)\s*$"
+)
+_ANIME_SEASON_HINT_RE = re.compile(
+    r"(?ix)(?:^|[\s._-])"
+    r"(?:(?P<ordinal>\d{1,3}(?:st|nd|rd|th)?)\s+season"
+    r"|season\s*(?P<season>\d{1,3})"
+    r"|s\s*(?P<s>\d{1,3})"
+    r"|part\s*(?P<part>\d{1,3})"
+    r"|cour\s*(?P<cour>\d{1,3})"
+    r"|(?P<final>final)\s+season"
+    r"|(?P<roman>ii|iii|iv|v))\s*$"
 )
 OCR_MARKER_RE = re.compile(
     r"(?<![A-Za-z0-9])S([0-9OIl]{2})[ ._-]?E([0-9OIl]{2,3})(?![A-Za-z0-9])"
@@ -56,7 +86,8 @@ PRODUCTION_CODE_RE = re.compile(
 )
 SPECIALS_DIR_RE = re.compile(r"(?i)^(?:specials?)$")
 TV_GENERIC_TITLES = {
-    "episode", "episodes", "season", "series", "show", "the show",
+    "context", "episode", "episodes", "season", "seasons", "series", "show",
+    "show folders", "the show",
     "show name", "example", "download", "downloads", "folder", "library",
     "media", "movies", "new folder", "shows", "tv", "tv shows", "video",
     "videos", "special", "specials",
@@ -70,11 +101,11 @@ TV_RELEASE_TAG_RE = re.compile(
     r"480p|576p|720p|1080p|1080i|1440p|2160p|4k|uhd|"
     r"web[ ._-]?dl|web[ ._-]?rip|webrip|bluray|blu[ ._-]?ray|bdrip|brrip|"
     r"hdrip|dvdrip|hdtv|hdcam|hdts|telesync|"
-    r"x264|x265|h[ ._-]?264|h[ ._-]?265|hevc|avc|xvid|divx|"
+    r"x264|x265|h[ ._-]?264|h[ ._-]?265|hevc|avc|av1|xvid|divx|"
     r"aac|ac3|eac3|dts|ddp5|dd5|atmos|"
     r"10bit|8bit|hdr10|hdr|dolby|remux|"
     r"proper|repack|extended|unrated|remastered|imax|"
-    r"dual[ ._-]?audio|multi|hindi|english|esub|esubs|"
+    r"dual[ ._-]?audio|multiple[ ._-]?subtitles?|multi|hindi|english|esub|esubs|"
     r"french|german|spanish|italian|japanese|korean|chinese|russian|"
     r"portuguese|dubbed|subbed|"
     r"amzn|nf|dsnp|hmax|atvp|yify|yts|rarbg|ettv|galaxyrg|1337x|tgx|"
@@ -128,11 +159,153 @@ def _fix_ocr_year(text):
     return _OCR_YEAR_RE.sub(repair, text)
 
 
+def _replace_title_separators(value):
+    value = re.sub(r"(?<!\d)\.|(?<=\d)\.(?!\d)", " ", value or "")
+    return value.replace("_", " ")
+
+
+def _strip_parenthesized_release_tags(value):
+    def replace(match):
+        contents = match.group(1)
+        if TV_RELEASE_TAG_RE.search(contents):
+            return " "
+        return match.group(0)
+
+    return re.sub(r"\(([^()]*)\)", replace, value or "")
+
+
+def _strip_tv_file_number(value):
+    match = re.match(r"^\s*(\d{1,3})\s+-\s+", value or "")
+    if not match:
+        return value
+    rest = value[match.end():]
+    if match.group(1).startswith("0") or TV_NAME_MARKER_RE.search(rest):
+        return rest
+    return value
+
+
+def parse_tv_season_hint(value):
+    """Return a title and an optional anime sequel/season hint."""
+    text = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", value or "")
+    text = _strip_tv_file_number(text)
+    release = TV_RELEASE_TAG_RE.search(text)
+    if release:
+        text = text[:release.start()]
+
+    def suffix_hint(text):
+        text = _replace_title_separators(text).strip(" ._-")
+        match = _ANIME_SEASON_HINT_RE.search(text)
+        if not match:
+            return text, None
+        hint = (
+            int(re.sub(r"(?:st|nd|rd|th)$", "", match.group("ordinal"), flags=re.I))
+            if match.group("ordinal") else
+            int(
+                match.group("season") or match.group("s")
+                or match.group("part") or match.group("cour")
+            )
+            if any(match.group(name) for name in ("season", "s", "part", "cour"))
+            else "final" if match.group("final")
+            else {"ii": 2, "iii": 3, "iv": 4, "v": 5}[
+                match.group("roman").casefold()
+            ]
+        )
+        return text[:match.start()].strip(" ._-"), hint
+
+    title, hint = suffix_hint(text)
+    if hint is not None:
+        return title, hint
+    marker = TV_NAME_MARKER_RE.search(text)
+    if marker:
+        text = text[:marker.start()]
+    else:
+        cjk = CJK_EPISODE_RE.search(text)
+        anime = ANIME_EPISODE_RE.search(text)
+        trailing = TRAILING_EPISODE_RE.search(text)
+        episode_marker = cjk or (
+            anime if anime and not _is_year_like_episode(text, anime)
+            else None
+        ) or trailing
+        if episode_marker:
+            text = text[:episode_marker.start()]
+    year = next(
+        (match for match in YEAR_RE.finditer(text) if match.start() > 0),
+        None,
+    )
+    if year:
+        text = text[:year.start()]
+    return suffix_hint(text)
+
+
+def parse_tv_extra(stem):
+    """Classify anime extras and specials without treating them as episodes."""
+    text = _strip_parenthesized_release_tags(stem)
+    text = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", text)
+    marker = TV_NAME_MARKER_RE.search(text)
+    if marker:
+        episode = marker.groupdict().get("bare_episode")
+        if episode is not None and int(episode) == 0:
+            return "special"
+    extra = _ANIME_EXTRA_RE.search(text)
+    if not extra:
+        return None
+    token = extra.group("token").casefold()
+    if token.startswith(("sp", "special", "ova", "ep")):
+        return "special"
+    return "extra"
+
+
+def parse_tv_air_date(stem):
+    """Return a valid air date from a supported filename date format."""
+    stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem or "")
+    for match in AIR_DATE_RE.finditer(stem):
+        token = match.group()
+        if "." in token or "-" in token:
+            parts = re.split(r"[.-]", token)
+        else:
+            parts = (token[:4], token[4:6], token[6:])
+        if len(parts[0]) == 4:
+            year, month, day = map(int, parts)
+        else:
+            day, month, year = map(int, parts)
+        if not 1950 <= year <= 2100:
+            continue
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_tv_compact_episode(stem):
+    """Parse a trailing season/episode code such as 101 or 1001."""
+    stem = _fix_ocr_markers(stem or "")
+    date_match = AIR_DATE_RE.search(stem)
+    if date_match and parse_tv_air_date(stem):
+        stem = stem[:date_match.start()]
+    release = TV_RELEASE_TAG_RE.search(stem)
+    if release and release.start() > 0:
+        stem = stem[:release.start()]
+    match = re.search(r"(?<!\d)(?P<number>\d{3,4})$", stem.rstrip())
+    if not match:
+        return None
+    number_text = match.group("number")
+    number = int(number_text)
+    if 1900 <= number <= 2100:
+        return None
+    season = int(number_text[:-2])
+    episode = int(number_text[-2:])
+    title = _clean_tv_title(stem[:match.start()])
+    if season < 1 or episode < 1 or not _useful_tv_title(title):
+        return None
+    return season, episode, number
+
+
 def parse_name(stem):
     """'The.Dark.Knight.2008.1080p.BluRay' -> ('The Dark Knight', 2008)"""
     stem = _fix_ocr_year(FILE_NUMBER_RE.sub("", stem))
     s = re.sub(r"[\[\{].*?[\]\}]", " ", stem)
-    s = s.replace("_", " ").replace(".", " ")
+    s = _replace_title_separators(s)
     year = None
     cands = [m for m in YEAR_RE.finditer(s) if m.start() > 0]
     if cands:
@@ -142,13 +315,16 @@ def parse_name(stem):
     if junk and junk.start() > 0:
         s = s[:junk.start()]
     s = re.sub(r"[()\-]+", " ", s)
+    s = re.sub(r"[\s.]+$", "", s)
     return re.sub(r"\s+", " ", s).strip(), year
 
 
 def _clean_tv_title(value):
     value = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", value or "")
     value = FILE_NUMBER_RE.sub("", value)
-    value = value.replace(".", " ").replace("_", " ")
+    value = _replace_title_separators(value)
+    value = re.sub(r"\s+-\s+", " ", value)
+    value = re.sub(r"-[A-Z0-9]{2,}(?:[._-][A-Z0-9]+)*$", "", value)
     value = re.sub(r"[\s-]+$", "", value)
     year_match = next(
         (match for match in YEAR_RE.finditer(value) if match.start() > 0),
@@ -156,6 +332,7 @@ def _clean_tv_title(value):
     )
     if year_match:
         value = value[:year_match.start()]
+    value, _hint = parse_tv_season_hint(value)
     marker = TV_NAME_MARKER_RE.search(value)
     if marker:
         value = value[:marker.start()]
@@ -163,9 +340,9 @@ def _clean_tv_title(value):
     if season_marker:
         value = value[:season_marker.start()]
     release = TV_RELEASE_TAG_RE.search(value)
-    if release and release.start() > 0:
+    if release:
         value = value[:release.start()]
-    value = re.sub(r"[\s().-]+$", "", value)
+    value = re.sub(r"[\s().#-]+$", "", value)
     value = re.sub(r"\s+", " ", value).strip()
     return value
 
@@ -174,9 +351,12 @@ def _useful_tv_title(value):
     normalized = re.sub(r"[^\w]+", " ", (value or "").casefold()).strip()
     return bool(
         normalized
+        and (
+            normalized.isdigit()
+            or len(normalized.replace(" ", "")) >= 3
+        )
         and normalized not in TV_GENERIC_TITLES
         and not set(normalized.split()).issubset(TV_GENERIC_WORDS)
-        and not normalized.isdigit()
         and not re.fullmatch(r"(?:season|series|s)\s*\d+", normalized)
     )
 
@@ -184,7 +364,7 @@ def _useful_tv_title(value):
 def _untagged_episode_parts(stem):
     stem = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", stem)
     stem = FILE_NUMBER_RE.sub("", stem)
-    stem = stem.replace(".", " ").replace("_", " ")
+    stem = _replace_title_separators(stem)
     release = TV_RELEASE_TAG_RE.search(stem)
     if release and release.start() > 0:
         stem = stem[:release.start()]
@@ -204,13 +384,54 @@ def _untagged_episode_parts(stem):
     return show_title, episode_title
 
 
-def parse_tv_name(path):
+def _bracketed_episode_title(stem):
+    bracket = re.match(r"^\s*\[([^\]]+)\]\s+-\s+", stem or "")
+    if not bracket or not TV_NAME_MARKER_RE.search(stem[bracket.end():]):
+        return None
+    title = _clean_tv_title(bracket.group(1))
+    return title if _useful_tv_title(title) else None
+
+
+def _is_decimal_trailing_number(stem, match):
+    start = match.start("episode")
+    return bool(
+        start >= 2 and stem[start - 1] == "."
+        and stem[start - 2].isdigit()
+    )
+
+
+def _is_year_like_episode(stem, match):
+    number = match.group("episode")
+    if not YEAR_RE.fullmatch(number):
+        return False
+    start = match.start("episode")
+    return start == 0 or stem[start - 1] != "#"
+
+
+def parse_tv_name(path, root=None):
     """Return (show title, year, season, episode) from an episode path."""
     path = Path(path)
-    stem = re.sub(
-        r"\[[^\]]*\]|\{[^}]*\}", " ", _fix_ocr_markers(path.stem),
+    air_date = parse_tv_air_date(path.stem)
+    source_stem = _strip_parenthesized_release_tags(path.stem)
+    if air_date:
+        date_match = next(
+            match for match in AIR_DATE_RE.finditer(source_stem)
+            if parse_tv_air_date(match.group())
+        )
+        source_stem = source_stem[:date_match.start()]
+    bracket_title = _bracketed_episode_title(
+        _fix_ocr_markers(source_stem),
     )
-    stem = FILE_NUMBER_RE.sub("", stem).replace(".", " ").replace("_", " ")
+    extra_kind = parse_tv_extra(source_stem)
+    stem = re.sub(
+        r"\[[^\]]*\]|\{[^}]*\}", " ", _fix_ocr_markers(source_stem),
+    )
+    stem = _strip_tv_file_number(stem)
+    if extra_kind:
+        extra = _ANIME_EXTRA_RE.search(stem)
+        if extra:
+            stem = stem[:extra.start()]
+    stem = _replace_title_separators(stem)
 
     release_match = TV_RELEASE_TAG_RE.search(stem)
     episode_stem = stem
@@ -218,8 +439,17 @@ def parse_tv_name(path):
         episode_stem = stem[:release_match.start()]
     episode_stem = episode_stem.rstrip(" \t.([{_-")
 
-    marker = TV_NAME_MARKER_RE.search(episode_stem)
+    marker = TV_NAME_MARKER_RE.search(stem)
+    compact_episode = parse_tv_compact_episode(source_stem)
     cjk_marker = None if marker else CJK_EPISODE_RE.search(episode_stem)
+    anime_marker = (
+        None if marker or cjk_marker or compact_episode
+        else ANIME_EPISODE_RE.search(episode_stem)
+    )
+    if anime_marker and _is_year_like_episode(
+        episode_stem, anime_marker,
+    ):
+        anime_marker = None
     number_match = NUMBERED_EPISODE_RE.fullmatch(episode_stem.strip())
     trailing_number = TRAILING_EPISODE_RE.search(episode_stem)
     year_match = next(
@@ -235,6 +465,8 @@ def parse_tv_name(path):
         boundary = min(boundary, marker.start())
     elif cjk_marker:
         boundary = min(boundary, cjk_marker.start())
+    elif anime_marker:
+        boundary = min(boundary, anime_marker.start())
     if trailing_number and not number_match and not (
         year_match and year_match.start() == trailing_number.start(1)
     ):
@@ -244,6 +476,10 @@ def parse_tv_name(path):
     if release_match and release_match.start() > 0:
         boundary = min(boundary, release_match.start())
     title = _clean_tv_title(stem[:boundary])
+    if bracket_title:
+        title = bracket_title
+    elif number_match and not marker and not cjk_marker and not anime_marker:
+        title = ""
     year = int(year_match.group()) if year_match else None
 
     season = episode = None
@@ -261,14 +497,22 @@ def parse_tv_name(path):
         episode = int(episode_value) if episode_value else None
     elif cjk_marker:
         episode = int(
-            cjk_marker.group("episode_cjk") or cjk_marker.group("episode_ko")
+            cjk_marker.group("episode_cjk")
+            or cjk_marker.group("episode_jp")
+            or cjk_marker.group("episode_ko")
         )
+    elif anime_marker:
+        episode = int(anime_marker.group("episode"))
     elif number_match:
         episode = int(number_match.group("episode"))
-    elif trailing_number and not (
+    elif trailing_number and not _is_decimal_trailing_number(
+        episode_stem, trailing_number,
+    ) and not (
         year_match and year_match.start() == trailing_number.start(1)
     ):
         episode = int(trailing_number.group("episode"))
+        if compact_episode:
+            season, episode, _compact_number = compact_episode
 
     if season is None:
         filename_season = TV_SEASON_MARKER_RE.search(stem)
@@ -280,23 +524,51 @@ def parse_tv_name(path):
             if season is None:
                 season = 0
             break
-        season_match = TV_SEASON_MARKER_RE.search(parent.name)
-        if season_match:
+        season_match = re.fullmatch(
+            r"(?i)(?:season|s)\s*(\d+)", parent.name.strip(),
+        )
+        if season_match and not 1900 <= int(season_match.group(1)) <= 2100:
             if season is None:
                 season = int(season_match.group(1))
             break
 
     if episode is not None and season is None:
         season = 1
+    if extra_kind or episode == 0:
+        season, episode = 0, None
 
     if episode is None:
         untagged_parts = _untagged_episode_parts(path.stem)
-        if untagged_parts:
+        if untagged_parts and not extra_kind:
             title = untagged_parts[0]
 
     if not _useful_tv_title(title):
         title = ""
-        for parent in path.parents:
+        parents = path.parents
+        if root is not None:
+            root = Path(root)
+            try:
+                path.relative_to(root)
+            except ValueError:
+                parents = ()
+        for parent in parents:
+            if root is not None and parent == root:
+                candidate = _clean_tv_title(parent.name)
+                if _useful_tv_title(candidate):
+                    title = candidate
+                    if year is None:
+                        parent_year = next(
+                            (
+                                match for match in YEAR_RE.finditer(
+                                    parent.name,
+                                )
+                                if match.start() > 0
+                            ),
+                            None,
+                        )
+                        if parent_year:
+                            year = int(parent_year.group())
+                break
             candidate = _clean_tv_title(parent.name)
             if _useful_tv_title(candidate):
                 title = candidate
@@ -316,13 +588,20 @@ def parse_tv_name(path):
 
 
 def has_explicit_episode_marker(path):
-    """True only for SxxExx, 1x02 or Season/Episode markers, not bare numbers."""
-    match = TV_NAME_MARKER_RE.search(
-        _fix_ocr_markers(Path(path).stem).replace(".", " ").replace("_", " "),
+    """Recognize standard and anime episode markers, but not bare years."""
+    stem = _fix_ocr_markers(Path(path).stem)
+    match = TV_NAME_MARKER_RE.search(stem)
+    anime = ANIME_EPISODE_RE.search(stem)
+    if anime and _is_year_like_episode(stem, anime):
+        anime = None
+    return bool(
+        (match and any(
+            match.group(name)
+            for name in ("season", "season_x", "season_word")
+        ))
+        or CJK_EPISODE_RE.search(stem)
+        or anime
     )
-    return bool(match and any(
-        match.group(name) for name in ("season", "season_x", "season_word")
-    ))
 
 
 def parse_production_code(stem):
@@ -355,31 +634,68 @@ def tv_season_is_explicit(path):
         return True
     if TV_SEASON_MARKER_RE.search(path.stem):
         return True
-    return any(TV_SEASON_MARKER_RE.search(parent.name) for parent in path.parents)
+    for parent in path.parents:
+        season = re.fullmatch(
+            r"(?i)(?:season|s)\s*(\d+)", parent.name.strip(),
+        )
+        if season and not 1900 <= int(season.group(1)) <= 2100:
+            return True
+    return False
 
 
 def parse_tv_episode(stem):
     """Return (show title, year, season, episode) for standard episode names."""
+    parse_stem = _strip_parenthesized_release_tags(stem)
     parse_stem = re.sub(
         r"\[[^\]]*\]|\{[^}]*\}", " ", _fix_ocr_markers(stem),
     )
+    parse_stem = _strip_tv_file_number(parse_stem)
+    if parse_tv_extra(stem):
+        return None
     release_match = TV_RELEASE_TAG_RE.search(parse_stem)
     if release_match and release_match.start() > 0:
         parse_stem = parse_stem[:release_match.start()]
     parse_stem = parse_stem.rstrip(" \t.([{_-")
     match = TV_EPISODE_RE.search(parse_stem)
     if not match:
+        compact = parse_tv_compact_episode(stem)
+        if compact:
+            season, episode, _compact_number = compact
+            title = _clean_tv_title(
+                re.sub(r"(?<!\d)\d{3,4}$", "", parse_stem).rstrip(" ._-"),
+            )
+            return title, None, season, episode
+        bare_marker = TV_NAME_MARKER_RE.search(parse_stem)
+        if bare_marker and bare_marker.group("bare_episode"):
+            title, year = parse_name(parse_stem[:bare_marker.start()])
+            bracket_title = _bracketed_episode_title(stem)
+            return (
+                bracket_title or title, year, 1,
+                int(bare_marker.group("bare_episode")),
+            )
         cjk = CJK_EPISODE_RE.search(parse_stem)
         if cjk:
             title, year = parse_name(parse_stem[:cjk.start()])
             return title, year, 1, int(
-                cjk.group("episode_cjk") or cjk.group("episode_ko")
+                cjk.group("episode_cjk") or cjk.group("episode_jp")
+                or cjk.group("episode_ko")
+            )
+        anime = ANIME_EPISODE_RE.search(parse_stem)
+        if (
+            anime and not _is_decimal_trailing_number(parse_stem, anime)
+            and not _is_year_like_episode(parse_stem, anime)
+        ):
+            title, year = parse_name(parse_stem[:anime.start()])
+            return _clean_tv_title(title), year, 1, int(
+                anime.group("episode"),
             )
         number = NUMBERED_EPISODE_RE.fullmatch(parse_stem.strip())
         trailing = TRAILING_EPISODE_RE.search(parse_stem)
         if number:
             return "", None, 1, int(number.group("episode"))
-        if trailing:
+        if trailing and not _is_decimal_trailing_number(
+            parse_stem, trailing,
+        ):
             title, year = parse_name(parse_stem[:trailing.start(1)])
             if not YEAR_RE.fullmatch(trailing.group("episode")):
                 return title, year, 1, int(trailing.group("episode"))
@@ -393,6 +709,7 @@ def parse_tv_episode(stem):
         or match.group("episode_word")
     )
     title, year = parse_name(parse_stem[:match.start()])
+    title = _bracketed_episode_title(stem) or title
     title = re.sub(r"\s+(?:US|UK)$", "", title, flags=re.IGNORECASE)
     if episode < 1:
         return None

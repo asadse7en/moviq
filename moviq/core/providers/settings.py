@@ -50,10 +50,10 @@ PROVIDER_INFO = {
     },
     "offline": {
         "label": "Offline Guess", "needs_key": False, "kinds": "Movies and TV",
-        "note": "Used only when online providers cannot be reached.",
+        "note": "Used when TMDb/OMDb are unavailable or online lookup fails.",
         "description": (
-            "Guess from the file name only when online providers cannot "
-            "be reached. Guesses are sent to Review."
+            "Guess from the file name when TMDb/OMDb are unavailable or "
+            "online lookup fails. Guesses are sent to Review."
         ),
         "key_url": "",
     },

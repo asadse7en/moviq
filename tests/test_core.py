@@ -103,6 +103,39 @@ class NamingTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assertEqual(parse_tv_episode(Path(filename).stem), expected)
 
+    def test_parses_tv_markers_after_release_tags_with_common_separators(self):
+        cases = {
+            "Farzi_[Hindi]_720P_S01_E02": ("Farzi", None, 1, 2),
+            "Farzi_S01_E02_720P": ("Farzi", None, 1, 2),
+            "Farzi S01E02": ("Farzi", None, 1, 2),
+            "Farzi S01_E02": ("Farzi", None, 1, 2),
+            "Farzi S01.E02": ("Farzi", None, 1, 2),
+            "Farzi S01 E02": ("Farzi", None, 1, 2),
+            "Farzi S01-E02": ("Farzi", None, 1, 2),
+            "Farzi s1e2": ("Farzi", None, 1, 2),
+            "Farzi 1x02": ("Farzi", None, 1, 2),
+            "Farzi Season 1 Episode 2": ("Farzi", None, 1, 2),
+        }
+        for filename, expected in cases.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(parse_tv_name(Path(filename + ".mp4")), expected)
+
+        path = Path("Farzi_[Hindi]_720P_S01_E02.mp4")
+        with patch("moviq.core.models.dbg.trace_stage") as trace_stage:
+            item = Item(path, Path("TV"), "tv")
+        self.assertTrue(item.is_tv_episode)
+        self.assertEqual(
+            (item.query, item.season_number, item.episode_number),
+            ("Farzi", 1, 2),
+        )
+        trace_stage.assert_any_call(
+            str(path), "episode_marker", ("Farzi", None, 1, 2),
+        )
+        trace_stage.assert_any_call(
+            str(path), "parsed_query",
+            {"media_type": "tv", "query": "Farzi", "year": None},
+        )
+
     def test_parses_episode_only_names_before_release_metadata(self):
         self.assertEqual(
             parse_tv_name(
@@ -249,6 +282,146 @@ class NamingTests(unittest.TestCase):
             ("Secret Invasion", 2, 3),
         )
 
+    def test_numeric_episode_uses_nearest_show_and_season_folders(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            show = Path(temp_dir) / "Attack on Titan"
+            season = show / "Season 01"
+            season.mkdir(parents=True)
+            path = season / "01.mkv"
+            path.touch()
+
+            with patch("moviq.core.models.dbg.trace_stage") as trace_stage:
+                item = Item(path, show, "movie")
+
+        self.assertEqual(
+            (
+                item.media_type, item.query, item.season_number,
+                item.episode_number, item.episode_end_number,
+            ),
+            ("tv", "Attack on Titan", 1, 1, None),
+        )
+        self.assertTrue(item.is_tv_episode)
+        trace_stage.assert_any_call(
+            str(path), "folder_title", "Attack on Titan",
+        )
+
+    def test_numeric_episode_context_does_not_cross_scan_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            show = Path(temp_dir) / "Attack on Titan"
+            season = show / "Season 01"
+            season.mkdir(parents=True)
+            path = season / "01.mkv"
+            path.touch()
+
+            item = Item(path, season, "movie")
+
+        self.assertEqual(item.media_type, "movie")
+        self.assertEqual(item.query, "01")
+        self.assertIsNone(item.episode_number)
+
+    def test_numeric_episode_range_preserves_start_and_end(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            show = Path(temp_dir) / "Attack on Titan"
+            season = show / "S02"
+            season.mkdir(parents=True)
+            path = season / "01-02.mkv"
+            path.touch()
+
+            item = Item(path, show, "movie")
+
+        self.assertEqual(
+            (
+                item.media_type, item.query, item.season_number,
+                item.episode_number, item.episode_end_number,
+                item.episode_numbers,
+            ),
+            ("tv", "Attack on Titan", 2, 1, 2, (1, 2)),
+        )
+
+    def test_bare_episode_marker_uses_folder_context(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            show = Path(temp_dir) / "Attack on Titan"
+            season = show / "Specials"
+            season.mkdir(parents=True)
+            path = season / "E05.mkv"
+            path.touch()
+
+            item = Item(path, show, "movie")
+
+        self.assertEqual(
+            (
+                item.media_type, item.query, item.season_number,
+                item.episode_number,
+            ),
+            ("tv", "Attack on Titan", 0, 5),
+        )
+
+    def test_numeric_sibling_sequence_is_detected_without_a_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            show = Path(temp_dir) / "Attack on Titan"
+            show.mkdir()
+            files = [
+                show / "12345.mkv",
+                show / "12346.mkv",
+                show / "12347.mkv",
+            ]
+            for path in files:
+                path.touch()
+
+            item = Item(files[0], show, "movie")
+
+        self.assertEqual(
+            (
+                item.media_type, item.query, item.season_number,
+                item.episode_number,
+            ),
+            ("tv", "Attack on Titan", 1, 12345),
+        )
+
+    def test_numeric_filename_needs_numeric_sibling_majority_without_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            show = Path(temp_dir) / "Attack on Titan"
+            show.mkdir()
+            path = show / "12345.mkv"
+            path.touch()
+            (show / "trailer.mkv").touch()
+            (show / "feature.mkv").touch()
+
+            item = Item(path, show, "movie")
+
+        self.assertEqual(item.media_type, "movie")
+        self.assertIsNone(item.episode_number)
+
+    def test_marker_fields_survive_movie_hint_and_year_title_stays_movie(self):
+        marker_item = Item(
+            Path("Breaking.Bad.S02E03.mkv"), Path("Movies"), "movie",
+        )
+        year_movie = Item(
+            Path("Movie (2019).mkv"), Path("Movies"), "movie",
+        )
+        numeric_movie = Item(
+            Path("10 (1979).mkv"), Path("Movies"), "movie",
+        )
+
+        self.assertEqual(
+            (
+                marker_item.media_type, marker_item.season_number,
+                marker_item.episode_number,
+            ),
+            ("movie", 2, 3),
+        )
+        self.assertEqual(
+            (year_movie.media_type, year_movie.query, year_movie.year),
+            ("movie", "Movie", 2019),
+        )
+        self.assertEqual(
+            (
+                numeric_movie.media_type, numeric_movie.query,
+                numeric_movie.year, numeric_movie.episode_number,
+            ),
+            ("movie", "10", 1979, None),
+        )
+
     def test_does_not_infer_a_show_from_a_generic_library_folder(self):
         root = Path("Library") / "TV Shows"
         item = Item(root / "3.mkv", root, "tv")
@@ -320,11 +493,14 @@ class MatchingTests(unittest.TestCase):
                     ),
                 }]}
 
+        progress = []
         results = match_tv_items(
             FakeTMDB(), resolver, [item], None, 0.9,
             lambda *_args: "partial",
+            on_item_complete=progress.append,
         )
 
+        self.assertEqual(progress, [item])
         self.assertEqual(results[0][0], "auto")
         self.assertEqual(results[0][1]["season_number"], 1)
         self.assertEqual(results[0][1]["episode_number"], 1)

@@ -1,4 +1,5 @@
 import ctypes
+import math
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
@@ -91,6 +92,8 @@ class MatchProgressPopup:
         self.task = task
         self.started_at = time.monotonic()
         self.completed = False
+        self._completion_pending = False
+        self._completion_after = None
 
         self.backdrop = tk.Toplevel(app.root)
         set_window_icon(self.backdrop)
@@ -225,9 +228,7 @@ class MatchProgressPopup:
         )
         self._progress_value = 0.0
         self._progress_target = 0.0
-        self._progress_start = 0.0
-        self._progress_started_at = 0.0
-        self._progress_duration = 0.32
+        self._progress_last_tick = time.monotonic()
         self._progress_after = None
 
         progress_details = ttk.Frame(card, style="MatchPopup.TFrame")
@@ -293,7 +294,7 @@ class MatchProgressPopup:
                 palette["status_colors"]["error"][0],
             )
         else:
-            counter_labels = ("Ready", "Review", "No match / failed")
+            counter_labels = ("Ready", "Review", "Failed")
             counter_colors = (
                 palette["status_colors"]["auto"][0],
                 palette["status_colors"]["review"][0],
@@ -327,11 +328,14 @@ class MatchProgressPopup:
                 ).grid(row=0, column=index * 2 + 1, sticky="ns", padx=12)
 
         self.message_var = tk.StringVar(value="")
-        ttk.Label(
+        self.message_label = ttk.Label(
             card, textvariable=self.message_var,
             style="MatchPopup.Muted.TLabel",
             wraplength=520,
-        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        )
+        self.message_label.grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=(12, 0),
+        )
 
         self.footer = ttk.Frame(card, style="MatchPopup.TFrame")
         self.footer.grid(
@@ -374,14 +378,14 @@ class MatchProgressPopup:
 
     def _animate_progress(self):
         self._progress_after = None
-        elapsed = time.monotonic() - self._progress_started_at
-        fraction = min(1.0, elapsed / self._progress_duration)
-        eased = 1 - (1 - fraction) ** 3
-        self._progress_value = (
-            self._progress_start
-            + (self._progress_target - self._progress_start) * eased
+        now = time.monotonic()
+        elapsed = max(0.0, now - self._progress_last_tick)
+        self._progress_last_tick = now
+        remaining = self._progress_target - self._progress_value
+        self._progress_value += remaining * (
+            1 - math.exp(-elapsed / 0.18)
         )
-        if fraction >= 1:
+        if abs(self._progress_target - self._progress_value) < 0.0005:
             self._progress_value = self._progress_target
         self._draw_progress()
         if self._progress_value != self._progress_target:
@@ -390,15 +394,12 @@ class MatchProgressPopup:
             )
 
     def _set_progress(self, percent):
-        target = max(0.0, min(1.0, percent / 100))
-        if self._progress_after is not None:
-            self.progress_canvas.after_cancel(self._progress_after)
-        self._progress_start = self._progress_value
-        self._progress_target = target
-        self._progress_started_at = time.monotonic()
-        self._progress_after = self.progress_canvas.after(
-            16, self._animate_progress,
-        )
+        self._progress_target = max(0.0, min(1.0, percent / 100))
+        if self._progress_after is None:
+            self._progress_last_tick = time.monotonic()
+            self._progress_after = self.progress_canvas.after(
+                16, self._animate_progress,
+            )
 
     def _truncate_current_text(self, text):
         if self.current_font.measure(text) <= 620:
@@ -470,9 +471,12 @@ class MatchProgressPopup:
             return
         total = max(total, 0)
         progress = min(100.0, 100 * completed / max(total, 1))
-        percent = int(progress)
+        percent = (
+            f"{progress:.1f}%"
+            if 0 < progress < 1 else f"{int(progress)}%"
+        )
         self.progress_count_var.set(f"{completed} of {total}")
-        self.percent_var.set(f"{percent}%")
+        self.percent_var.set(percent)
         self._set_progress(progress)
         self.current_var.set(
             self._truncate_current_text(current or "Preparing files..."),
@@ -493,10 +497,41 @@ class MatchProgressPopup:
     def complete(
         self, completed, total, matched, flagged, failed, cancelled=False,
     ):
+        if self._completion_pending:
+            return
+        elapsed = time.monotonic() - self.started_at
+        if (
+            self.task == "matching" and not cancelled
+            and elapsed < 0.7
+        ):
+            self._completion_pending = True
+            self.update_progress(
+                "", completed, total, matched, flagged, failed,
+            )
+            self.current_var.set("Finishing up...")
+            self.cancel_button.set_state("disabled")
+            self._completion_after = self.window.after(
+                round((0.7 - elapsed) * 1000),
+                lambda: self._finish_completion(
+                    completed, total, matched, flagged, failed, cancelled,
+                ),
+            )
+            return
+        self._finish_completion(
+            completed, total, matched, flagged, failed, cancelled,
+        )
+
+    def _finish_completion(
+        self, completed, total, matched, flagged, failed, cancelled,
+    ):
+        self._completion_pending = False
+        self._completion_after = None
         self.completed = True
         total = max(total, 0)
-        percent = 100 if not cancelled else min(
-            100, int(100 * completed / max(total, 1)),
+        progress = min(100.0, 100 * completed / max(total, 1))
+        percent = (
+            f"{progress:.1f}%"
+            if 0 < progress < 1 else f"{int(progress)}%"
         )
         elapsed = max(0, round(time.monotonic() - self.started_at))
         if self.task == "rename":
@@ -510,8 +545,10 @@ class MatchProgressPopup:
             self.message_var.set(
                 "Rename stopped. Completed files can be undone."
                 if cancelled else
-                "Renamed files are marked Done in the list."
+                ""
             )
+            if not cancelled:
+                self.message_label.grid_remove()
         else:
             self.title_var.set("Matching complete")
             noun = "file" if completed == 1 else "files"
@@ -519,17 +556,9 @@ class MatchProgressPopup:
             self.subtitle_var.set(
                 f"{completed} {noun} checked in {elapsed} {second}."
             )
-            self.message_var.set(
-                "Matching was canceled."
-                if cancelled else
-                (
-                    f"{flagged} files need a quick look in the Review tab."
-                    if flagged else "All files are ready to rename."
-                )
-            )
-        self.percent_var.set(f"{percent}%")
+        self.percent_var.set(percent)
         self.progress_count_var.set(f"{completed} of {total}")
-        self._set_progress(percent)
+        self._set_progress(progress)
         for variable, value in zip(
             self.counter_vars, (matched, flagged, failed),
         ):
@@ -550,7 +579,15 @@ class MatchProgressPopup:
         self.app.root.update_idletasks()
         self.window.update_idletasks()
         parent = self.app.root
-        width = max(820, self.card.winfo_reqwidth() + 16)
+        requested_width = max(820, self.card.winfo_reqwidth() + 16)
+        available_width = max(
+            480,
+            min(
+                parent.winfo_width() - 48,
+                parent.winfo_screenwidth() - 48,
+            ),
+        )
+        width = min(requested_width, available_width)
         height = max(300, self.card.winfo_reqheight() + 16)
         x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
@@ -593,6 +630,9 @@ class MatchProgressPopup:
         if self._progress_after is not None:
             self.progress_canvas.after_cancel(self._progress_after)
             self._progress_after = None
+        if self._completion_after is not None:
+            self.window.after_cancel(self._completion_after)
+            self._completion_after = None
         self.window.grab_release()
         self.app.root.unbind("<Configure>", self._configure_binding)
         self.window.destroy()

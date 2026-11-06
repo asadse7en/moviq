@@ -8,9 +8,14 @@ import threading
 from typing import Optional
 
 from .config import SHOW_OVERRIDES_FILE, migrate_user_data
-from .naming import fold_diacritics
+from .naming import fold_diacritics, parse_tv_season_hint
 from .providers.ids import is_volatile, provider_of
 from .tmdb import TMDB, TMDBError
+
+try:  # DEBUG-TRACE
+    import debug_trace as dbg  # DEBUG-TRACE
+except Exception:  # DEBUG-TRACE
+    dbg = None  # DEBUG-TRACE
 
 
 class ShowState(str, Enum):
@@ -29,15 +34,23 @@ class ShowResult:
     confidence: float = 0.0
     error: Optional[str] = None
     candidate: Optional[dict] = None
+    ambiguous: bool = False
 
 
 _GENERIC_WORDS = {"the", "show", "name", "example", "episode"}
 _COUNTRY_SUFFIX_RE = re.compile(r"(?i)\s+(?:US|UK|AU)$")
 _LEADING_ARTICLE_RE = re.compile(r"(?i)^the\s+")
+_EMBEDDED_YEAR_RE = re.compile(
+    r"(?:\s*\(((?:19|20)\d{2})\)|[ ._-]+((?:19|20)\d{2}))\s*$",
+)
 
 
 def normalize_show_title(title):
-    return " ".join(re.findall(r"\w+", (title or "").casefold()))
+    title, _hint = parse_tv_season_hint(title or "")
+    numeric_sequel = re.search(r"(?<!\d)\s+(\d{1,3})$", title)
+    if numeric_sequel and not 1900 <= int(numeric_sequel.group(1)) <= 2100:
+        title = title[:numeric_sequel.start()].strip()
+    return " ".join(re.findall(r"\w+", title.casefold()))
 
 
 def normalize_show_key(title, year=None):
@@ -45,6 +58,10 @@ def normalize_show_key(title, year=None):
 
 
 def _similarity(left, right):
+    left_words = set(re.findall(r"\w+", normalize_show_title(left)))
+    right_words = set(re.findall(r"\w+", normalize_show_title(right)))
+    if not left_words.intersection(right_words):
+        return 0.0
     return SequenceMatcher(
         None,
         fold_diacritics(normalize_show_title(left)),
@@ -58,6 +75,22 @@ def _year_of(candidate):
         return int(value)
     year = candidate.get("year")
     return year if isinstance(year, int) else None
+
+
+def _candidate_season_hint(candidate):
+    title = (
+        candidate.get("name") or candidate.get("title")
+        or candidate.get("original_name") or ""
+    )
+    _base, hint = parse_tv_season_hint(title)
+    if hint is not None:
+        return hint
+    numeric_sequel = re.search(r"(?<!\d)\s+(\d{1,3})$", title)
+    if numeric_sequel:
+        number = int(numeric_sequel.group(1))
+        if not 1900 <= number <= 2100:
+            return number
+    return None
 
 
 def _popularity(candidate):
@@ -82,23 +115,36 @@ def _expand_acronyms(title):
     return " ".join(expanded) if expanded != words else None
 
 
-def _query_variants(title, year):
+def _query_variants(title, _year=None):
     variants = []
     seen = set()
-    candidates = [(title, year)]
+    punctuation_free = " ".join(
+        re.sub(r"[\W_]+", " ", title).split(),
+    )
+    candidates = [(title, None), (punctuation_free, None)]
     expanded = _expand_acronyms(title)
     if expanded:
-        candidates.append((expanded, year))
+        candidates.append((expanded, None))
     without_country = _COUNTRY_SUFFIX_RE.sub("", title).strip()
     candidates.append((without_country or title, None))
     without_article = _LEADING_ARTICLE_RE.sub("", without_country or title)
     candidates.append((without_article or without_country or title, None))
     for query, search_year in candidates:
-        key = (normalize_show_title(query), search_year)
-        if query.strip() and key not in seen:
+        query = query.strip()
+        key = query.casefold()
+        if query and key not in seen:
             seen.add(key)
             variants.append((query.strip(), search_year))
-    return variants[:3]
+    return variants
+
+
+def _separate_year(title, year):
+    match = _EMBEDDED_YEAR_RE.search(title or "")
+    if not match:
+        return (title or "").strip(), year
+    embedded_year = int(match.group(1) or match.group(2))
+    clean_title = (title[:match.start()] or "").strip(" ._-")
+    return clean_title, year if year is not None else embedded_year
 
 
 class ShowResolver:
@@ -189,7 +235,11 @@ class ShowResolver:
             self._overrides = overrides
         return result
 
-    def resolve_show(self, title, year=None, operation_cache=None):
+    def resolve_show(
+        self, title, year=None, operation_cache=None, season_hint=None,
+        episode_number=None, season_number=None,
+    ):
+        title, year = _separate_year(title, year)
         normalized = normalize_show_title(title)
         if not normalized:
             return ShowResult(ShowState.NOT_FOUND)
@@ -199,7 +249,8 @@ class ShowResolver:
         def resolve():
             try:
                 return self._resolve(
-                    title, year, config, operation_cache,
+                    title, year, config, operation_cache, season_hint,
+                    episode_number, season_number,
                 )
             except TMDBError as error:
                 return ShowResult(ShowState.ERROR, error=str(error))
@@ -207,12 +258,19 @@ class ShowResolver:
         if operation_cache is None:
             return resolve()
         return operation_cache.get_or_load(
-            ("show", config, normalized, year),
+            (
+                "show", config, normalized, year, season_hint,
+                episode_number, season_number,
+            ),
             resolve,
             cache_result=lambda result: result.state != ShowState.ERROR,
         )
 
-    def _resolve(self, title, year, config, operation_cache=None):
+    def _resolve(
+        self, title, year, config, operation_cache=None, season_hint=None,
+        episode_number=None, season_number=None,
+    ):
+        title, year = _separate_year(title, year)
         api_key, language, providers = config
         if not api_key and self.client_factory is None:
             return ShowResult(
@@ -250,50 +308,227 @@ class ShowResolver:
                 )
 
         generic = set(normalized.split()).issubset(_GENERIC_WORDS)
-        for query, search_year in _query_variants(title, year):
-            candidates = tmdb.search_tv_strict(query, search_year)
+        queries = _query_variants(title, year)
+        seen_queries = set()
+        alternate_title = None
+        ranked_candidates = {}
+
+        def find_candidates(query):
+            nonlocal alternate_title
+            dbg and dbg.trace_stage(title, "provider_query", query)  # DEBUG-TRACE
+            cache_key = ("show_search", config, query.casefold())
+
+            def search():
+                return tmdb.search_tv_strict(query, None)
+
+            try:
+                candidates = (
+                    operation_cache.get_or_load(cache_key, search)
+                    if operation_cache is not None else search()
+                ) or []
+            except Exception:
+                dbg and dbg.trace_stage(title, "top_candidates", [])  # DEBUG-TRACE
+                raise
             ranked = []
             for candidate in candidates:
                 name = candidate.get("name") or candidate.get("title")
-                if not name:
+                show_id = candidate.get("id")
+                if not name or not isinstance(show_id, int) or show_id < 1:
+                    continue
+                titles = [
+                    candidate.get(field)
+                    for field in (
+                        "name", "title", "original_name",
+                        "native_name", "alternate_name",
+                    )
+                    if candidate.get(field)
+                ]
+                title_scores = [
+                    _similarity(title, candidate_title)
+                    for candidate_title in titles
+                ]
+                confidence = max(title_scores, default=0.0)
+                if confidence < 0.5:
                     continue
                 displayed_score = _similarity(title, name)
-                original_name = candidate.get("original_name")
-                original_score = (
-                    min(_similarity(title, original_name), 0.85)
-                    if original_name else 0.0
-                )
-                confidence = max(displayed_score, original_score)
-                if generic and normalize_show_title(name) != normalized:
-                    continue
-                ranked.append((
-                    confidence,
-                    bool(year and _year_of(candidate) == year),
-                    _popularity(candidate),
-                    candidate,
+                candidate_hint = _candidate_season_hint(candidate)
+                format_name = str(candidate.get("format") or "").upper()
+                suffix_kind = bool(re.search(
+                    r"(?i)(?:^|[\s._-])(?:OVA|SPECIALS?|MOVIE|PV|CM)\s*\d*$",
+                    name,
                 ))
-            ranked.sort(key=lambda row: (row[0], row[2]), reverse=True)
-            best = ranked[0] if ranked else None
-            if best:
-                near_top = [
-                    row for row in ranked
-                    if best[0] - row[0] <= 0.05
+                ineligible_base = (
+                    format_name in {"OVA", "SPECIAL", "MOVIE", "PV", "CM"}
+                    or suffix_kind
+                )
+                if (
+                    generic
+                    and normalize_show_title(name) != normalized
+                ):
+                    continue
+                row = {
+                    "confidence": confidence,
+                    "displayed_score": displayed_score,
+                    "year_match": bool(
+                        year is not None and _year_of(candidate) == year
+                    ),
+                    "popularity": _popularity(candidate),
+                    "candidate": candidate,
+                    "season_hint": candidate_hint,
+                    "ineligible_base": ineligible_base,
+                    "provider": candidate.get("provider"),
+                }
+                ranked.append(row)
+                previous = ranked_candidates.get(show_id)
+                if previous is None or (
+                    row["displayed_score"], row["confidence"]
+                ) > (
+                    previous["displayed_score"], previous["confidence"]
+                ):
+                    ranked_candidates[show_id] = row
+                if alternate_title is None and confidence >= 0.85:
+                    alternate_title = (
+                        candidate.get("original_name")
+                        or candidate.get("alternate_name")
+                        or candidate.get("native_name")
+                    )
+            ranked.sort(
+                key=lambda row: (
+                    row["displayed_score"], row["confidence"],
+                    row["year_match"], row["popularity"],
+                ),
+                reverse=True,
+            )
+            dbg and dbg.trace_stage(title, "top_candidates", ranked[:5])  # DEBUG-TRACE
+
+        for query, _search_year in queries:
+            key = query.casefold()
+            if key in seen_queries:
+                continue
+            seen_queries.add(key)
+            find_candidates(query)
+
+        if alternate_title:
+            alternate_title = str(alternate_title).strip()
+            key = alternate_title.casefold()
+            if alternate_title and key not in seen_queries:
+                find_candidates(alternate_title)
+
+        rows = list(ranked_candidates.values())
+        rows = [
+            row for row in rows
+            if row["confidence"] >= 0.85
+        ]
+        if not rows:
+            return ShowResult(ShowState.NOT_FOUND)
+
+        is_anilist = any(
+            row["provider"] == "anilist"
+            for row in rows
+        ) or bool(providers and providers.selected == "anilist")
+        ambiguous = False
+        season_mismatch = False
+        anime_season_index = 1
+        if is_anilist:
+            rows.sort(key=lambda row: (
+                _year_of(row["candidate"]) or 9999,
+                row["candidate"].get("id", 0),
+            ))
+            series_rows = [
+                row for row in rows if not row["ineligible_base"]
+            ] or rows
+            for index, row in enumerate(series_rows, start=1):
+                row["anime_season_index"] = index
+
+            if season_hint is not None:
+                matched = [
+                    row for row in series_rows
+                    if row["season_hint"] == season_hint
                 ]
-                if len(near_top) > 1:
-                    best = max(
-                        near_top,
-                        key=lambda row: (row[1], row[2], row[0]),
+                if season_hint == "final":
+                    matched = [
+                        row for row in series_rows
+                        if parse_tv_season_hint(
+                            row["candidate"].get("name")
+                            or row["candidate"].get("title") or ""
+                        )[1] == "final"
+                    ] or [series_rows[-1]]
+                elif not matched and isinstance(season_hint, int):
+                    matched = [
+                        row for row in series_rows
+                        if row["anime_season_index"] == season_hint
+                    ]
+                if matched:
+                    rows = matched
+                else:
+                    season_mismatch = True
+                    rows = [series_rows[0]]
+            else:
+                base_rows = [
+                    row for row in series_rows
+                    if row["season_hint"] is None
+                ]
+                if base_rows:
+                    rows = base_rows
+
+        rows.sort(key=lambda row: (
+            row["displayed_score"],
+            row["confidence"],
+            row["year_match"],
+            not row["ineligible_base"],
+            -(_year_of(row["candidate"]) or 9999)
+            if is_anilist and season_hint is None else 0,
+            row["popularity"],
+        ), reverse=True)
+
+        if episode_number is not None and len(rows) > 1:
+            best_score = rows[0]["displayed_score"]
+            tied = [
+                row for row in rows
+                if abs(row["displayed_score"] - best_score) <= 0.01
+            ]
+            if len(tied) > 1 and len({
+                _year_of(row["candidate"]) for row in tied
+            }) > 1:
+                available = []
+                for row in tied:
+                    candidate = row["candidate"]
+                    candidate_id = candidate.get("id")
+                    lookup_season = (
+                        1 if is_anilist
+                        else season_number or season_hint or 1
                     )
-            if best and best[0] >= 0.85:
-                confidence, _year_match, _candidate_popularity, candidate = best
-                show_id = candidate.get("id")
-                if isinstance(show_id, int) and show_id > 0:
-                    return ShowResult(
-                        ShowState.RESOLVED,
-                        show_id,
-                        candidate.get("name") or candidate.get("title"),
-                        _year_of(candidate),
-                        confidence,
-                        candidate=candidate,
-                    )
-        return ShowResult(ShowState.NOT_FOUND)
+                    season_data = tmdb.season(
+                        candidate_id, lookup_season,
+                    ) or {}
+                    if any(
+                        episode.get("episode_number") == episode_number
+                        for episode in season_data.get("episodes") or []
+                    ):
+                        available.append(row)
+                if len(available) == 1:
+                    rows = available
+                else:
+                    ambiguous = True
+
+        selected = rows[0]
+        candidate = dict(selected["candidate"])
+        if is_anilist:
+            anime_season_index = selected["anime_season_index"]
+            if (
+                isinstance(season_hint, int)
+                and selected["season_hint"] == season_hint
+            ):
+                anime_season_index = season_hint
+            candidate["_anime_season_index"] = anime_season_index
+            candidate["_anime_season_mismatch"] = season_mismatch
+        show_id = candidate["id"]
+        return ShowResult(
+            ShowState.RESOLVED,
+            show_id,
+            candidate.get("name") or candidate.get("title"),
+            _year_of(candidate),
+            selected["confidence"],
+            candidate=candidate,
+            ambiguous=ambiguous,
+        )

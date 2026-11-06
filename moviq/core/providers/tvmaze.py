@@ -69,6 +69,22 @@ class TVmazeProvider(Provider):
         found = self.cached(f"/shows/{show_id}/episodes", {"specials": 1}, load)
         return list((found or {}).get("episodes") or [])
 
+    def episodes_by_date(self, show_id, air_date):
+        def load():
+            return self._get(
+                f"/shows/{show_id}/episodesbydate", {"date": air_date},
+            ) or []
+
+        episodes = self.cached(
+            f"/shows/{show_id}/episodesbydate", {"date": air_date}, load,
+        ) or []
+        return [
+            self._episode(raw, raw.get("season") or 0, raw["number"])
+            for raw in episodes
+            if isinstance(raw, dict)
+            and isinstance(raw.get("number"), int)
+        ]
+
     @staticmethod
     def _split(episodes):
         regular = [

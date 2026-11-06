@@ -8,7 +8,7 @@ from . import ids
 from .anilist import AniListProvider
 from .offline import OfflineProvider
 from .omdb import OMDbProvider
-from .settings import GENERAL, PROVIDER_INFO, ProviderSettings
+from .settings import PROVIDER_INFO, ProviderSettings
 from .tvmaze import TVmazeProvider
 
 ACCEPTABLE_SIMILARITY = 0.75
@@ -30,13 +30,14 @@ class ProviderRouter:
 
     def __init__(
         self, settings=None, tmdb_key="", language=None, cancel_event=None,
-        operation_cache=None, session=None,
+        operation_cache=None, session=None, retry_offline=False,
     ):
         self.settings = settings or ProviderSettings()
         self.key = (tmdb_key or "").strip()
         self.language = language
         self.cancel_event = cancel_event
         self.operation_cache = operation_cache
+        self.retry_offline = retry_offline
         self.notices = []
         self._session = session
         self.on_provider = None
@@ -80,6 +81,8 @@ class ProviderRouter:
             if name != "offline" and name in self.settings.enabled
             and self._usable(name, kind)
         ]
+        if not any(name in names for name in ("tmdb", "omdb")):
+            names = [name for name in names if name != "anilist"]
         if (
             "offline" in self.settings.enabled
             and "offline" not in self._failed
@@ -117,7 +120,7 @@ class ProviderRouter:
         for result in results:
             for title in (
                 _title_of(result), result.get("original_title"),
-                result.get("original_name"),
+                result.get("original_name"), result.get("native_name"),
             ):
                 if title and similarity(
                     wanted, _normalized_match_title(title),
@@ -133,7 +136,13 @@ class ProviderRouter:
     def _search(self, kind, method, query, year):
         names = self.chain(kind)
         online_names = [name for name in names if name != "offline"]
-        offline_enabled = "offline" in names
+        retry_has_keyed_source = self.retry_offline and any(
+            name in online_names for name in ("tmdb", "omdb")
+        )
+        offline_enabled = "offline" in names and not retry_has_keyed_source
+        no_keyed_provider = not any(
+            name in online_names for name in ("tmdb", "omdb")
+        )
         weak = None
         first_error = None
         network_unavailable = False
@@ -173,9 +182,15 @@ class ProviderRouter:
         if weak is not None:
             return weak
         if (
-            network_unavailable and not online_search_succeeded
+            offline_enabled
             and not other_provider_error
-            and offline_enabled
+            and (
+                no_keyed_provider
+                or (
+                    network_unavailable
+                    and not online_search_succeeded
+                )
+            )
         ):
             if self.on_provider is not None:
                 self.on_provider("offline")
@@ -229,6 +244,10 @@ class ProviderRouter:
     def season(self, show_id, season_number):
         _name, provider, native = self._resolve(show_id)
         return provider.season(native, season_number)
+
+    def episodes_by_date(self, show_id, air_date):
+        _name, provider, native = self._resolve(show_id)
+        return provider.episodes_by_date(native, air_date)
 
     def episode(self, show_id, season_number, episode_number):
         _name, provider, native = self._resolve(show_id)
