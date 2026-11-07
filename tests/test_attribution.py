@@ -17,11 +17,14 @@ class TMDBAttributionTests(unittest.TestCase):
 
     def test_runtime_branding_assets_resolve(self):
         for asset in (
-            "moviq-icon.ico", "moviq-icon.png", "moviq-icon-256.png",
+            "moviq-icon.ico", "moviq-icon.png",
         ):
             self.assertTrue(Path(resource(f"assets/{asset}")).is_file())
 
-    @patch("moviq.ui.popups.resource", side_effect=tk.TclError("missing"))
+    @patch(
+        "moviq.ui.window_utils.resource",
+        side_effect=tk.TclError("missing"),
+    )
     def test_missing_window_icon_does_not_raise(self, _resource):
         window = Mock()
 

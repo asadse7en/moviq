@@ -3,7 +3,7 @@ import time
 import tkinter as tk
 import tkinter.font as tkfont
 
-from .table_tooltip import TableTooltip
+from .table_tooltip import TableTooltip as TableTooltip
 from .icons import draw_icon
 from .window_utils import set_window_icon
 
@@ -1637,7 +1637,7 @@ class SettingsDropdown(tk.Frame):
             return
         geometry = popup.geometry().split("+")
         size = geometry[0]
-        x, y = int(geometry[1]), int(geometry[2])
+        x, _y = int(geometry[1]), int(geometry[2])
         final_y = self.winfo_rooty() + self.winfo_height()
         elapsed = time.monotonic() - self._open_started
         progress = min(1.0, elapsed / 0.12)

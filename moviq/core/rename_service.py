@@ -89,7 +89,8 @@ class RenameService:
 
     def __init__(
         self, items, plans, all_items, rename_subtitles, journal_path,
-        events, cancel_event, total, skipped_count, failed_count,
+        events, cancel_event, total, skipped_count, conflict_count,
+        storage_gone=None,
     ):
         self.items = items
         self.plans = plans
@@ -100,14 +101,16 @@ class RenameService:
         self.cancel_event = cancel_event
         self.total = total
         self.skipped_count = skipped_count
-        self.failed_count = failed_count
+        self.conflict_count = conflict_count
+        self.storage_gone = storage_gone
 
     def run(self):
         renamed_count = 0
-        failed_count = self.failed_count
+        failed_count = conflict_count = self.conflict_count
         processed_count = 0
         errors = []
         operations = []
+        storage_disconnected = False
         try:
             plans = {
                 key: copy.copy(plan) for key, plan in self.plans.items()
@@ -143,24 +146,44 @@ class RenameService:
                         ))
 
                 self.events.put((
-                    "rename_progress", "", failed_count, self.total,
+                    "rename_progress", "", conflict_count, self.total,
                     renamed_count, self.skipped_count, failed_count,
                 ))
                 for item in self.items:
                     if self.cancel_event.is_set():
                         break
                     work_item = work_items[id(item)]
+                    item_path = work_item.path
                     self.events.put((
                         "rename_progress", work_item.path.name,
-                        failed_count + processed_count, self.total,
+                        conflict_count + processed_count, self.total,
                         renamed_count, self.skipped_count, failed_count,
                     ))
+                    previous_state = (
+                        getattr(work_item, "status", None),
+                        getattr(work_item, "error", None),
+                        getattr(work_item, "error_code", None),
+                    )
                     new_path, error = apply_item_plan(
                         work_item, plans[id(item)], operations,
                         self.rename_subtitles, apply_folder_renames,
                     )
                     if error is not None:
-                        errors.append(f"{work_item.path.name}: {error}")
+                        if (
+                            self.storage_gone is not None
+                            and self.storage_gone(error, item_path)
+                        ):
+                            (
+                                work_item.status, work_item.error,
+                                work_item.error_code,
+                            ) = previous_state
+                            storage_disconnected = True
+                            self.cancel_event.set()
+                            break
+                        errors.append(
+                            f"{work_item.path.name}: "
+                            f"{getattr(error, 'strerror', None) or error}"
+                        )
                         failed_count += 1
                     else:
                         renamed_count += 1
@@ -170,7 +193,7 @@ class RenameService:
                     ))
                     self.events.put((
                         "rename_progress", work_item.path.name,
-                        failed_count + processed_count, self.total,
+                        conflict_count + processed_count, self.total,
                         renamed_count, self.skipped_count, failed_count,
                     ))
         except Exception as error:
@@ -181,4 +204,6 @@ class RenameService:
             "rename_complete", operations, errors, renamed_count,
             failed_count, processed_count,
             processed_count < len(self.items), self.skipped_count, self.total,
+            conflict_count, storage_disconnected,
+            len(self.items) - processed_count,
         ))

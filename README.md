@@ -73,16 +73,10 @@ To run Moviq from the source code, install Python 3.10 or newer and clone the re
 git clone https://github.com/asadse7en/Moviq.git
 ```
 
-Install the dependencies:
+Install the application and its GUI dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
-```
-
-Install the application and its optional GUI dependencies:
-
-```bash
-python -m pip install -e ".[gui]"
+pip install -e ".[gui]"
 ```
 
 Run Moviq:

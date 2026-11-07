@@ -1,6 +1,9 @@
 .venv/
-.github/copilot-instructions.md
+.github/*
+!.github/workflows/
 __pycache__/
+.ruff_cache/
+unready_report.json
 release/
 docs/
 .env

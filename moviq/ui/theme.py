@@ -6,7 +6,6 @@ import zlib
 from weakref import WeakKeyDictionary, WeakSet
 from tkinter import ttk
 
-import customtkinter as ctk
 from PIL import ImageGrab, ImageTk
 
 from ..core.settings_store import resolve_system_theme
@@ -66,7 +65,6 @@ def apply_theme(root, mode):
         cover.place(relx=0, rely=0, relwidth=1, relheight=1)
         cover.lift()
         root.update_idletasks()
-        ctk.set_appearance_mode(mode.capitalize())
         for listener in tuple(_THEME_LISTENERS.get(root, ())):
             listener(mode)
         apply_titlebar_theme(root, mode == "dark")

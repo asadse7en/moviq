@@ -37,8 +37,11 @@ class FakeResponse:
         self.status_code = status
         self.headers = headers or {}
         self._data = data
+        self.text = "invalid response body"
 
     def json(self):
+        if isinstance(self._data, Exception):
+            raise self._data
         return self._data
 
 
@@ -99,6 +102,43 @@ class TMDBHTTPTests(unittest.TestCase):
                             client.get("/search/movie", query="Unique404"),
                         )
                 request.assert_called_once()
+
+    def test_invalid_json_retries_and_logs_one_redacted_debug_line(self):
+        invalid = FakeResponse(
+            200, ValueError("invalid JSON"),
+            {"Content-Type": "application/json"},
+        )
+        with patch(
+            "moviq.core.tmdb._SESSION.get",
+            side_effect=[invalid, FakeResponse(200, {"ok": True})],
+        ) as request, patch.object(TMDB, "_wait") as wait:
+            with self.assertLogs("moviq.core.tmdb", level="DEBUG") as logs:
+                result = TMDB("secret-key").get(
+                    "/search/movie", query="UniqueInvalidJsonRetry",
+                )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(request.call_count, 2)
+        wait.assert_called_once()
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("status=200", logs.output[0])
+        self.assertIn("application/json", logs.output[0])
+        self.assertIn("invalid response body", logs.output[0])
+        self.assertNotIn("secret-key", logs.output[0])
+        self.assertNotIn("/search/movie", logs.output[0])
+
+    def test_invalid_json_raises_after_final_retry(self):
+        invalid = FakeResponse(200, ValueError("invalid JSON"))
+        with patch(
+            "moviq.core.tmdb._SESSION.get", return_value=invalid,
+        ) as request, patch.object(TMDB, "_wait") as wait:
+            with self.assertRaisesRegex(TMDBError, "invalid response data"):
+                TMDB("secret-key").get(
+                    "/search/movie", query="UniqueInvalidJsonFinal",
+                )
+
+        self.assertEqual(request.call_count, 4)
+        self.assertEqual(wait.call_count, 3)
 
     def test_network_error_retries_and_redacts_credentials(self):
         secret = "secret-api-key"

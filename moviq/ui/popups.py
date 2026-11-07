@@ -7,7 +7,6 @@ import time
 from ctypes import wintypes
 from tkinter import ttk
 
-from .. import resource
 from ..core.providers.settings import PROVIDER_INFO
 from .controls import RoundedCard, create_action_button
 from .window_utils import set_window_icon
@@ -473,6 +472,7 @@ class MatchProgressPopup:
         if self.completed:
             return
         total = max(total, 0)
+        completed = min(completed, total)
         progress = min(100.0, 100 * completed / max(total, 1))
         percent = (
             f"{progress:.1f}%"
@@ -533,6 +533,7 @@ class MatchProgressPopup:
         self._completion_after = None
         self.completed = True
         total = max(total, 0)
+        completed = min(completed, total)
         progress = min(100.0, 100 * completed / max(total, 1))
         if self._progress_after is not None:
             self.progress_canvas.after_cancel(self._progress_after)

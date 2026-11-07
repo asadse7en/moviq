@@ -249,6 +249,7 @@ class TMDB:
         else:
             params["api_key"] = self.key
 
+        logged_invalid_data = False
         for attempt in range(MAX_RETRIES + 1):
             self._check_cancelled()
             _REQUEST_LIMITER.acquire(self.cancel_event)
@@ -314,10 +315,21 @@ class TMDB:
                 )
             try:
                 data = response.json()
-            except requests.exceptions.JSONDecodeError:
-                raise TMDBError(
-                    "TMDB returned invalid response data.",
-                ) from None
+            except ValueError:
+                if not logged_invalid_data:
+                    log.debug(
+                        "TMDB returned invalid data (status=%s, "
+                        "content_type=%s, body=%r)",
+                        status, response.headers.get("Content-Type"),
+                        response.text[:80],
+                    )
+                    logged_invalid_data = True
+                if attempt >= MAX_RETRIES:
+                    raise TMDBError(
+                        "TMDB returned invalid response data.",
+                    ) from None
+                self._wait(self._backoff(attempt))
+                continue
             self._check_cancelled()
             return data
 

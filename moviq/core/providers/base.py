@@ -150,6 +150,7 @@ class Provider:
         """HTTP with retries. Returns parsed JSON, or None for HTTP 404."""
         if network_state.is_down():
             raise TMDBNetworkError("No internet connection.")
+        logged_invalid_data = False
         for attempt in range(MAX_RETRIES + 1):
             self._check_cancelled()
             self.limiter.acquire(self.cancel_event)
@@ -208,7 +209,19 @@ class Provider:
             try:
                 data = response.json()
             except ValueError:
-                raise self._error("returned invalid data.") from None
+                if not logged_invalid_data:
+                    log.debug(
+                        "%s returned invalid data (status=%s, "
+                        "content_type=%s, body=%r)",
+                        self.label, status,
+                        response.headers.get("Content-Type"),
+                        response.text[:80],
+                    )
+                    logged_invalid_data = True
+                if attempt >= MAX_RETRIES:
+                    raise self._error("returned invalid data.") from None
+                self._wait(TMDB._backoff(attempt))
+                continue
             self._check_cancelled()
             return data
 

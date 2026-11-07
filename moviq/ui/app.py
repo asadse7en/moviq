@@ -19,7 +19,6 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 
 from .. import trace
-
 from .. import __version__ as APP_VERSION
 from ..core.config import (
     ERROR_LOG_FILE, IMAGE_EXT, SIDECAR_EXT, USER_DATA_DIR, VIDEO_EXT,
@@ -48,7 +47,7 @@ from ..core.naming import (
     NAMING, has_explicit_episode_marker, parse_name, parse_tv_name,
 )
 from ..core.tmdb import (
-    MAX_WORKERS, TMDB, TMDBAuthError, TMDBCancelled,
+    MAX_WORKERS, TMDBAuthError, TMDBCancelled, TMDBError,
     TMDBOperationCache,
 )
 from ..core.providers.router import ProviderRouter
@@ -70,7 +69,7 @@ from .popups import (
 from ..core.settings_store import SettingsStore, resolve_system_theme
 from .settings import SettingsView
 from .icons import draw_icon
-from .table_layout import target_name_display, tv_target_name_display
+from .table_layout import target_name_display
 from .main_page import (
     build_main_page as build_app_main_page,
 )
@@ -87,6 +86,23 @@ from .theme import (
     HAVE_SV, apply_app_palette, apply_theme as apply_root_theme,
     register_theme_listener, unregister_theme_listener,
 )
+
+
+def _storage_gone(error, path):
+    cause = error
+    while cause is not None:
+        if isinstance(cause, OSError) and (
+            getattr(cause, "winerror", None)
+            in (21, 433, 483, 1117, 121, 1167)
+            or cause.errno in (errno.ENODEV, errno.EIO, errno.ENXIO)
+        ):
+            return True
+        cause = (
+            getattr(cause, "__cause__", None)
+            or getattr(cause, "__context__", None)
+        )
+    root = Path(path).anchor
+    return bool(root) and not Path(root).exists()
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
@@ -2960,6 +2976,19 @@ class App:
                         ("error", None, "cancelled"),
                     )
                 continue
+            except TMDBError as e:
+                logging.getLogger(__name__).warning(
+                    "Matching failed: %s", e,
+                )
+                for item in items:
+                    trace.trace_end(
+                        lambda: str(item.path),
+                        lambda: ("error", None, str(e)),
+                    )
+                results = [
+                    ("error", None, str(e))
+                    for _item in items
+                ]
             except Exception as e:
                 logging.getLogger(__name__).exception(
                     "Matching worker failed.",
@@ -3052,7 +3081,8 @@ class App:
 
     def _finish_rename(
         self, ops, errors, renamed_count, failed_count, processed_count,
-        cancelled, skipped_count, rename_total,
+        cancelled, skipped_count, rename_total, conflict_count,
+        storage_disconnected, unprocessed_count,
     ):
         errors.extend(getattr(self, "_rename_errors", ()))
         self._rename_running = False
@@ -3066,9 +3096,15 @@ class App:
         if progress is not None:
             progress.can_undo = bool(ops or renamed_count)
             progress.complete(
-                failed_count + processed_count, rename_total,
+                conflict_count + processed_count, rename_total,
                 renamed_count, skipped_count, failed_count,
                 cancelled=cancelled,
+            )
+        if storage_disconnected:
+            show_warning(
+                self, "Storage disconnected",
+                "Storage disconnected. Reconnect the drive and run Rename "
+                f"again. {unprocessed_count} files were not processed.",
             )
         self.status(
             "Rename stopped. Completed files can be undone."
@@ -4088,6 +4124,7 @@ class App:
                     destination.exists() and not destination_is_source
                 ):
                     conflicts_by_item[id(item)] = destination
+        conflict_count = len(conflicts_by_item)
         skipped_count = len(scope) - len(todo)
         summary = (
             f"{len(todo)} files to rename \u00b7 {skipped_count} skipped "
@@ -4128,7 +4165,6 @@ class App:
             0, len(scope) - len(todo) - len(conflicts_by_item),
         )
         rename_total = len(todo) + len(conflicts_by_item)
-        failed_count = len(conflicts_by_item)
         self._rename_before = rename_before
         self._rename_errors = []
         self._rename_cancel_event = threading.Event()
@@ -4137,7 +4173,7 @@ class App:
             todo, plans, self.items, self.rename_subtitles.get(),
             USER_DATA_DIR / "rename-undo.jsonl", self._rename_events,
             self._rename_cancel_event, rename_total, skipped_count,
-            failed_count,
+            conflict_count, _storage_gone,
         )
         self._rename_thread = threading.Thread(
             target=service.run, name="moviq-rename", daemon=True,

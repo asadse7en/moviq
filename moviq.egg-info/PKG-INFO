@@ -4,7 +4,6 @@ Version: 1.1.1
 Summary: A desktop app for matching and organizing movie files with TMDB
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
-Requires-Dist: customtkinter>=5.2.2
 Requires-Dist: Pillow>=10
 Requires-Dist: requests>=2.31
 Requires-Dist: resvg-py>=0.5.0
@@ -89,16 +88,10 @@ To run Moviq from the source code, install Python 3.10 or newer and clone the re
 git clone https://github.com/asadse7en/Moviq.git
 ```
 
-Install the dependencies:
+Install the application and its GUI dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
-```
-
-Install the application and its optional GUI dependencies:
-
-```bash
-python -m pip install -e ".[gui]"
+pip install -e ".[gui]"
 ```
 
 Run Moviq:

@@ -5,6 +5,24 @@ from moviq.ui.popups import MatchProgressPopup
 
 
 class MatchProgressPopupCompletionTests(unittest.TestCase):
+    def test_progress_update_clamps_completed_count(self):
+        popup = MatchProgressPopup.__new__(MatchProgressPopup)
+        popup.completed = False
+        popup.current_font = Mock(measure=lambda text: len(text) * 10)
+        popup.current_var = Mock()
+        popup.progress_count_var = Mock()
+        popup.percent_var = Mock()
+        popup.counter_vars = [Mock(), Mock(), Mock()]
+        popup._set_progress = Mock()
+        popup.window = Mock()
+        popup.task = "matching"
+
+        popup.update_progress("file.mkv", 5, 1, 0, 0, 0)
+
+        popup.progress_count_var.set.assert_called_once_with("1 of 1")
+        popup.percent_var.set.assert_called_once_with("100%")
+        popup._set_progress.assert_called_once_with(100.0)
+
     def test_rename_completion_hides_message_below_counters(self):
         popup = MatchProgressPopup.__new__(MatchProgressPopup)
         popup._completion_pending = False
@@ -62,10 +80,11 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
         popup._center = Mock()
         popup.backdrop = Mock()
 
-        popup._finish_completion(10, 10, 8, 1, 1, cancelled=False)
+        popup._finish_completion(10, 8, 8, 1, 1, cancelled=False)
 
         popup.message_label.grid_remove.assert_not_called()
         self.assertTrue(popup.completed)
+        popup.progress_count_var.set.assert_called_once_with("8 of 8")
         self.assertEqual(popup._progress_value, 1.0)
         self.assertEqual(popup._progress_target, 1.0)
         popup._draw_progress.assert_called_once_with()

@@ -4,7 +4,6 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 
 from .. import resource
-from ..core.providers.settings import PROVIDER_INFO
 from .design import TABLE_METRICS
 from .file_table import FileTable
 from .icons import draw_icon
@@ -171,7 +170,7 @@ def build_main_page(app, page):
             "Manually match selected files, or all files if none are selected",
         ),
     ):
-        tooltip = ToolTip(widget, text, app.pal["card"], app.pal["fg"])
+        _tooltip = ToolTip(widget, text, app.pal["card"], app.pal["fg"])
 
     ttk.Separator(
         page, orient="horizontal", style="HeaderDivider.TSeparator",

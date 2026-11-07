@@ -57,7 +57,7 @@ def main(argv=None):
     root = TkinterDnD.Tk() if HAVE_DND else tk.Tk()
     try:
         root._moviq_icon = tk.PhotoImage(
-            file=resource("assets/moviq-icon-256.png"),
+            file=resource("assets/moviq-icon.png"),
         )
         root.iconphoto(True, root._moviq_icon)
     except (OSError, tk.TclError):

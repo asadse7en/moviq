@@ -1,3 +1,4 @@
+import errno
 import os
 import json
 import queue
@@ -30,6 +31,7 @@ from moviq.core.naming import (
 from moviq.core.show_resolver import ShowResult, ShowState
 from moviq.core.tmdb import TMDB, TMDBCancelled
 from moviq.ui.dialogs import SearchDialog, _match_dialog_sizes
+from moviq.ui.app import _storage_gone
 from moviq.ui.table_layout import (
     fit_column_widths, folder_and_file, source_path_display,
     target_name_display, tv_target_name_display,
@@ -1993,6 +1995,12 @@ class FileOperationTests(unittest.TestCase):
 
 
 class RenameServiceTests(unittest.TestCase):
+    def test_storage_gone_detects_device_io_errors(self):
+        self.assertTrue(
+            _storage_gone(OSError(errno.EIO, "drive disconnected"), ""),
+        )
+        self.assertFalse(_storage_gone(OSError(errno.EACCES, "denied"), ""))
+
     def test_successful_rename_reports_progress_and_journals_operations(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -2098,8 +2106,62 @@ class RenameServiceTests(unittest.TestCase):
             complete = next(
                 event for event in queued if event[0] == "rename_complete"
             )
+            progress = [
+                event[2] for event in queued if event[0] == "rename_progress"
+            ]
+            self.assertEqual(progress, [0, 0, 1])
             self.assertEqual(complete[1], [])
             self.assertEqual(complete[4], 1)
+
+    def test_storage_disconnect_stops_without_marking_item_failed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.mkv"
+            destination = root / "destination.mkv"
+            source.write_bytes(b"video")
+            item = SimpleNamespace(
+                path=source, root=root, status="auto", error="",
+                error_code=None,
+            )
+            events = queue.Queue()
+            service = RenameService(
+                [item], {id(item): object()}, [item], True,
+                root / "rename-undo.jsonl", events, Event(), 1, 0, 0,
+                _storage_gone,
+            )
+
+            def disconnected(path, _plan, ops, rename_subtitles=True):
+                ops.execute(
+                    ("move", path, destination),
+                    lambda: path.rename(destination),
+                )
+                raise OSError(errno.EIO, "drive disconnected")
+
+            with patch(
+                "moviq.core.apply.perform_plan", side_effect=disconnected,
+            ), patch(
+                "moviq.core.rename_service.undo_ops",
+                return_value=["source unavailable"],
+            ), patch(
+                "moviq.ui.app.Path",
+                return_value=SimpleNamespace(
+                    anchor="X:\\", exists=lambda: False,
+                ),
+            ):
+                service.run()
+
+            queued = []
+            while not events.empty():
+                queued.append(events.get_nowait())
+            complete = next(
+                event for event in queued if event[0] == "rename_complete"
+            )
+            self.assertTrue(complete[6])
+            self.assertTrue(complete[10])
+            self.assertEqual(complete[11], 1)
+            self.assertEqual(len(complete[1]), 1)
+            self.assertNotIn("rename_item", [event[0] for event in queued])
+            self.assertEqual(item.status, "auto")
 
 
 if __name__ == "__main__":
