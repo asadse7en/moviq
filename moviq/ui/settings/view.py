@@ -8,6 +8,7 @@ from tkinter import ttk
 from ...core.tmdb import MAX_WORKERS
 from ..controls import RoundedCard, draw_rounded_rectangle
 from ..icons import draw_icon
+from ..window_utils import shortcut_variants, wheel_steps
 from ._common import APP_VERSION
 from .about import AboutTabMixin
 from .formatting import FormattingTabMixin
@@ -459,8 +460,9 @@ class SettingsView(
             ("<Down>", self._on_scroll_key),
         )
         for sequence, callback in bindings:
-            binding_id = self.bind_all(sequence, callback, add="+")
-            self._scroll_bindings.append((sequence, binding_id))
+            for shortcut in shortcut_variants(sequence):
+                binding_id = self.bind_all(shortcut, callback, add="+")
+                self._scroll_bindings.append((shortcut, binding_id))
 
     def _pointer_over_content(self):
         x, y = self.winfo_pointerxy()
@@ -475,7 +477,7 @@ class SettingsView(
     def _on_mousewheel(self, event):
         if not self._pointer_over_content():
             return
-        self._wheel_remainder += -event.delta / 30
+        self._wheel_remainder += -(wheel_steps(event)) / 30
         units = int(self._wheel_remainder)
         if units:
             if not self._scroll_settings_canvas(units):

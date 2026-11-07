@@ -2,6 +2,7 @@ import tkinter as tk
 
 from ...core.matching import rank, rank_tv
 from ...core.providers.ids import display_id
+from ..window_utils import wheel_steps
 
 
 class ResultsListMixin:
@@ -393,11 +394,7 @@ class ResultsListMixin:
             self._bind_results_mousewheel(child)
 
     def _on_mousewheel(self, event):
-        delta = event.delta
-        units = -int(delta / 120) if abs(delta) >= 120 else (
-            -1 if delta > 0 else 1 if delta < 0 else 0
-        )
-        self._scroll_results(units)
+        self._scroll_results(wheel_steps(event))
         return "break"
 
     def _scroll_results_from_mouse(self, units):

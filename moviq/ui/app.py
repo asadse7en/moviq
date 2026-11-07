@@ -86,6 +86,7 @@ from .theme import (
     HAVE_SV, apply_app_palette, apply_theme as apply_root_theme,
     register_theme_listener, unregister_theme_listener,
 )
+from .window_utils import wheel_steps
 
 
 def _storage_gone(error, path):
@@ -1327,11 +1328,7 @@ class App:
         self._status_card_cache = None
 
     def on_mousewheel(self, event):
-        delta = event.delta
-        if abs(delta) >= 120:
-            units = -int(delta / 120)
-        else:
-            units = -1 if delta > 0 else 1 if delta < 0 else 0
+        units = wheel_steps(event)
         if units:
             self.scroll_rows(units)
         return "break"

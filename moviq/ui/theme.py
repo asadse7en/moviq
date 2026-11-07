@@ -55,7 +55,7 @@ def apply_theme(root, mode):
             )
             try:
                 snapshot = ImageGrab.grab(bbox=bounds)
-            except OSError:
+            except Exception:
                 snapshot = None
             if snapshot is not None:
                 cover.snapshot = ImageTk.PhotoImage(snapshot, master=cover)

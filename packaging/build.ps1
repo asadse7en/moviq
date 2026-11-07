@@ -77,15 +77,16 @@ try {
     $versionDirectoryName = "v$version"
     $versionOutputDirectory = Join-Path $releaseDistPath $versionDirectoryName
     $portableName = "Moviq-Portable-$version"
+    $archiveName = "Moviq-$version-windows-x64-portable.zip"
     $stagingDirectory = Join-Path $releaseBuildPath (
         "portable-$([Guid]::NewGuid().ToString('N'))"
     )
     $portableDirectory = Join-Path $stagingDirectory $portableName
     $executablePath = Join-Path $portableDirectory "$portableName.exe"
-    $archivePath = Join-Path $stagingDirectory "$portableName.zip"
+    $archivePath = Join-Path $stagingDirectory $archiveName
     $installerScript = Join-Path $PSScriptRoot "moviq.iss"
     $installerOutputDirectory = Join-Path $stagingDirectory "installer"
-    $installerName = "Moviq-Setup-$version.exe"
+    $installerName = "Moviq-$version-windows-x64-setup.exe"
     $installerPath = Join-Path $versionOutputDirectory $installerName
     if (-not (Test-Path -LiteralPath $installerScript -PathType Leaf)) {
         throw "The Inno Setup script is missing: $installerScript"
@@ -117,7 +118,7 @@ try {
 
     Add-Type -AssemblyName System.IO.Compression
     $temporaryArchivePath = Join-Path $stagingDirectory (
-        ".$portableName-$([Guid]::NewGuid().ToString('N')).tmp.zip"
+        ".$archiveName-$([Guid]::NewGuid().ToString('N')).tmp.zip"
     )
     $archiveFiles = @(
         Get-ChildItem -LiteralPath $portableDirectory -File -Recurse |
@@ -230,20 +231,20 @@ try {
         Out-Null
     [System.IO.File]::Copy(
         $archivePath,
-        (Join-Path $temporaryPublishDirectory "$portableName.zip")
+        (Join-Path $temporaryPublishDirectory $archiveName)
     )
     [System.IO.File]::Copy(
         $stagedInstallerPath,
         (Join-Path $temporaryPublishDirectory $installerName)
     )
     $portableChecksum = Get-FileHash `
-        -LiteralPath (Join-Path $temporaryPublishDirectory "$portableName.zip") `
+        -LiteralPath (Join-Path $temporaryPublishDirectory $archiveName) `
         -Algorithm SHA256
     $installerChecksum = Get-FileHash `
         -LiteralPath (Join-Path $temporaryPublishDirectory $installerName) `
         -Algorithm SHA256
     $checksumLines = @(
-        "$($portableChecksum.Hash.ToLowerInvariant()) *$portableName.zip"
+        "$($portableChecksum.Hash.ToLowerInvariant()) *$archiveName"
         "$($installerChecksum.Hash.ToLowerInvariant()) *$installerName"
     )
     [System.IO.File]::WriteAllLines(
@@ -285,7 +286,7 @@ try {
     }
 
     Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
-    Write-Host "Portable ZIP archive created: $(Join-Path $versionOutputDirectory "$portableName.zip")"
+    Write-Host "Portable ZIP archive created: $(Join-Path $versionOutputDirectory $archiveName)"
     Write-Host "Windows installer created: $installerPath"
     Write-Host "SHA-256 checksums created: $(Join-Path $versionOutputDirectory "SHA256SUMS.txt")"
 }

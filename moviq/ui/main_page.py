@@ -1,9 +1,11 @@
+import sys
 import tkinter as tk
 from tkinter import ttk
 
 from PIL import Image, ImageTk
 
 from .. import resource
+from .window_utils import shortcut_variants
 from .design import TABLE_METRICS
 from .file_table import FileTable
 from .icons import draw_icon
@@ -348,32 +350,35 @@ def build_main_page(app, page):
     app.tree.bind("<<TreeviewSelect>>", app.on_select)
     app.root.bind("<Escape>", lambda _e: app.deselect())
     for sequence, action in MAIN_SHORTCUTS.items():
-        app.root.bind_all(
-            sequence,
-            lambda event, target=action: app._run_main_shortcut(
-                event, target,
-            ),
-            add="+",
-        )
+        for shortcut in shortcut_variants(sequence):
+            app.root.bind_all(
+                shortcut,
+                lambda event, target=action: app._run_main_shortcut(
+                    event, target,
+                ),
+                add="+",
+            )
     for sequence, action in (
         ("<Control-y>", "redo"),
         ("<Control-Y>", "redo"),
         ("<Control-Shift-z>", "redo"),
         ("<Control-Shift-Z>", "redo"),
     ):
-        app.root.bind_all(
-            sequence,
-            lambda event, target=action: app._run_main_shortcut(
-                event, target,
-            ),
-            add="+",
-        )
+        for shortcut in shortcut_variants(sequence):
+            app.root.bind_all(
+                shortcut,
+                lambda event, target=action: app._run_main_shortcut(
+                    event, target,
+                ),
+                add="+",
+            )
     app._update_undo_button()
     app.tree.bind("<Motion>", app._schedule_tree_tooltip, add="+")
     app.tree.bind("<Leave>", app._hide_tree_tooltip, add="+")
     app.tree.bind("<Button-3>", app.show_menu, add="+")
-    for b in ("<Button-2>", "<Control-Button-1>"):
-        app.tree.bind(b, app.show_menu, add="+")
+    if sys.platform == "darwin":
+        for b in ("<Button-2>", "<Control-Button-1>"):
+            app.tree.bind(b, app.show_menu, add="+")
     app.menu = tk.Menu(app.root, tearoff=0)
     app.menu.add_command(
         label="Show file in Explorer", command=app.open_selected_file,

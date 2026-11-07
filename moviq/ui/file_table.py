@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import font as tkfont
 
 from .design import PALETTES, TABLE_METRICS
+from .window_utils import shortcut_variants
 
 
 class FileTable(tk.Canvas):
@@ -70,9 +71,12 @@ class FileTable(tk.Canvas):
         self.bind("<Leave>", self._on_leave, add="+")
         for sequence in (
             "<Up>", "<Down>", "<Home>", "<End>", "<Prior>", "<Next>",
-            "<space>", "<Control-a>", "<Control-A>",
+            "<space>",
         ):
             self.bind(sequence, self._on_key, add="+")
+        for sequence in ("<Control-a>", "<Control-A>"):
+            for shortcut in shortcut_variants(sequence):
+                self.bind(shortcut, self._on_key, add="+")
         self._queue_redraw()
 
     def _scale(self, value):

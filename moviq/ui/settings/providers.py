@@ -7,6 +7,7 @@ from ...core import network_state
 from ...core.providers.router import test_provider
 from ...core.providers.settings import PROVIDER_INFO
 from ..controls import RoundedCard
+from ..window_utils import shortcut_variants
 
 _KEY_FIELDS = {
     "omdb": (("omdb", "API key"),),
@@ -185,8 +186,12 @@ class ProvidersTabMixin:
             self.key_entry = self._provider_key_entries["key"]
             self.key_eye_canvas = self._provider_key_eyes["key"]
             self.key_entry.bind("<<Copy>>", self._copy_api_key, add="+")
-            self.key_entry.bind("<Control-z>", self._undo_key_entry)
-            self.key_entry.bind("<Control-y>", self._redo_key_entry)
+            for sequence in ("<Control-z>",):
+                for shortcut in shortcut_variants(sequence):
+                    self.key_entry.bind(shortcut, self._undo_key_entry)
+            for sequence in ("<Control-y>",):
+                for shortcut in shortcut_variants(sequence):
+                    self.key_entry.bind(shortcut, self._redo_key_entry)
             self.key_status_var = tk.StringVar(value="Not checked")
             self._provider_status[name] = self.key_status_var
             test_command = self.test_key
