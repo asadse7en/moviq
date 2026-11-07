@@ -66,7 +66,7 @@ You can get API key from [TMDB](https://www.themoviedb.org/).
 
 ## Run From Source
 
-To run Moviq from the source code, install Python 3.9 or newer and clone the repository.
+To run Moviq from the source code, install Python 3.10 or newer and clone the repository.
 
 
 ```bash

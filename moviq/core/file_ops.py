@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 from pathlib import Path
 
 from .config import IMAGE_EXT, SIDECAR_EXT, SKIP_DIRS, VIDEO_EXT
@@ -16,6 +17,9 @@ _GENERIC_TV_DIRS = {
     "tv shows", "video", "videos",
 }
 _SUBTITLE_EXT = SIDECAR_EXT - {".nfo"}
+_SIDECAR_TAGS = re.compile(
+    r"^(\.[A-Za-z]{2,3}|\.(forced|sdh|hi|default|cc))*$",
+)
 
 
 class Plan:
@@ -209,6 +213,7 @@ def make_tv_plan(
     plan.cleanup_root = (
         root if create_show_folder or create_season_folder else None
     )
+    plan.source_root = root
     plan.tv_show_dir = show_dir
     plan.source_show_dir = _tv_source_show_dir(path, root)
     plan.source_episode_dir = Path(path).parent
@@ -243,8 +248,19 @@ def _move_asset(src, dest_dir, ops):
         while dst.exists():
             dst = dest_dir / f"{stem} ({index}){suffix}"
             index += 1
-    _move_without_overwrite(src, dst)
-    ops.append(("move", src, dst))
+    _execute_operation(
+        ops, ("move", src, dst),
+        lambda: _move_without_overwrite(src, dst),
+    )
+
+
+def _execute_operation(ops, operation, action):
+    execute = getattr(ops, "execute", None)
+    if execute is not None:
+        execute(operation, action)
+        return
+    action()
+    ops.append(operation)
 
 def move_files(
     video, dest_dir, new_stem, ops, include_images=True,
@@ -254,11 +270,31 @@ def move_files(
     old_stem = video.stem
     group = [video]
     attached_exts = SIDECAR_EXT | IMAGE_EXT if include_images else SIDECAR_EXT
-    for p in video.parent.iterdir():
-        if (p.is_file() and p != video and p.suffix.lower() in attached_exts
-                and p.name.lower().startswith(old_stem.lower())
-                and p.name[len(old_stem):].startswith((".", "-", "_", " "))):
-            group.append(p)
+    other_video_stems = [
+        path.stem.casefold() for path in video.parent.iterdir()
+        if path.is_file() and path != video
+        and path.suffix.lower() in VIDEO_EXT
+    ]
+    for path in video.parent.iterdir():
+        if (
+            not path.is_file() or path == video
+            or path.suffix.lower() not in attached_exts
+            or not path.stem.casefold().startswith(old_stem.casefold())
+        ):
+            continue
+        part = path.stem[len(old_stem):]
+        if path.suffix.lower() in SIDECAR_EXT:
+            if (
+                not _SIDECAR_TAGS.fullmatch(part)
+                or any(
+                    path.stem.casefold().startswith(video_stem)
+                    for video_stem in other_video_stems
+                )
+            ):
+                continue
+        elif not path.name[len(old_stem):].startswith((".", "-", "_", " ")):
+            continue
+        group.append(path)
     for p in group:
         new_name = (
             new_stem + p.name[len(old_stem):]
@@ -273,19 +309,26 @@ def move_files(
                 raise FileExistsError(f"A file with the target name already exists "
                                       f"(maybe a duplicate copy): {dst}")
             continue
-        if _same_file(dst, p):               # case-only rename
-            os.rename(p, dst)
-        else:
-            _move_without_overwrite(p, dst)
-        ops.append(("move", p, dst))
+        def move():
+            if _same_file(dst, p):           # case-only rename
+                os.rename(p, dst)
+            else:
+                _move_without_overwrite(p, dst)
+
+        _execute_operation(ops, ("move", p, dst), move)
 
 def _move_tv_assets(plan, ops):
     source_show_dir = plan.source_show_dir
     show_dir = getattr(plan, "tv_show_dir", plan.dest_dir.parent)
     source_episode_dir = plan.source_episode_dir
-    if source_show_dir.is_dir():
+    source_root = getattr(plan, "source_root", None)
+    if (
+        source_show_dir != source_root
+        and norm(source_show_dir.name) == norm(show_dir.name)
+        and source_show_dir.is_dir()
+    ):
         for path in source_show_dir.iterdir():
-            if path.is_file() and path.suffix.lower() not in VIDEO_EXT:
+            if path.is_file() and _is_asset(path):
                 _move_asset(path, show_dir, ops)
     if (not source_episode_dir.is_dir()
             or source_episode_dir == source_show_dir):
@@ -293,7 +336,7 @@ def _move_tv_assets(plan, ops):
     for dirpath, _, filenames in os.walk(source_episode_dir):
         for filename in filenames:
             path = Path(dirpath) / filename
-            if path.suffix.lower() in VIDEO_EXT:
+            if not _is_asset(path):
                 continue
             if _is_season_poster(path):
                 _move_asset(path, show_dir, ops)
@@ -310,21 +353,58 @@ def _ensure_dir(directory, ops):
         missing.append(current)
         current = current.parent
     for path in reversed(missing):
-        path.mkdir()
-        ops.append(("mkdir", path))
+        _execute_operation(
+            ops, ("mkdir", path), lambda path=path: path.mkdir(),
+        )
 
 def _move_without_overwrite(src, dst):
     """Move a file without replacing a destination that appeared meanwhile."""
-    if os.path.splitdrive(os.path.abspath(src))[0].casefold() != (
-        os.path.splitdrive(os.path.abspath(dst))[0].casefold()
-    ):
-        if dst.exists():
-            raise FileExistsError(dst)
-        shutil.move(str(src), str(dst))
-        return
+    src, dst = Path(src), Path(dst)
     if dst.exists():
         raise FileExistsError(dst)
-    os.replace(src, dst)
+    same_volume = src.stat().st_dev == dst.parent.stat().st_dev
+    if same_volume:
+        if os.name == "nt":
+            os.rename(src, dst)
+        else:
+            os.link(src, dst)
+            try:
+                os.unlink(src)
+            except OSError:
+                try:
+                    source_stat = src.stat()
+                    destination_stat = dst.stat()
+                    if (
+                        source_stat.st_dev == destination_stat.st_dev
+                        and source_stat.st_ino == destination_stat.st_ino
+                    ):
+                        os.unlink(dst)
+                except OSError:
+                    pass
+                raise
+        return
+
+    fd, temp_name = tempfile.mkstemp(
+        prefix=".moviq-part-", dir=dst.parent,
+    )
+    os.close(fd)
+    temp = Path(temp_name)
+    try:
+        source_size = src.stat().st_size
+        shutil.copy2(src, temp)
+        if temp.stat().st_size != source_size:
+            raise OSError(f"Copied file size does not match: {src}")
+        if os.name == "nt":
+            os.rename(temp, dst)
+        else:
+            os.link(temp, dst)
+            os.unlink(temp)
+        os.unlink(src)
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
 
 def _remove_empty_source_dirs(source_episode_dir, ops):
     if not source_episode_dir.is_dir():
@@ -333,10 +413,11 @@ def _remove_empty_source_dirs(source_episode_dir, ops):
         for dirname in dirnames:
             directory = Path(dirpath) / dirname
             try:
-                directory.rmdir()
+                _execute_operation(
+                    ops, ("rmdir", directory), directory.rmdir,
+                )
             except OSError:
                 continue
-            ops.append(("rmdir", directory))
 
 def perform_plan(path, plan, ops, rename_subtitles=True):
     src, old_dir = path, path.parent
@@ -344,8 +425,10 @@ def perform_plan(path, plan, ops, rename_subtitles=True):
         if _conflict(plan.rename_dir, path.parent):
             plan.merged = True          # target folder exists: move into it
         else:
-            os.rename(path.parent, plan.rename_dir)
-            ops.append(("rename_dir", path.parent, plan.rename_dir))
+            _execute_operation(
+                ops, ("rename_dir", path.parent, plan.rename_dir),
+                lambda: os.rename(path.parent, plan.rename_dir),
+            )
             src = plan.rename_dir / path.name
     _ensure_dir(plan.dest_dir, ops)
     move_files(
@@ -367,33 +450,71 @@ def perform_plan(path, plan, ops, rename_subtitles=True):
         while folder != cleanup_root and cleanup_root in folder.parents:
             if folder.exists():
                 try:
-                    folder.rmdir()
+                    _execute_operation(
+                        ops, ("rmdir", folder), folder.rmdir,
+                    )
                 except OSError:
                     break
-                ops.append(("rmdir", folder))
             folder = folder.parent
     if (
         not plan.preserve_source_dirs
         and plan.merged and old_dir.exists() and not any(old_dir.iterdir())
     ):
-        old_dir.rmdir()                 # old folder is empty now
-        ops.append(("rmdir", old_dir))
+        _execute_operation(
+            ops, ("rmdir", old_dir), old_dir.rmdir,
+        )
     return plan.dest
 
-def undo_ops(ops):
+def undo_ops(ops, journal_operation=None):
     errors = []
+
+    def execute(operation, action):
+        if journal_operation is None:
+            action()
+        else:
+            journal_operation(operation, action)
+
     for op in reversed(ops):
         try:
             if op[0] == "move":
-                shutil.move(str(op[2]), str(op[1]))
+                if op[1].exists():
+                    errors.append(
+                        f"Cannot undo move: destination already exists: {op[1]}",
+                    )
+                    continue
+                if not op[2].exists():
+                    errors.append(
+                        f"Cannot undo move: source is missing: {op[2]}",
+                    )
+                    continue
+                execute(
+                    ("move", op[2], op[1]),
+                    lambda: _move_without_overwrite(op[2], op[1]),
+                )
             elif op[0] == "rename_dir":
-                os.rename(op[2], op[1])
+                if op[1].exists():
+                    errors.append(
+                        "Cannot undo directory rename: destination already "
+                        f"exists: {op[1]}",
+                    )
+                    continue
+                execute(
+                    ("rename_dir", op[2], op[1]),
+                    lambda: os.rename(op[2], op[1]),
+                )
             elif op[0] == "rmdir":
-                op[1].mkdir(parents=True, exist_ok=True)
+                execute(
+                    ("mkdir", op[1]),
+                    lambda: op[1].mkdir(parents=True, exist_ok=True),
+                )
             elif op[0] == "mkdir":
                 try:
-                    op[1].rmdir()
+                    execute(
+                        ("rmdir", op[1]), lambda: op[1].rmdir(),
+                    )
                 except OSError:
+                    if journal_operation is not None:
+                        raise
                     pass
         except Exception as e:
             errors.append(str(e))

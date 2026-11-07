@@ -11,6 +11,7 @@ from typing import Optional
 
 import requests
 
+from . import network_state
 from .config import API_BASE
 from .tmdb_cache import get_cache
 
@@ -240,6 +241,8 @@ class TMDB:
         return load_response()
 
     def _request(self, path, params):
+        if network_state.is_down():
+            raise TMDBNetworkError("No internet connection.")
         headers = {"accept": "application/json"}
         if len(self.key) > 40:
             headers["Authorization"] = "Be" + "arer" + " " + self.key
@@ -258,6 +261,7 @@ class TMDB:
                 )
             except requests.exceptions.Timeout:
                 if attempt >= MAX_RETRIES:
+                    network_state.mark_down()
                     raise TMDBNetworkError(
                         "TMDB request timed out.", self.key,
                     ) from None
@@ -265,6 +269,7 @@ class TMDB:
                 continue
             except requests.exceptions.ConnectionError:
                 if attempt >= MAX_RETRIES:
+                    network_state.mark_down()
                     raise TMDBNetworkError(
                         "Could not connect to TMDB.", self.key,
                     ) from None
@@ -275,6 +280,7 @@ class TMDB:
                     "TMDB request failed.", self.key,
                 ) from None
 
+            network_state.mark_up()
             status = response.status_code
             if status == 401:
                 raise TMDBAuthError(

@@ -11,11 +11,7 @@ from .config import SHOW_OVERRIDES_FILE, migrate_user_data
 from .naming import fold_diacritics, parse_tv_season_hint
 from .providers.ids import is_volatile, provider_of
 from .tmdb import TMDB, TMDBError
-
-try:  # DEBUG-TRACE
-    import debug_trace as dbg  # DEBUG-TRACE
-except Exception:  # DEBUG-TRACE
-    dbg = None  # DEBUG-TRACE
+from .. import trace
 
 
 class ShowState(str, Enum):
@@ -315,7 +311,7 @@ class ShowResolver:
 
         def find_candidates(query):
             nonlocal alternate_title
-            dbg and dbg.trace_stage(title, "provider_query", query)  # DEBUG-TRACE
+            trace.trace_stage(title, "provider_query", query)
             cache_key = ("show_search", config, query.casefold())
 
             def search():
@@ -327,7 +323,7 @@ class ShowResolver:
                     if operation_cache is not None else search()
                 ) or []
             except Exception:
-                dbg and dbg.trace_stage(title, "top_candidates", [])  # DEBUG-TRACE
+                trace.trace_stage(title, "top_candidates", [])
                 raise
             ranked = []
             for candidate in candidates:
@@ -399,7 +395,9 @@ class ShowResolver:
                 ),
                 reverse=True,
             )
-            dbg and dbg.trace_stage(title, "top_candidates", ranked[:5])  # DEBUG-TRACE
+            trace.trace_stage(
+                title, "top_candidates", lambda: ranked[:5],
+            )
 
         for query, _search_year in queries:
             key = query.casefold()

@@ -2,11 +2,7 @@ from pathlib import Path
 import re
 
 from .config import VIDEO_EXT
-
-try:  # DEBUG-TRACE
-    import debug_trace as dbg  # DEBUG-TRACE
-except Exception:  # DEBUG-TRACE
-    dbg = None  # DEBUG-TRACE
+from .. import trace
 
 from .naming import (
     _clean_tv_title, _useful_tv_title, norm, parse_name,
@@ -178,7 +174,7 @@ class Item:
     def __init__(self, path, root, media_type=None):
         self.path = Path(path)
         self.root = Path(root)
-        dbg and dbg.trace_start(str(self.path))  # DEBUG-TRACE
+        trace.trace_start(lambda: str(self.path))
         self.orig_path = self.path
         self.orig_root = self.root
         self.orig_name = self.path.name
@@ -204,7 +200,9 @@ class Item:
             compact_episode[2] if compact_episode else None
         )
         tv_episode = parse_tv_episode(self.path.stem)
-        dbg and dbg.trace_stage(str(self.path), "episode_marker", tv_episode)  # DEBUG-TRACE
+        trace.trace_stage(
+            lambda: str(self.path), "episode_marker", tv_episode,
+        )
         marker = TV_NAME_MARKER_RE.search(self.path.stem)
         marker_groups = marker.groupdict() if marker else {}
         marker_has_season = any(
@@ -239,8 +237,8 @@ class Item:
         if needs_folder_title:
             folder_title = _folder_show_context(self.path, self.root)
             if folder_title:
-                dbg and dbg.trace_stage(  # DEBUG-TRACE
-                    str(self.path), "folder_title", folder_title,
+                trace.trace_stage(
+                    lambda: str(self.path), "folder_title", folder_title,
                 )
 
         if numbered_stem:
@@ -317,7 +315,10 @@ class Item:
             self.season_hint = 0
         if self.media_type == "tv":
             show_title, show_year, season, episode = parsed_tv_name
-            dbg and dbg.trace_stage(str(self.path), "tv_name", (show_title, show_year, season, episode))  # DEBUG-TRACE
+            trace.trace_stage(
+                lambda: str(self.path), "tv_name",
+                lambda: (show_title, show_year, season, episode),
+            )
             self.season_was_explicit = tv_season_is_explicit(self.path)
             self.season_was_explicit = bool(
                 self.season_was_explicit or self.season_hint is not None
@@ -395,7 +396,10 @@ class Item:
             )
         else:
             self.query, self.year = parse_name(self.path.stem)
-            dbg and dbg.trace_stage(str(self.path), "movie_name", (self.query, self.year))  # DEBUG-TRACE
+            trace.trace_stage(
+                lambda: str(self.path), "movie_name",
+                lambda: (self.query, self.year),
+            )
             parsed_marker_episode = (
                 None
                 if numbered_stem and not folder_title
@@ -428,10 +432,17 @@ class Item:
         self.show_title = self.query
         if not self.query and self.media_type != "tv":
             self.query = self.path.parent.name
-        dbg and dbg.trace_stage(str(self.path), "parsed_query", {"media_type": self.media_type, "query": self.query, "year": self.year})  # DEBUG-TRACE
+        trace.trace_stage(
+            lambda: str(self.path), "parsed_query",
+            lambda: {
+                "media_type": self.media_type,
+                "query": self.query,
+                "year": self.year,
+            },
+        )
         if self.air_date:
-            dbg and dbg.trace_stage(  # DEBUG-TRACE
-                str(self.path), "air_date", self.air_date,
+            trace.trace_stage(
+                lambda: str(self.path), "air_date", self.air_date,
             )
         self.match = None
         self.match_source = None

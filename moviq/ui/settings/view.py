@@ -758,6 +758,11 @@ class SettingsView(
                         )
                         self._update_release_url = release_url
                         self.download_update_button.grid()
+                    elif result == "rate_limited":
+                        self.update_status_var.set(
+                            "GitHub rate limited the update check. Try again later.",
+                        )
+                        self._update_release_url = None
                     else:
                         self.update_status_var.set(
                             "Couldn't check for updates. Try again later.",

@@ -18,21 +18,18 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-try:  # DEBUG-TRACE
-    import debug_trace as dbg  # DEBUG-TRACE
-except Exception:  # DEBUG-TRACE
-    dbg = None  # DEBUG-TRACE
+from .. import trace
 
 from .. import __version__ as APP_VERSION
 from ..core.config import (
-    ERROR_LOG_FILE, IMAGE_EXT, SIDECAR_EXT, VIDEO_EXT,
+    ERROR_LOG_FILE, IMAGE_EXT, SIDECAR_EXT, USER_DATA_DIR, VIDEO_EXT,
     remove_legacy_cache_files,
 )
 from ..core.file_ops import (
     count_videos, is_hidden_path, make_plan, make_tv_plan, rebase, scan_dir,
     tv_root_for_folder, undo_ops,
 )
-from ..core.apply import apply_item_plan, build_plans
+from ..core.apply import build_plans
 from ..core.formatting import (
     MOVIE_DEFAULT_ID, TV_DEFAULT_ID, format_pattern,
 )
@@ -43,6 +40,9 @@ from ..core.matching import (
 from ..core.list_filter import is_error_item, matches_list_filter
 from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
+from ..core.network_monitor import NetworkMonitor
+from ..core.rename_service import RenameService
+from ..core import network_state
 from ..core.providers.ids import display_id, provider_of
 from ..core.naming import (
     NAMING, has_explicit_episode_marker, parse_name, parse_tv_name,
@@ -152,11 +152,17 @@ ERROR_STATUS_DETAILS = {
 def _show_in_file_manager(path):
     path = Path(path).absolute()
     if sys.platform == "win32":
-        subprocess.Popen(["explorer.exe", "/select,", str(path)])
+        if path.is_dir():
+            os.startfile(str(path))
+        else:
+            explorer = os.path.join(
+                os.environ["SystemRoot"], "explorer.exe",
+            )
+            subprocess.Popen([explorer, "/select,", str(path)])
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", str(path)])
+        subprocess.Popen(["open", "-R", "--", str(path)])
     else:
-        subprocess.Popen(["xdg-open", str(path.parent)])
+        subprocess.Popen(["xdg-open", "--", str(path.parent)])
 
 
 def _detect_media_mode(paths, current_mode):
@@ -214,6 +220,14 @@ class App:
         self.by_iid = {}
         self.jobs = queue.Queue()
         self.results = queue.Queue()
+        self.network_events = queue.Queue()
+        self._network_monitor = NetworkMonitor(self.network_events)
+        self._network_monitor.start()
+        self._rename_events = queue.Queue()
+        self._rename_cancel_event = threading.Event()
+        self._rename_thread = None
+        self._rename_before = None
+        self._rename_progress = None
         self.job_total = self.job_done = 0
         self._match_run_id = 0
         self._matching_run = None
@@ -362,6 +376,10 @@ class App:
         self.settings_store.save_now()
 
     def on_close(self):
+        if getattr(self, "_rename_running", False):
+            self.status("Wait for the rename to finish before closing Moviq.")
+            return
+        self._network_monitor.stop()
         self._hide_tree_tooltip()
         self._workers_closing = True
         if self._search_after is not None:
@@ -677,6 +695,10 @@ class App:
             fill="both", expand=True)
         if name == "main":
             self._schedule_status_cells()
+        else:
+            self.settings_view.on_network_change(
+                self._network_monitor.is_online,
+            )
 
     def leave_settings(self):
         try:
@@ -2693,7 +2715,28 @@ class App:
         return "partial"
 
     def start_match(self, items, show_dialog=False, manual_kept=0):
+        network_state.reset()
         items = list(items)
+        active_run = self._matching_run
+        run_details = (
+            (active_run["id"], active_run["total"], active_run["done"])
+            if active_run is not None else None
+        )
+        logging.getLogger("moviq.rematch").warning(
+            "REMATCH: start_match items=%d matching_run=%s run_id/total/done=%s "
+            "first_items=%s",
+            len(items), active_run is not None, run_details,
+            [
+                (
+                    item.status,
+                    getattr(item, "review_reason", None),
+                    bool(getattr(item, "match", None)),
+                    bool(getattr(item, "review_match", None)),
+                    self._is_offline_guess(item),
+                )
+                for item in items[:5]
+            ],
+        )
         manual_kept += sum(
             getattr(item, "match_source", None) == "manual"
             and item.status != "done"
@@ -2708,6 +2751,9 @@ class App:
                 retry_offline=self._is_offline_guess(item),
             )
         ]
+        logging.getLogger("moviq.rematch").warning(
+            "REMATCH: eligible_items=%d", len(items),
+        )
         key = self.key_var.get().strip()
         self._configure_resolver()
         if not items:
@@ -2717,6 +2763,13 @@ class App:
             self._clear_review_filter()
 
         run = self._matching_run
+        if run is not None and (
+            len(run["completed"]) >= run["total"]
+            or not any(item.status == "matching" for item in run["items"])
+        ):
+            self._discard_match_cache(run)
+            self._matching_run = None
+            run = None
         if run is None:
             self._match_run_id += 1
             run = {
@@ -2835,6 +2888,12 @@ class App:
                         retry_offline=retry_offline,
                     )
 
+                logging.getLogger("moviq.rematch").warning(
+                    "REMATCH: worker job retry_offline=%s key_length=%d "
+                    "selected=%s movie_chain=%s tv_chain=%s",
+                    retry_offline, len(key), self.provider_settings.selected,
+                    tmdb.chain("movie"), tmdb.chain("tv"),
+                )
                 first_item = items[0]
                 search_query = normalize_search_title(first_item.query)
                 selected_source = self.provider_settings.selected
@@ -2884,16 +2943,22 @@ class App:
                         on_item_complete=report_item_progress,
                     )
             except TMDBAuthError as error:
-                for item in items:  # DEBUG-TRACE
-                    dbg and dbg.trace_end(str(item.path), ("error", None, str(error)))  # DEBUG-TRACE
+                for item in items:
+                    trace.trace_end(
+                        lambda: str(item.path),
+                        lambda: ("error", None, str(error)),
+                    )
                 cancel_event.set()
                 self.results.put((
                     "auth_error", run_id, items[0], str(error),
                 ))
                 continue
             except TMDBCancelled:
-                for item in items:  # DEBUG-TRACE
-                    dbg and dbg.trace_end(str(item.path), ("error", None, "cancelled"))  # DEBUG-TRACE
+                for item in items:
+                    trace.trace_end(
+                        lambda: str(item.path),
+                        ("error", None, "cancelled"),
+                    )
                 continue
             except Exception as e:
                 logging.getLogger(__name__).exception(
@@ -2901,8 +2966,11 @@ class App:
                 )
                 if sys.stderr is not None:
                     traceback.print_exc(file=sys.stderr)
-                for item in items:  # DEBUG-TRACE
-                    dbg and dbg.trace_end(str(item.path), ("error", None, str(e)))  # DEBUG-TRACE
+                for item in items:
+                    trace.trace_end(
+                        lambda: str(item.path),
+                        lambda: ("error", None, str(e)),
+                    )
                 results = [
                     ("error", None, str(e))
                     for _item in items
@@ -2913,6 +2981,14 @@ class App:
 
     def poll(self):
         try:
+            self._poll_rename_events()
+            try:
+                while True:
+                    _kind, is_online = self.network_events.get_nowait()
+                    if hasattr(self, "settings_view"):
+                        self.settings_view.on_network_change(is_online)
+            except queue.Empty:
+                pass
             self._ensure_match_workers()
             self._process_match_events()
         except Exception:
@@ -2920,9 +2996,93 @@ class App:
                 "Could not process matching progress events.",
             )
         finally:
+            rename_events = getattr(self, "_rename_events", None)
             self.root.after(
-                15 if not self.results.empty() else 100, self.poll,
+                15 if (
+                    not self.results.empty()
+                    or (
+                        rename_events is not None
+                        and not rename_events.empty()
+                    )
+                ) else 100, self.poll,
             )
+
+    def _poll_rename_events(self):
+        progress = self._rename_progress
+        if progress is not None and progress.cancel_requested:
+            self._rename_cancel_event.set()
+        for _ in range(100):
+            try:
+                event = self._rename_events.get_nowait()
+            except queue.Empty:
+                return
+            kind, *data = event
+            if kind == "rename_progress":
+                if self._rename_progress is not None:
+                    self._rename_progress.update_progress(*data)
+            elif kind == "folder_renamed":
+                old_dir, new_dir = data
+                for item in self.items:
+                    item.path = rebase(item.path, old_dir, new_dir)
+                    item.root = rebase(item.root, old_dir, new_dir)
+            elif kind == "rename_item":
+                item, new_path, error = data
+                if error is not None:
+                    item.error_code = self._error_code_for_exception(error)
+                    item.error = self._safe_exception_message(error)
+                    item.status = "error"
+                else:
+                    item.path, item.status, item.error = new_path, "done", ""
+                    item.error_code = None
+                    pending_show = getattr(item, "_pending_manual_show", None)
+                    if pending_show:
+                        choice, details = pending_show
+                        try:
+                            self.remember_show(item, choice, details)
+                        except (RuntimeError, ValueError) as show_error:
+                            self._rename_errors.append(
+                                f"{item.path.name}: Could not remember TV "
+                                f"show: {show_error}",
+                            )
+                        else:
+                            item._pending_manual_show = None
+                self.refresh_row(item)
+            elif kind == "rename_complete":
+                self._finish_rename(*data)
+
+    def _finish_rename(
+        self, ops, errors, renamed_count, failed_count, processed_count,
+        cancelled, skipped_count, rename_total,
+    ):
+        errors.extend(getattr(self, "_rename_errors", ()))
+        self._rename_running = False
+        self._vcount.clear()
+        if ops or renamed_count:
+            self._push_rename_undo(
+                self._rename_before, ops, renamed_count,
+            )
+        self.refresh_all()
+        progress = self._rename_progress
+        if progress is not None:
+            progress.can_undo = bool(ops or renamed_count)
+            progress.complete(
+                failed_count + processed_count, rename_total,
+                renamed_count, skipped_count, failed_count,
+                cancelled=cancelled,
+            )
+        self.status(
+            "Rename stopped. Completed files can be undone."
+            if cancelled else "Applied."
+        )
+        self._update_undo_button()
+        if errors:
+            show_warning(
+                self, "Rename completed with problems",
+                "\n".join(errors[:8]),
+            )
+        self._rename_thread = None
+        self._rename_progress = None
+        self._rename_before = None
 
     def _ensure_match_workers(self):
         active = []
@@ -3015,6 +3175,21 @@ class App:
                     review_match = match if status == "review" else None
                     if status == "review":
                         match = None
+                    result_match = match or review_match
+                    result_match_id = (
+                        result_match.get("id")
+                        if isinstance(result_match, dict) else None
+                    )
+                    result_provider = (
+                        provider_of(result_match_id)
+                        if isinstance(result_match_id, int)
+                        and not isinstance(result_match_id, bool)
+                        else None
+                    )
+                    logging.getLogger("moviq.rematch").warning(
+                        "REMATCH: result path=%s status=%s provider=%s",
+                        item.path.name, status, result_provider,
+                    )
                     if item_ids is None:
                         item_ids = {id(row) for row in self.items}
                     if id(item) in item_ids:
@@ -3048,6 +3223,8 @@ class App:
         flush()
 
     def _stop_matching_for_auth(self, run, message):
+        self._matching_run = None
+        self.job_total = self.job_done = 0
         run["cancel_event"].set()
         self._discard_match_cache(run)
         kept_jobs = []
@@ -3081,8 +3258,6 @@ class App:
                 cancelled=True,
             )
         self._record_match_history(run)
-        self._matching_run = None
-        self.job_total = self.job_done = 0
         self._update_undo_button()
         self.status("Matching stopped because the TMDB API key is invalid.")
         show_error(
@@ -3159,24 +3334,60 @@ class App:
     def _finish_match_run(self, run):
         if self._matching_run is not run:
             return
-        matched, flagged, failed = self._match_counts(run)
-        if run["show_dialog"] and self._match_progress_dialog:
-            self._match_progress_dialog.complete(
-                run["done"], run["total"], matched, flagged, failed,
-            )
-        message = (
-            f"Matching finished: {matched} ready, {flagged} to review, "
-            f"{failed} failed."
-        )
-        if run["manual_kept"]:
-            message += f" {run['manual_kept']} manual matches kept."
-        self.status(message)
-        self._record_match_history(run)
-        self._discard_match_cache(run)
         self._matching_run = None
         self.job_total = self.job_done = 0
-        self._update_undo_button()
-        self._export_diagnostic_report()
+        matched = flagged = failed = 0
+        try:
+            matched, flagged, failed = self._match_counts(run)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not count completed matching results.",
+            )
+        try:
+            if run["show_dialog"] and self._match_progress_dialog:
+                self._match_progress_dialog.complete(
+                    run["done"], run["total"], matched, flagged, failed,
+                )
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not complete the matching progress dialog.",
+            )
+        try:
+            message = (
+                f"Matching finished: {matched} ready, {flagged} to review, "
+                f"{failed} failed."
+            )
+            if run["manual_kept"]:
+                message += f" {run['manual_kept']} manual matches kept."
+            self.status(message)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not report matching completion status.",
+            )
+        try:
+            self._record_match_history(run)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not record matching history.",
+            )
+        try:
+            self._discard_match_cache(run)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not discard matching cache.",
+            )
+        try:
+            self._update_undo_button()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not update the undo button after matching.",
+            )
+        try:
+            self._export_diagnostic_report()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not export matching diagnostics.",
+            )
 
     def _export_diagnostic_report(self):
         exporter = getattr(self, "_diagnostic_export_after_match", None)
@@ -3221,6 +3432,8 @@ class App:
         run = self._matching_run
         if not run:
             return
+        self._matching_run = None
+        self.job_total = self.job_done = 0
         run["cancel_event"].set()
         self._discard_match_cache(run)
         kept_jobs = []
@@ -3253,8 +3466,6 @@ class App:
         self.status(
             f"Matching canceled after {progress_done} of {run['total']} files.",
         )
-        self._matching_run = None
-        self.job_total = self.job_done = 0
         self._update_undo_button()
 
     def show_flagged_matches(self):
@@ -3913,108 +4124,25 @@ class App:
             self._rename_running = False
             self._update_undo_button()
             return
-        ops, errors = [], []
         skipped_count = max(
             0, len(scope) - len(todo) - len(conflicts_by_item),
         )
         rename_total = len(todo) + len(conflicts_by_item)
-        rename_progress = RenameProgressPopup(self, on_undo=self.undo)
-        renamed_count = 0
         failed_count = len(conflicts_by_item)
-        processed_count = 0
-
-        def apply_folder_renames(start):
-            for operation in ops[start:]:
-                if operation[0] != "rename_dir":
-                    continue
-                old_dir, new_dir = operation[1], operation[2]
-                for other in self.items:
-                    path = rebase(other.path, old_dir, new_dir)
-                    root = rebase(other.root, old_dir, new_dir)
-                    if path != other.path or root != other.root:
-                        other.path, other.root = path, root
-
-        rename_progress.update_progress(
-            "", failed_count, rename_total,
-            renamed_count, skipped_count, failed_count,
-        )
-        for it in todo:
-            if rename_progress.cancel_requested:
-                break
-            rename_progress.update_progress(
-                it.path.name,
-                failed_count + processed_count,
-                rename_total,
-                renamed_count,
-                skipped_count,
-                failed_count,
-            )
-            if rename_progress.cancel_requested:
-                break
-            plan = plans[id(it)]
-            new_path, error = apply_item_plan(
-                it, plan, ops, self.rename_subtitles.get(),
-                apply_folder_renames,
-            )
-            if error is not None:
-                e = error
-                it.error_code = self._error_code_for_exception(e)
-                it.error = self._safe_exception_message(e)
-                it.status = "error"
-                errors.append(f"{it.path.name}: {e}")
-                self.refresh_row(it)
-                failed_count += 1
-            else:
-                it.path, it.status, it.error = new_path, "done", ""
-                it.error_code = None
-                renamed_count += 1
-                pending_show = getattr(it, "_pending_manual_show", None)
-                if pending_show:
-                    choice, details = pending_show
-                    try:
-                        self.remember_show(it, choice, details)
-                    except (RuntimeError, ValueError) as error:
-                        errors.append(
-                            f"{it.path.name}: Could not remember TV show: "
-                            f"{error}"
-                        )
-                    else:
-                        it._pending_manual_show = None
-            processed_count += 1
-            rename_progress.update_progress(
-                it.path.name,
-                failed_count + processed_count,
-                rename_total,
-                renamed_count,
-                skipped_count,
-                failed_count,
-            )
-        self._vcount.clear()
-        if ops or renamed_count:
-            self._push_rename_undo(rename_before, ops, renamed_count)
-        self.refresh_all()
-        cancelled = processed_count < len(todo)
-        rename_progress.can_undo = bool(ops or renamed_count)
-        rename_progress.complete(
-            failed_count + processed_count,
-            rename_total,
-            renamed_count,
-            skipped_count,
+        self._rename_before = rename_before
+        self._rename_errors = []
+        self._rename_cancel_event = threading.Event()
+        self._rename_progress = RenameProgressPopup(self, on_undo=self.undo)
+        service = RenameService(
+            todo, plans, self.items, self.rename_subtitles.get(),
+            USER_DATA_DIR / "rename-undo.jsonl", self._rename_events,
+            self._rename_cancel_event, rename_total, skipped_count,
             failed_count,
-            cancelled=cancelled,
         )
-        self.status(
-            "Rename stopped. Completed files can be undone."
-            if cancelled else "Applied."
+        self._rename_thread = threading.Thread(
+            target=service.run, name="moviq-rename", daemon=True,
         )
-        self._rename_running = False
-        self._update_undo_button()
-        if errors:
-            show_warning(
-                self,
-                "Rename completed with problems",
-                "\n".join(errors[:8]),
-            )
+        self._rename_thread.start()
 
     def _push_rename_undo(self, records, ops, file_count):
         if not records:

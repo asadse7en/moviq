@@ -6,6 +6,7 @@ import threading
 
 import requests
 
+from .. import network_state
 from ..tmdb import (
     REQUEST_TIMEOUT, TMDB, TMDBAuthError, TMDBCancelled, TMDBError,
     TMDBNetworkError, _TokenBucket,
@@ -147,6 +148,8 @@ class Provider:
         auth_statuses=(401, 403),
     ):
         """HTTP with retries. Returns parsed JSON, or None for HTTP 404."""
+        if network_state.is_down():
+            raise TMDBNetworkError("No internet connection.")
         for attempt in range(MAX_RETRIES + 1):
             self._check_cancelled()
             self.limiter.acquire(self.cancel_event)
@@ -157,6 +160,7 @@ class Provider:
                 )
             except requests.exceptions.Timeout:
                 if attempt >= MAX_RETRIES:
+                    network_state.mark_down()
                     raise TMDBNetworkError(
                         f"{self.label}: request timed out.",
                         self.key or None,
@@ -165,6 +169,7 @@ class Provider:
                 continue
             except requests.exceptions.ConnectionError:
                 if attempt >= MAX_RETRIES:
+                    network_state.mark_down()
                     raise TMDBNetworkError(
                         f"{self.label}: could not connect.",
                         self.key or None,
@@ -176,6 +181,7 @@ class Provider:
                     f"{self.label}: request failed.",
                     self.key or None,
                 ) from None
+            network_state.mark_up()
             status = response.status_code
             if status in auth_statuses:
                 raise self._auth_error()

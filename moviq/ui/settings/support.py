@@ -2,6 +2,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 
+from ...core import network_state
 from ..controls import RoundedCard, SegmentedModeToggle
 from ._common import check_tmdb_key
 
@@ -323,6 +324,9 @@ class SettingsSupportMixin:
             )
 
     def _set_key_status(self, status):
+        raw_status = status
+        if len(status) > 18:
+            status = status[:15] + "..."
         status_colors = self.app.pal.get("status_colors", {})
         colors = {
             "Disabled": self.app.pal["muted"],
@@ -333,6 +337,9 @@ class SettingsSupportMixin:
                 "warning", status_colors.get("review", (self.app.pal["muted"],))[0],
             ),
             "Rejected": status_colors.get(
+                "error", (self.app.pal["muted"],),
+            )[0],
+            "Offline": status_colors.get(
                 "error", (self.app.pal["muted"],),
             )[0],
             "Couldn't reach TMDB": status_colors.get(
@@ -348,7 +355,7 @@ class SettingsSupportMixin:
         self.key_status_label.configure(
             foreground=colors.get(
                 status,
-                colors["Rejected"] if status.startswith("Couldn't save")
+                colors["Rejected"] if raw_status.startswith("Couldn't save")
                 else self.app.pal["muted"],
             ),
         )
@@ -483,6 +490,7 @@ class SettingsSupportMixin:
         self._queue.put(("key", generation, key, status))
 
     def test_key(self):
+        network_state.reset()
         if "tmdb" not in self.app.provider_settings.enabled:
             self._set_key_status("Disabled")
             return

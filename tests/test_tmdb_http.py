@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
+from moviq.core import network_state
 from moviq.core.tmdb import (
     REQUEST_TIMEOUT,
     TMDB,
@@ -43,6 +44,8 @@ class FakeResponse:
 
 class TMDBHTTPTests(unittest.TestCase):
     def setUp(self):
+        network_state.reset()
+        self.addCleanup(network_state.reset)
         self.cache = FakeCache()
         self.cache_patch = patch(
             "moviq.core.tmdb.get_cache",
@@ -126,6 +129,11 @@ class TMDBHTTPTests(unittest.TestCase):
         self.assertNotIn(secret, error_output)
         self.assertNotIn(secret, output.getvalue())
         self.assertNotIn(secret, logs.getvalue())
+        self.assertTrue(network_state.is_down())
+        with patch("moviq.core.tmdb._SESSION.get") as retry_request:
+            with self.assertRaisesRegex(TMDBError, "No internet connection"):
+                TMDB(secret).get("/search/movie", query="UniqueFastFailure")
+        retry_request.assert_not_called()
 
     def test_v4_token_is_sent_only_as_bearer_authorization(self):
         token = "v4-token-" + ("x" * 50)

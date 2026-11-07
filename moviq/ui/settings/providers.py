@@ -3,6 +3,7 @@ import tkinter.font as tkfont
 from tkinter import ttk
 import webbrowser
 
+from ...core import network_state
 from ...core.providers.router import test_provider
 from ...core.providers.settings import PROVIDER_INFO
 from ..controls import RoundedCard
@@ -489,7 +490,30 @@ class ProvidersTabMixin:
         return "break"
 
     def _set_provider_status(self, name, status):
+        if len(status) > 18:
+            status = status[:15] + "..."
         self._provider_status[name].set(status)
+
+    def on_network_change(self, is_online):
+        for name in self._provider_order:
+            if (
+                name == "offline"
+                or name not in self.app.provider_settings.enabled
+            ):
+                continue
+            status = self._provider_status[name].get()
+            if status in ("Disabled", "Needs a key"):
+                continue
+            if is_online:
+                self._test_provider(name)
+            else:
+                self._provider_test_generation[name] = (
+                    self._provider_test_generation.get(name, 0) + 1
+                )
+                after_id = self._provider_key_check_after.pop(name, None)
+                if after_id is not None:
+                    self.after_cancel(after_id)
+                self._set_provider_status(name, "Offline")
 
     def _style_provider_status(self, name):
         status = self._provider_status[name].get()
@@ -635,6 +659,7 @@ class ProvidersTabMixin:
         )
 
     def _test_provider(self, name):
+        network_state.reset()
         if name not in self.app.provider_settings.enabled:
             self._set_provider_status(name, "Disabled")
             return
@@ -656,7 +681,9 @@ class ProvidersTabMixin:
         try:
             result = test_provider(name, settings, tmdb_key)
         except Exception as error:  # never leave the label on "Testing..."
-            result = str(error)[:80] or "Failed"
+            result = str(error) or "Failed"
+        if len(result) > 18:
+            result = result[:15] + "..."
         if not self._closed:
             self._queue.put((
                 "provider_status", name, generation, result,

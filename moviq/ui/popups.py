@@ -230,6 +230,7 @@ class MatchProgressPopup:
         self._progress_target = 0.0
         self._progress_last_tick = time.monotonic()
         self._progress_after = None
+        self._progress_fast = False
 
         progress_details = ttk.Frame(card, style="MatchPopup.TFrame")
         progress_details.grid(
@@ -383,7 +384,9 @@ class MatchProgressPopup:
         self._progress_last_tick = now
         remaining = self._progress_target - self._progress_value
         self._progress_value += remaining * (
-            1 - math.exp(-elapsed / 0.18)
+            1 - math.exp(-elapsed / (
+                0.04 if self._progress_fast else 0.10
+            ))
         )
         if abs(self._progress_target - self._progress_value) < 0.0005:
             self._progress_value = self._progress_target
@@ -499,6 +502,8 @@ class MatchProgressPopup:
     ):
         if self._completion_pending:
             return
+        self._progress_fast = True
+        self._set_progress(100 * completed / max(total, 1))
         elapsed = time.monotonic() - self.started_at
         if (
             self.task == "matching" and not cancelled
@@ -529,6 +534,11 @@ class MatchProgressPopup:
         self.completed = True
         total = max(total, 0)
         progress = min(100.0, 100 * completed / max(total, 1))
+        if self._progress_after is not None:
+            self.progress_canvas.after_cancel(self._progress_after)
+            self._progress_after = None
+        self._progress_value = self._progress_target = progress / 100
+        self._draw_progress()
         percent = (
             f"{progress:.1f}%"
             if 0 < progress < 1 else f"{int(progress)}%"

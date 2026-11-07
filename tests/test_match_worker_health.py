@@ -1,3 +1,4 @@
+import queue
 import unittest
 from concurrent.futures import Future
 from unittest.mock import Mock, patch
@@ -62,6 +63,7 @@ class MatchWorkerHealthTests(unittest.TestCase):
         app.root = Mock()
         app.results = Mock()
         app.results.empty.return_value = True
+        app.network_events = queue.Queue()
         app._ensure_match_workers = Mock()
         app._process_match_events = Mock(
             side_effect=RuntimeError("bad progress event"),

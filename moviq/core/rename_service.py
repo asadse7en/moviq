@@ -1,0 +1,184 @@
+import copy
+import json
+import os
+import threading
+import uuid
+
+from .apply import apply_item_plan
+from .file_ops import rebase, undo_ops
+
+
+class RenameJournalError(RuntimeError):
+    pass
+
+
+class _OperationJournal:
+    def __init__(self, path):
+        self.path = path
+        self.run_id = uuid.uuid4().hex
+        self._lock = threading.Lock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self.path.open("a", encoding="utf-8")
+
+    def close(self):
+        self._file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+    def execute(self, operation, action, on_success=None):
+        entry = {
+            "run_id": self.run_id,
+            "operation": [operation[0], *(str(path) for path in operation[1:])],
+        }
+        with self._lock:
+            self._write({**entry, "phase": "before"})
+            try:
+                action()
+            except Exception as error:
+                self._write({
+                    **entry, "phase": "after", "success": False,
+                    "error": str(error),
+                })
+                raise
+            if on_success is not None:
+                on_success()
+            self._write({**entry, "phase": "after", "success": True})
+
+    def _write(self, record):
+        try:
+            self._file.write(json.dumps(record, ensure_ascii=True) + "\n")
+            self._file.flush()
+            os.fsync(self._file.fileno())
+        except Exception as error:
+            raise RenameJournalError(
+                f"Could not write rename journal: {error}",
+            ) from error
+
+
+class _JournaledOperations(list):
+    def __init__(self, journal):
+        super().__init__()
+        self.journal = journal
+
+    def execute(self, operation, action):
+        self.journal.execute(
+            operation, action, on_success=lambda: self.append(operation),
+        )
+
+    def rollback(self, start):
+        original = self[start:]
+        remaining = []
+        errors = []
+        for operation in reversed(original):
+            operation_errors = undo_ops(
+                [operation], journal_operation=self.journal.execute,
+            )
+            if operation_errors:
+                errors.extend(operation_errors)
+                remaining.append(operation)
+        self[start:] = reversed(remaining)
+        return errors
+
+
+class RenameService:
+    """Execute prepared rename plans away from the Tk thread."""
+
+    def __init__(
+        self, items, plans, all_items, rename_subtitles, journal_path,
+        events, cancel_event, total, skipped_count, failed_count,
+    ):
+        self.items = items
+        self.plans = plans
+        self.all_items = all_items
+        self.rename_subtitles = rename_subtitles
+        self.journal_path = journal_path
+        self.events = events
+        self.cancel_event = cancel_event
+        self.total = total
+        self.skipped_count = skipped_count
+        self.failed_count = failed_count
+
+    def run(self):
+        renamed_count = 0
+        failed_count = self.failed_count
+        processed_count = 0
+        errors = []
+        operations = []
+        try:
+            plans = {
+                key: copy.copy(plan) for key, plan in self.plans.items()
+            }
+            work_items = {
+                id(item): copy.copy(item) for item in self.all_items
+            }
+            with _OperationJournal(self.journal_path) as journal:
+                operations = _JournaledOperations(journal)
+
+                def apply_folder_renames(start):
+                    for operation in operations[start:]:
+                        if operation[0] != "rename_dir":
+                            continue
+                        old_dir, new_dir = operation[1:]
+                        for item in work_items.values():
+                            item.path = rebase(item.path, old_dir, new_dir)
+                            item.root = rebase(item.root, old_dir, new_dir)
+                        for plan in plans.values():
+                            for name in (
+                                "dest", "dest_dir", "rename_dir",
+                                "cleanup_root", "source_root", "tv_show_dir",
+                                "source_show_dir", "source_episode_dir",
+                            ):
+                                value = getattr(plan, name, None)
+                                if value is not None:
+                                    setattr(
+                                        plan, name,
+                                        rebase(value, old_dir, new_dir),
+                                    )
+                        self.events.put((
+                            "folder_renamed", old_dir, new_dir,
+                        ))
+
+                self.events.put((
+                    "rename_progress", "", failed_count, self.total,
+                    renamed_count, self.skipped_count, failed_count,
+                ))
+                for item in self.items:
+                    if self.cancel_event.is_set():
+                        break
+                    work_item = work_items[id(item)]
+                    self.events.put((
+                        "rename_progress", work_item.path.name,
+                        failed_count + processed_count, self.total,
+                        renamed_count, self.skipped_count, failed_count,
+                    ))
+                    new_path, error = apply_item_plan(
+                        work_item, plans[id(item)], operations,
+                        self.rename_subtitles, apply_folder_renames,
+                    )
+                    if error is not None:
+                        errors.append(f"{work_item.path.name}: {error}")
+                        failed_count += 1
+                    else:
+                        renamed_count += 1
+                    processed_count += 1
+                    self.events.put((
+                        "rename_item", item, new_path, error,
+                    ))
+                    self.events.put((
+                        "rename_progress", work_item.path.name,
+                        failed_count + processed_count, self.total,
+                        renamed_count, self.skipped_count, failed_count,
+                    ))
+        except Exception as error:
+            errors.append(f"Could not complete rename: {error}")
+            failed_count += 1
+
+        self.events.put((
+            "rename_complete", operations, errors, renamed_count,
+            failed_count, processed_count,
+            processed_count < len(self.items), self.skipped_count, self.total,
+        ))

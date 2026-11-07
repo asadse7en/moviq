@@ -136,10 +136,7 @@ class ProviderRouter:
     def _search(self, kind, method, query, year):
         names = self.chain(kind)
         online_names = [name for name in names if name != "offline"]
-        retry_has_keyed_source = self.retry_offline and any(
-            name in online_names for name in ("tmdb", "omdb")
-        )
-        offline_enabled = "offline" in names and not retry_has_keyed_source
+        offline_enabled = "offline" in names
         no_keyed_provider = not any(
             name in online_names for name in ("tmdb", "omdb")
         )
@@ -289,5 +286,8 @@ def test_provider(name, settings, tmdb_key="", session=None):
         return "Connected" if provider.check() else "Rejected"
     except TMDBAuthError:
         return "Rejected"
+    except TMDBNetworkError:
+        return "Offline"
     except TMDBError as error:
-        return str(error)[:80]
+        status = str(error)
+        return status if len(status) <= 18 else status[:15] + "..."

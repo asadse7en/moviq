@@ -1,4 +1,5 @@
 import os
+import json
 import queue
 import tempfile
 from threading import Event
@@ -9,8 +10,8 @@ from unittest.mock import Mock, patch
 
 from moviq import __version__
 from moviq.core.file_ops import (
-    is_hidden_path, make_plan, make_tv_plan, perform_plan, scan_dir,
-    tv_root_for_folder, undo_ops,
+    _move_without_overwrite, is_hidden_path, make_plan, make_tv_plan,
+    move_files, perform_plan, scan_dir, tv_root_for_folder, undo_ops,
 )
 from moviq.core.formatting import format_pattern
 from moviq.core.matching import (
@@ -21,6 +22,7 @@ from moviq.core.matching import (
 )
 from moviq.core.match_pipeline import match_tv_items
 from moviq.core.models import Item
+from moviq.core.rename_service import RenameService
 from moviq.core.naming import (
     folder_name_for, parse_name, parse_tv_episode, parse_tv_episode_title,
     parse_tv_name, tv_episode_name_for,
@@ -1644,6 +1646,128 @@ class TableLayoutTests(unittest.TestCase):
 
 
 class FileOperationTests(unittest.TestCase):
+    def test_move_without_overwrite_preserves_existing_destination(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.mkv"
+            destination = root / "destination.mkv"
+            source.write_bytes(b"source")
+            destination.write_bytes(b"existing")
+
+            with self.assertRaises(FileExistsError):
+                _move_without_overwrite(source, destination)
+
+            self.assertEqual(source.read_bytes(), b"source")
+            self.assertEqual(destination.read_bytes(), b"existing")
+
+    def test_move_without_overwrite_copies_across_volumes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.mkv"
+            destination = root / "destination.mkv"
+            source.write_bytes(b"video data")
+            original_stat = Path.stat
+
+            def different_source_volume(path, *args, **kwargs):
+                result = original_stat(path, *args, **kwargs)
+                if path == source:
+                    values = list(result)
+                    values[2] += 1
+                    return os.stat_result(values)
+                return result
+
+            with patch.object(Path, "stat", different_source_volume):
+                _move_without_overwrite(source, destination)
+
+            self.assertFalse(source.exists())
+            self.assertEqual(destination.read_bytes(), b"video data")
+            self.assertEqual(list(root.glob(".moviq-part-*")), [])
+
+    def test_move_files_only_attaches_valid_unclaimed_sidecars(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            video = root / "Film.mkv"
+            other_video = root / "Film.en.mkv"
+            video.write_bytes(b"video")
+            other_video.write_bytes(b"other video")
+            attached = [
+                root / "Film.srt",
+                root / "Film.fr.forced.srt",
+                root / "Film.default.cc.nfo",
+            ]
+            skipped = [
+                root / "Film.en.srt",
+                root / "Film.en.forced.vtt",
+                root / "Film.english.srt",
+                root / "Film-poster.nfo",
+            ]
+            for path in attached + skipped:
+                path.write_text("sidecar", encoding="utf-8")
+            destination = root / "destination"
+            destination.mkdir()
+            operations = []
+
+            move_files(video, destination, "Renamed", operations)
+
+            self.assertTrue((destination / "Renamed.mkv").exists())
+            self.assertTrue(all((destination / path.name.replace(
+                "Film", "Renamed", 1,
+            )).exists() for path in attached))
+            self.assertTrue(all(path.exists() for path in skipped))
+            self.assertTrue(other_video.exists())
+
+    def test_move_files_preserves_subtitle_names_when_renaming_disabled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            video = root / "Film.mkv"
+            subtitle = root / "Film.en.srt"
+            video.write_bytes(b"video")
+            subtitle.write_text("subtitle", encoding="utf-8")
+            destination = root / "destination"
+            destination.mkdir()
+            operations = []
+
+            move_files(
+                video, destination, "Renamed", operations,
+                rename_subtitles=False,
+            )
+
+            self.assertTrue((destination / "Film.en.srt").exists())
+
+    def test_undo_ops_never_overwrites_existing_paths_or_moves_missing_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            moved_source = root / "moved-source.txt"
+            moved_destination = root / "moved-destination.txt"
+            moved_source.write_text("original", encoding="utf-8")
+            moved_destination.write_text("newer", encoding="utf-8")
+            missing_source = root / "missing-source.txt"
+            missing_destination = root / "missing-destination.txt"
+            existing_directory = root / "existing-directory"
+            renamed_directory = root / "renamed-directory"
+            existing_directory.mkdir()
+            renamed_directory.mkdir()
+
+            errors = undo_ops([
+                ("move", moved_source, moved_destination),
+                ("move", missing_source, missing_destination),
+                ("rename_dir", existing_directory, renamed_directory),
+            ])
+
+            self.assertEqual(len(errors), 3)
+            self.assertTrue(all(str(path) in error for path, error in (
+                (existing_directory, errors[0]),
+                (missing_destination, errors[1]),
+                (moved_source, errors[2]),
+            )))
+            self.assertEqual(moved_source.read_text(encoding="utf-8"), "original")
+            self.assertEqual(
+                moved_destination.read_text(encoding="utf-8"), "newer",
+            )
+            self.assertFalse(missing_destination.exists())
+            self.assertTrue(existing_directory.is_dir())
+            self.assertTrue(renamed_directory.is_dir())
+
     def test_custom_movie_plan_uses_patterns_and_preserves_extension(self):
         root = Path("Movies")
         source = root / "Inception.2010.avi"
@@ -1776,7 +1900,7 @@ class FileOperationTests(unittest.TestCase):
             self.assertTrue(metadata.is_file())
             self.assertFalse(plan.dest_dir.exists())
 
-    def test_moves_show_and_season_artwork_and_metadata(self):
+    def test_moves_supported_season_artwork_and_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             library = Path(temp)
             selected_show = library / "dark all 3 seasons"
@@ -1788,7 +1912,9 @@ class FileOperationTests(unittest.TestCase):
                 selected_show / "fanart.png",
                 selected_show / "tvshow.nfo",
             ]
-            season_poster = selected_show / "Season 1-poster.jpg"
+            show_notes = selected_show / "notes.txt"
+            unsupported_asset = selected_show / "theme.xml"
+            season_poster = source.parent / "Season 1-poster.jpg"
             season_assets = [
                 source.parent / "poster.jpg",
                 source.parent / "season.nfo",
@@ -1799,7 +1925,10 @@ class FileOperationTests(unittest.TestCase):
             screenshot.write_bytes(b"screen grab")
             notes = source.parent / "release-notes.txt"
             notes.write_text("episode notes", encoding="utf-8")
-            for asset in show_assets + [season_poster] + season_assets:
+            for asset in (
+                show_assets + [show_notes, unsupported_asset, season_poster]
+                + season_assets
+            ):
                 asset.write_bytes(b"asset")
             choice = {
                 "id": 123, "title": "Dark", "season_number": 1,
@@ -1814,25 +1943,163 @@ class FileOperationTests(unittest.TestCase):
                 result,
                 library / "Dark" / "Season 01" / "Dark - S01E01 - Pilot.mkv",
             )
-            self.assertTrue(all((library / "Dark" / asset.name).is_file()
+            self.assertTrue(all((selected_show / asset.name).is_file()
                                 for asset in show_assets))
+            self.assertTrue(show_notes.is_file())
+            self.assertTrue(unsupported_asset.is_file())
             self.assertTrue((library / "Dark" / season_poster.name).is_file())
             self.assertTrue(all((result.parent / asset.name).is_file()
                                 for asset in season_assets))
             self.assertTrue(
                 (result.parent / "Screenshots" / screenshot.name).is_file()
             )
-            self.assertTrue((result.parent / notes.name).is_file())
+            self.assertFalse((result.parent / notes.name).exists())
+            self.assertTrue(notes.is_file())
             self.assertFalse((library / "Dark" / "Screenshots").exists())
-            self.assertFalse(selected_show.exists())
+            self.assertTrue(selected_show.exists())
             self.assertEqual(undo_ops(operations), [])
             self.assertTrue(source.is_file())
             self.assertTrue(screenshot.is_file())
             self.assertTrue(notes.is_file())
             self.assertTrue(all(asset.is_file()
-                                for asset in show_assets + [season_poster]
+                                for asset in show_assets
+                                + [show_notes, unsupported_asset, season_poster]
                                 + season_assets))
-            self.assertFalse((library / "Dark").exists())
+            self.assertTrue(selected_show.is_dir())
+
+    def test_tv_asset_sweep_skips_the_selected_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "Season 1" / "Episode.mkv"
+            source.parent.mkdir()
+            source.write_bytes(b"episode")
+            root_poster = root / "poster.jpg"
+            root_notes = root / "notes.txt"
+            root_poster.write_bytes(b"poster")
+            root_notes.write_text("notes", encoding="utf-8")
+            choice = {
+                "id": 123, "title": "Show", "season_number": 1,
+                "episode_number": 1, "episode_title": "Pilot",
+            }
+            plan = make_tv_plan(source, root, choice)
+            operations = []
+
+            perform_plan(source, plan, operations)
+
+            self.assertTrue(root_poster.is_file())
+            self.assertTrue(root_notes.is_file())
+            self.assertFalse((root / "Show" / root_poster.name).exists())
+            self.assertFalse((root / "Show" / root_notes.name).exists())
+
+
+class RenameServiceTests(unittest.TestCase):
+    def test_successful_rename_reports_progress_and_journals_operations(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.mkv"
+            destination = root / "destination.mkv"
+            source.write_bytes(b"video")
+            item = SimpleNamespace(path=source, root=root)
+            events = queue.Queue()
+            journal_path = root / "rename-undo.jsonl"
+            service = RenameService(
+                [item], {id(item): object()}, [item], True, journal_path,
+                events, Event(), 1, 0, 0,
+            )
+
+            def rename(path, _plan, ops, rename_subtitles=True):
+                ops.execute(
+                    ("move", path, destination),
+                    lambda: path.rename(destination),
+                )
+                return destination
+
+            with patch(
+                "moviq.core.rename_service.os.fsync", wraps=os.fsync,
+            ) as sync, patch(
+                "moviq.core.apply.perform_plan", side_effect=rename,
+            ):
+                service.run()
+            self.assertEqual(sync.call_count, 2)
+
+            queued = []
+            while not events.empty():
+                queued.append(events.get_nowait())
+            complete = next(
+                event for event in queued if event[0] == "rename_complete"
+            )
+            item_result = next(
+                event for event in queued if event[0] == "rename_item"
+            )
+            self.assertTrue(destination.is_file())
+            self.assertTrue(any(
+                event[0] == "rename_progress" for event in queued
+            ))
+            self.assertEqual(complete[3], 1)
+            self.assertEqual(complete[4], 0)
+            self.assertEqual(item_result[2:], (destination, None))
+            records = [
+                json.loads(line)
+                for line in journal_path.read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            self.assertEqual(
+                [record["phase"] for record in records],
+                ["before", "after"],
+            )
+
+    def test_partial_item_failure_is_rolled_back_and_journaled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.mkv"
+            destination = root / "destination.mkv"
+            source.write_bytes(b"video")
+            item = SimpleNamespace(path=source, root=root)
+            events = queue.Queue()
+            journal_path = root / "rename-undo.jsonl"
+            service = RenameService(
+                [item], {id(item): object()}, [item], True, journal_path,
+                events, Event(), 1, 0, 0,
+            )
+
+            def partial_plan(path, _plan, ops, rename_subtitles=True):
+                ops.execute(
+                    ("move", path, destination),
+                    lambda: path.rename(destination),
+                )
+                raise OSError("planned failure")
+
+            with patch(
+                "moviq.core.apply.perform_plan", side_effect=partial_plan,
+            ):
+                service.run()
+
+            self.assertTrue(source.is_file())
+            self.assertFalse(destination.exists())
+            records = [
+                json.loads(line)
+                for line in journal_path.read_text(
+                    encoding="utf-8",
+                ).splitlines()
+            ]
+            self.assertEqual(
+                [(record["operation"][0], record["phase"])
+                 for record in records],
+                [
+                    ("move", "before"), ("move", "after"),
+                    ("move", "before"), ("move", "after"),
+                ],
+            )
+            queued = []
+            while not events.empty():
+                queued.append(events.get_nowait())
+            self.assertIn("rename_item", [event[0] for event in queued])
+            complete = next(
+                event for event in queued if event[0] == "rename_complete"
+            )
+            self.assertEqual(complete[1], [])
+            self.assertEqual(complete[4], 1)
 
 
 if __name__ == "__main__":

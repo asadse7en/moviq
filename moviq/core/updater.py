@@ -16,9 +16,14 @@ log = logging.getLogger(__name__)
 
 def _version_tuple(version):
     version = version.removeprefix("v")
-    if not re.fullmatch(r"\d+(?:\.\d+)*", version):
+    if not re.fullmatch(
+        r"\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?"
+        r"(?:\+[0-9A-Za-z.-]+)?",
+        version,
+    ):
         raise ValueError(f"Invalid version: {version}")
-    return tuple(int(part) for part in version.split("."))
+    numeric_version = re.split(r"[-+]", version, maxsplit=1)[0]
+    return tuple(int(part) for part in numeric_version.split("."))
 
 
 def check_latest_release(current_version):
@@ -31,13 +36,21 @@ def check_latest_release(current_version):
                 "User-Agent": f"Moviq/{current_version}",
             },
         )
+        if getattr(response, "status_code", None) in (403, 429):
+            log.warning(
+                "GitHub rate limited the update check (HTTP %s).",
+                response.status_code,
+            )
+            return ("rate_limited", None, None)
         response.raise_for_status()
         release = response.json()
         latest = release["tag_name"]
         release_url = release["html_url"]
         if not isinstance(latest, str) or not isinstance(release_url, str):
             raise ValueError("GitHub release response is missing valid fields.")
-        if not release_url.startswith("https://github.com/"):
+        if not release_url.startswith(
+            f"https://github.com/{REPO}/releases/",
+        ):
             raise ValueError("GitHub release response contains an invalid URL.")
         current_version = _version_tuple(current_version)
         latest_version = _version_tuple(latest)
@@ -49,6 +62,14 @@ def check_latest_release(current_version):
             latest,
             release_url,
         )
+    except requests.HTTPError as error:
+        if getattr(getattr(error, "response", None), "status_code", None) in (
+            403, 429,
+        ):
+            log.warning("GitHub rate limited the update check: %s", error)
+            return ("rate_limited", None, None)
+        log.warning("Could not check for updates: %s", error)
+        result = ("error", None, None)
     except (
         requests.RequestException, ValueError, KeyError, TypeError,
     ) as error:

@@ -7,7 +7,7 @@ name = "moviq"
 dynamic = ["version"]
 description = "A desktop app for matching and organizing movie files with TMDB"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "customtkinter>=5.2.2",
     "Pillow>=10",

@@ -4,16 +4,12 @@ from .matching import to_choice, to_tv_choice, year_of
 from .naming import norm, similarity
 from .providers.ids import provider_of
 from .show_resolver import ShowResolver, ShowState
-
-try:  # DEBUG-TRACE
-    import debug_trace as dbg  # DEBUG-TRACE
-except Exception:  # DEBUG-TRACE
-    dbg = None  # DEBUG-TRACE
+from .. import trace
 
 
 def _append_result(results, item, result, on_item_complete):
     results.append(result)
-    dbg and dbg.trace_end(str(item.path), result)  # DEBUG-TRACE
+    trace.trace_end(lambda: str(item.path), result)
     if on_item_complete is not None:
         on_item_complete(item)
 
@@ -52,12 +48,21 @@ def match_movie_items(
                 results, item, ("nomatch", None, ""), on_item_complete,
             )
         return restore_order(results)
-    dbg and dbg.trace_stage([str(item.path) for item in items], "provider_query", search_query)  # DEBUG-TRACE
+    trace.trace_stage(
+        lambda: [str(item.path) for item in items],
+        "provider_query", search_query,
+    )
     search_results = tmdb.search(search_query, items[0].year)
     results = []
     for item in items:
         ranked = rank(search_results, item.query, item.year)
-        dbg and dbg.trace_stage(str(item.path), "top_candidates", [(candidate, score(candidate, item.query)) for candidate in ranked[:5]])  # DEBUG-TRACE
+        trace.trace_stage(
+            lambda: str(item.path), "top_candidates",
+            lambda: [
+                (candidate, score(candidate, item.query))
+                for candidate in ranked[:5]
+            ],
+        )
         if not ranked or score(ranked[0], item.query) < NO_MATCH_FLOOR:
             _append_result(
                 results, item, ("nomatch", None, ""), on_item_complete,
@@ -150,7 +155,7 @@ def match_tv_items(
                 results, item, ("nomatch", None, ""), on_item_complete,
             )
             continue
-        dbg and dbg.trace_stage(str(item.path), "show_query", item.query)  # DEBUG-TRACE
+        trace.trace_stage(lambda: str(item.path), "show_query", item.query)
         if isinstance(show_resolver, ShowResolver):
             resolved = show_resolver.resolve_show(
                 item.query, item.year, operation_cache,
@@ -202,8 +207,8 @@ def match_tv_items(
         episode_numbers = item.episode_numbers
         if item.air_date and item.episode_number is None:
             item.match_method = "air date"
-            dbg and dbg.trace_stage(  # DEBUG-TRACE
-                str(item.path), "episode_lookup",
+            trace.trace_stage(
+                lambda: str(item.path), "episode_lookup",
                 {"air_date": item.air_date},
             )
             episodes = tmdb.episodes_by_date(show_id, item.air_date) or []
@@ -253,8 +258,8 @@ def match_tv_items(
             continue
         if item.episode_number is None and item.episode_title:
             item.match_method = "episode title"
-            dbg and dbg.trace_stage(  # DEBUG-TRACE
-                str(item.path), "episode_lookup",
+            trace.trace_stage(
+                lambda: str(item.path), "episode_lookup",
                 {"episode_title": item.episode_title},
             )
             show_details = tmdb.tv(show_id) or {}
@@ -330,8 +335,8 @@ def match_tv_items(
         compact_handled = False
         if compact_number is not None:
             item.match_method = "compact season and episode"
-            dbg and dbg.trace_stage(  # DEBUG-TRACE
-                str(item.path), "episode_lookup",
+            trace.trace_stage(
+                lambda: str(item.path), "episode_lookup",
                 {
                     "season": season_number,
                     "episode": item.episode_number,
@@ -416,8 +421,8 @@ def match_tv_items(
         else:
             absolute_needed = not item.season_was_explicit
         if not compact_handled and not absolute_needed:
-            dbg and dbg.trace_stage(  # DEBUG-TRACE
-                str(item.path), "episode_lookup",
+            trace.trace_stage(
+                lambda: str(item.path), "episode_lookup",
                 {"season": season_number, "episodes": episode_numbers},
             )
             season_data = get_season(
@@ -446,8 +451,8 @@ def match_tv_items(
                 else "season and episode in file name"
             )
         if absolute_needed:
-            dbg and dbg.trace_stage(  # DEBUG-TRACE
-                str(item.path), "episode_lookup",
+            trace.trace_stage(
+                lambda: str(item.path), "episode_lookup",
                 {"absolute_episodes": episode_numbers},
             )
         if not compact_handled:

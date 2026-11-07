@@ -2,9 +2,9 @@ import json
 import logging
 import os
 import re
-import sys
 import tempfile
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict
 
@@ -15,7 +15,7 @@ from .formatting import (
     CUSTOM_ID, MOVIE_DEFAULT_ID, MOVIE_FORMATS, TV_DEFAULT_ID, TV_FORMATS,
     format_component,
 )
-from .tmdb import TMDB, TMDBAuthError, TMDBError
+from .tmdb import TMDB, TMDBAuthError, TMDBError, TMDBNetworkError
 
 
 MOVIE_PRESETS = (
@@ -106,7 +106,7 @@ class SettingsStore:
         self.on_change: Callable[[str, object], None] = (
             on_change or (lambda _key, _value: None)
         )
-        self.on_error: Callable[[Exception], None] = (
+        self.on_error: Callable[[object], None] = (
             on_error or (lambda _error: None)
         )
         self.on_batch_done: Callable[[], None] = (
@@ -133,9 +133,34 @@ class SettingsStore:
             except FileNotFoundError:
                 continue
             except (OSError, json.JSONDecodeError) as error:
-                if sys.stderr is not None:
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                corrupt_name = f"{path.name}.corrupt-{timestamp}"
+                corrupt_path = path.with_name(corrupt_name)
+                suffix = 1
+                while corrupt_path.exists():
+                    corrupt_path = path.with_name(
+                        f"{corrupt_name}-{suffix}",
+                    )
+                    suffix += 1
+                try:
+                    os.replace(path, corrupt_path)
+                except OSError as move_error:
                     log.warning(
-                        "Could not read settings from %s: %s", path, error,
+                        "Could not preserve unreadable settings at %s: %s",
+                        path, move_error,
+                    )
+                    self.on_error(
+                        "Settings could not be read. Defaults will be used; "
+                        f"the unreadable file could not be moved: {path}",
+                    )
+                else:
+                    log.warning(
+                        "Moved unreadable settings from %s to %s: %s",
+                        path, corrupt_path, error,
+                    )
+                    self.on_error(
+                        "Settings could not be read and were moved to "
+                        f"{corrupt_path}. Defaults will be used.",
                     )
         merged = dict(self.defaults)
         merged.update(config)
@@ -277,7 +302,17 @@ class SettingsStore:
                     )
                     config_file.flush()
                     os.fsync(config_file.fileno())
-                os.replace(temp_name, self.path)
+                backup_path = self.path.with_name(
+                    f"{self.path.name}.bak",
+                )
+                if self.path.exists():
+                    os.replace(self.path, backup_path)
+                try:
+                    os.replace(temp_name, self.path)
+                except OSError:
+                    if backup_path.exists() and not self.path.exists():
+                        os.replace(backup_path, self.path)
+                    raise
             except OSError:
                 try:
                     os.unlink(temp_name)
@@ -317,11 +352,14 @@ def check_tmdb_key(key: str) -> str:
         return "Connected" if TMDB(key).check() else "Rejected"
     except TMDBAuthError:
         return "Rejected"
+    except TMDBNetworkError:
+        return "Offline"
     except TMDBError as error:
-        return (
+        status = (
             "Rejected" if "(403)" in str(error)
             else "Couldn't reach TMDB"
         )
+        return status if len(status) <= 18 else status[:15] + "..."
 
 
 def _migrate_formatting_settings(merged, config):

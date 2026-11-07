@@ -1,10 +1,10 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from moviq.core.providers import ids
 from moviq.core.providers.anilist import AniListProvider
 from moviq.core.providers.offline import OfflineProvider
-from moviq.core.providers.router import ProviderRouter
+from moviq.core.providers.router import ProviderRouter, test_provider as check_provider
 from moviq.core.providers.settings import ProviderSettings
 from moviq.core.tmdb import TMDBAuthError, TMDBError, TMDBNetworkError
 
@@ -134,6 +134,22 @@ OTHER = [{"id": 2, "title": "Something Else Entirely", "release_date": "1999-01-
 
 
 class RouterTests(unittest.TestCase):
+    def test_provider_test_maps_network_errors_and_caps_other_statuses(self):
+        provider = Mock(needs_key=False)
+        provider.check.side_effect = TMDBNetworkError("offline")
+        settings = ProviderSettings(order=("tmdb",), enabled=("tmdb",))
+
+        with patch.object(ProviderRouter, "_provider", return_value=provider):
+            self.assertEqual(
+                check_provider("tmdb", settings),
+                "Offline",
+            )
+            provider.check.side_effect = TMDBError("x" * 40)
+            status = check_provider("tmdb", settings)
+
+        self.assertEqual(len(status), 18)
+        self.assertTrue(status.endswith("..."))
+
     def test_first_acceptable_provider_wins_and_ids_are_tagged(self):
         a, b = Stub("tmdb", GOOD), Stub("omdb", GOOD, needs_key=True)
         router = router_with(["tmdb", "omdb"], {"tmdb": a, "omdb": b})
@@ -200,7 +216,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result[0]["provider"], "offline")
         self.assertEqual(result[0]["title"], "The Matrix")
 
-    def test_offline_retry_does_not_fall_back_after_keyed_source_failure(self):
+    def test_offline_retry_falls_back_when_network_down(self):
         tmdb = Stub(
             "tmdb", error=TMDBNetworkError("could not connect"),
             needs_key=True,
@@ -210,9 +226,9 @@ class RouterTests(unittest.TestCase):
         )
         router.retry_offline = True
 
-        with self.assertRaises(TMDBNetworkError):
-            router.search("The Matrix")
+        result = router.search("The Matrix")
 
+        self.assertEqual(result[0]["provider"], "offline")
         self.assertEqual(tmdb.calls, 1)
 
     def test_offline_retry_uses_available_keyed_source(self):

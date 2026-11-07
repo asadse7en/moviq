@@ -86,6 +86,8 @@ def trace_start(raw_name):
     try:
         if not _enabled():
             return
+        if callable(raw_name):
+            raw_name = raw_name()
         _initialize()
         with _LOCK:
             key = str(raw_name)
@@ -103,6 +105,10 @@ def trace_stage(raw_name, stage, value):
     try:
         if not _enabled():
             return
+        if callable(raw_name):
+            raw_name = raw_name()
+        if callable(value):
+            value = value()
         _initialize()
         if stage == "top_candidates":
             value = _candidate_details(value)
@@ -122,6 +128,10 @@ def trace_end(raw_name, result):
     try:
         if not _enabled():
             return
+        if callable(raw_name):
+            raw_name = raw_name()
+        if callable(result):
+            result = result()
         _initialize()
         with _LOCK:
             key = str(raw_name)

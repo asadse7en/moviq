@@ -3,9 +3,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-import debug_trace
+from moviq import trace
 
 
 class ParserTraceTests(unittest.TestCase):
@@ -13,7 +13,7 @@ class ParserTraceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             trace_path = Path(temp_dir) / "parser_trace.jsonl"
             with patch.multiple(
-                debug_trace,
+                trace,
                 _TRACE_PATH=trace_path,
                 _INITIALIZED=True,
                 _RECORDS={},
@@ -25,8 +25,8 @@ class ParserTraceTests(unittest.TestCase):
                     ("error.mkv", ("error", None, "provider failed")),
                 )
                 for raw_name, result in results:
-                    debug_trace.trace_start(raw_name)
-                    debug_trace.trace_end(raw_name, result)
+                    trace.trace_start(raw_name)
+                    trace.trace_end(raw_name, result)
 
             records = [
                 json.loads(line)
@@ -40,6 +40,13 @@ class ParserTraceTests(unittest.TestCase):
                     ("error.mkv", "error"),
                 ],
             )
+
+    def test_lazy_arguments_are_not_evaluated_when_disabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            value = Mock(side_effect=AssertionError)
+            trace.trace_stage(lambda: value(), "stage", lambda: value())
+            trace.trace_start(lambda: value())
+            trace.trace_end(lambda: value(), lambda: value())
 
 
 if __name__ == "__main__":

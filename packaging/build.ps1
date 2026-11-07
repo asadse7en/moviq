@@ -236,6 +236,21 @@ try {
         $stagedInstallerPath,
         (Join-Path $temporaryPublishDirectory $installerName)
     )
+    $portableChecksum = Get-FileHash `
+        -LiteralPath (Join-Path $temporaryPublishDirectory "$portableName.zip") `
+        -Algorithm SHA256
+    $installerChecksum = Get-FileHash `
+        -LiteralPath (Join-Path $temporaryPublishDirectory $installerName) `
+        -Algorithm SHA256
+    $checksumLines = @(
+        "$($portableChecksum.Hash.ToLowerInvariant()) *$portableName.zip"
+        "$($installerChecksum.Hash.ToLowerInvariant()) *$installerName"
+    )
+    [System.IO.File]::WriteAllLines(
+        (Join-Path $temporaryPublishDirectory "SHA256SUMS.txt"),
+        [string[]]$checksumLines,
+        [System.Text.Encoding]::ASCII
+    )
 
     if (Test-Path -LiteralPath $versionOutputDirectory) {
         $temporaryBackupDirectory = Join-Path $releaseDistPath (
@@ -272,6 +287,7 @@ try {
     Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
     Write-Host "Portable ZIP archive created: $(Join-Path $versionOutputDirectory "$portableName.zip")"
     Write-Host "Windows installer created: $installerPath"
+    Write-Host "SHA-256 checksums created: $(Join-Path $versionOutputDirectory "SHA256SUMS.txt")"
 }
 catch {
     $buildError = $_.Exception.Message

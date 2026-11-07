@@ -7,25 +7,25 @@ from pathlib import Path
 def configure_auto_export(include_all=False):
     previous_trace_setting = os.environ.pop("PARSER_TRACE", None)
     try:
-        import debug_trace
+        from . import trace
     finally:
         if previous_trace_setting is not None:
             os.environ["PARSER_TRACE"] = previous_trace_setting
 
     previous_state = (
-        debug_trace._RECORDS,
-        debug_trace._INITIALIZED,
-        debug_trace.trace_end,
+        trace._RECORDS,
+        trace._INITIALIZED,
+        trace.trace_end,
     )
     captured = {}
-    debug_trace._RECORDS = {}
-    debug_trace._INITIALIZED = True
+    trace._RECORDS = {}
+    trace._INITIALIZED = True
     os.environ["PARSER_TRACE"] = "1"
 
     def trace_end(raw_name, result):
         key = str(raw_name)
-        with debug_trace._LOCK:
-            record = debug_trace._RECORDS.pop(key, None)
+        with trace._LOCK:
+            record = trace._RECORDS.pop(key, None)
         if record is None:
             return
         record = copy.deepcopy(record)
@@ -50,7 +50,7 @@ def configure_auto_export(include_all=False):
         record["result"] = result
         captured[key] = record
 
-    debug_trace.trace_end = trace_end
+    trace.trace_end = trace_end
 
     def export_after_match(app):
         count, output_path = export_app_report(
@@ -60,9 +60,9 @@ def configure_auto_export(include_all=False):
 
     def cleanup():
         (
-            debug_trace._RECORDS,
-            debug_trace._INITIALIZED,
-            debug_trace.trace_end,
+            trace._RECORDS,
+            trace._INITIALIZED,
+            trace.trace_end,
         ) = previous_state
         if previous_trace_setting is None:
             os.environ.pop("PARSER_TRACE", None)

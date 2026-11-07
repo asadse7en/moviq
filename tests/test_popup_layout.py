@@ -10,6 +10,9 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
         popup._completion_pending = False
         popup._completion_after = None
         popup.completed = False
+        popup._progress_after = None
+        popup._progress_value = 0.0
+        popup._progress_target = 0.0
         popup.task = "rename"
         popup.started_at = 0
         popup.title_var = Mock()
@@ -24,6 +27,7 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
         popup.backdrop = Mock()
         popup.icon_label = Mock()
         popup._set_progress = Mock()
+        popup._draw_progress = Mock()
         popup._set_completed_footer = Mock()
         popup._center = Mock()
 
@@ -37,6 +41,9 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
         popup._completion_pending = False
         popup._completion_after = None
         popup.completed = False
+        popup._progress_after = None
+        popup._progress_value = 0.0
+        popup._progress_target = 0.0
         popup.task = "matching"
         popup.started_at = 0
         popup.title_var = Mock()
@@ -50,6 +57,7 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
         popup.icon_label = Mock()
         popup.message_label = Mock()
         popup._set_progress = Mock()
+        popup._draw_progress = Mock()
         popup._set_completed_footer = Mock()
         popup._center = Mock()
         popup.backdrop = Mock()
@@ -58,6 +66,9 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
 
         popup.message_label.grid_remove.assert_not_called()
         self.assertTrue(popup.completed)
+        self.assertEqual(popup._progress_value, 1.0)
+        self.assertEqual(popup._progress_target, 1.0)
+        popup._draw_progress.assert_called_once_with()
 
 
 if __name__ == "__main__":

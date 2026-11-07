@@ -244,10 +244,9 @@ class ShowSearchRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             resolver = self.make_resolver(Client(), directory)
             item = Item(Path("Fringe.S01E01.mkv"), Path("TV"), "tv")
-            trace = Mock()
             with (
-                patch("moviq.core.match_pipeline.dbg", trace),
-                patch("moviq.core.show_resolver.dbg", trace),
+                patch("moviq.trace.trace_stage") as stage,
+                patch("moviq.trace.trace_end") as end,
             ):
                 result = match_tv_items(
                     object(), resolver, [item], TMDBOperationCache(),
@@ -255,11 +254,11 @@ class ShowSearchRegressionTests(unittest.TestCase):
                 )
 
         stages = [
-            call.args[1] for call in trace.trace_stage.call_args_list
+            call.args[1] for call in stage.call_args_list
         ]
         self.assertLess(stages.index("show_query"), stages.index("provider_query"))
         self.assertIn("top_candidates", stages)
-        trace.trace_end.assert_called_once()
+        end.assert_called_once()
         self.assertEqual(result[0][0], "error")
 
 

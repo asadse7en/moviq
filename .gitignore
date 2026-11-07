@@ -1,5 +1,5 @@
 .venv/
-.github/
+.github/copilot-instructions.md
 __pycache__/
 release/
 docs/

@@ -124,11 +124,11 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("ok", included)
 
     def test_trace_capture_is_in_memory_and_restored(self):
-        import debug_trace
+        from moviq import trace
 
-        prior_trace_end = debug_trace.trace_end
-        prior_records = debug_trace._RECORDS
-        prior_initialized = debug_trace._INITIALIZED
+        prior_trace_end = trace.trace_end
+        prior_records = trace._RECORDS
+        prior_initialized = trace._INITIALIZED
         previous_setting = os.environ.get("PARSER_TRACE")
         with patch(
             "moviq.diagnostics.export_app_report",
@@ -136,11 +136,11 @@ class DiagnosticsTests(unittest.TestCase):
         ) as writer:
             export_after_match, cleanup = configure_auto_export()
             try:
-                debug_trace.trace_start("example.mkv")
-                debug_trace.trace_stage(
+                trace.trace_start("example.mkv")
+                trace.trace_stage(
                     "example.mkv", "parsed_query", {"query": "Example"},
                 )
-                debug_trace.trace_end(
+                trace.trace_end(
                     "example.mkv", ("review", None, "", "similar"),
                 )
                 export_after_match(_app())
@@ -158,9 +158,9 @@ class DiagnosticsTests(unittest.TestCase):
             finally:
                 cleanup()
 
-        self.assertIs(debug_trace.trace_end, prior_trace_end)
-        self.assertIs(debug_trace._RECORDS, prior_records)
-        self.assertEqual(debug_trace._INITIALIZED, prior_initialized)
+        self.assertIs(trace.trace_end, prior_trace_end)
+        self.assertIs(trace._RECORDS, prior_records)
+        self.assertEqual(trace._INITIALIZED, prior_initialized)
         self.assertEqual(os.environ.get("PARSER_TRACE"), previous_setting)
 
     def test_test_flag_opens_the_app_and_configures_auto_export(self):

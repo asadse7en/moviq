@@ -25,6 +25,7 @@ from moviq.core.settings_store import (
     render_pattern,
     validate_pattern,
 )
+from moviq.core import network_state
 from moviq.core.updater import (
     _version_tuple,
     check_latest_release as check_for_updates,
@@ -60,6 +61,82 @@ class SettingsStoreTests(unittest.TestCase):
                 self.assertEqual(store.data["key"], "remembered-key")
                 self.assertEqual(store.data["custom_option"], 23)
                 self.assertEqual(store.data["tv_template"], DEFAULTS["tv_template"])
+            finally:
+                store.close()
+
+    def test_moves_invalid_json_and_reports_user_friendly_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            original = "{invalid json"
+            path.write_text(original, encoding="utf-8")
+            errors = []
+
+            store = SettingsStore(
+                path, Path(directory) / "missing.json",
+                on_error=errors.append, save_delay=60,
+            )
+            try:
+                corrupt_files = list(
+                    Path(directory).glob("settings.json.corrupt-*"),
+                )
+                self.assertEqual(len(corrupt_files), 1)
+                self.assertEqual(
+                    corrupt_files[0].read_text(encoding="utf-8"), original,
+                )
+                self.assertFalse(path.exists())
+                self.assertEqual(store.data["theme"], DEFAULTS["theme"])
+                self.assertEqual(len(errors), 1)
+                self.assertIn("Defaults will be used", errors[0])
+                self.assertIn(str(corrupt_files[0]), errors[0])
+            finally:
+                store.close()
+
+    def test_moves_settings_file_on_os_read_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text("{}", encoding="utf-8")
+            errors = []
+            original_open = Path.open
+
+            def failing_open(target, *args, **kwargs):
+                if target == path:
+                    raise PermissionError("access denied")
+                return original_open(target, *args, **kwargs)
+
+            with patch.object(Path, "open", failing_open):
+                store = SettingsStore(
+                    path, Path(directory) / "missing.json",
+                    on_error=errors.append, save_delay=60,
+                )
+
+            try:
+                self.assertFalse(path.exists())
+                self.assertTrue(list(
+                    Path(directory).glob("settings.json.corrupt-*"),
+                ))
+                self.assertEqual(len(errors), 1)
+            finally:
+                store.close()
+
+    def test_save_keeps_previous_settings_as_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            previous = json.dumps({"theme": "light"})
+            path.write_text(previous, encoding="utf-8")
+            store = SettingsStore(
+                path, Path(directory) / "missing.json", save_delay=60,
+            )
+            try:
+                store.set("theme", "dark")
+                store.save_now()
+                backup = path.with_name("settings.json.bak")
+                self.assertEqual(
+                    backup.read_text(encoding="utf-8"), previous,
+                )
+                self.assertEqual(
+                    json.loads(path.read_text(encoding="utf-8"))["theme"],
+                    "dark",
+                )
             finally:
                 store.close()
 
@@ -571,6 +648,7 @@ class FormattingSettingsTests(unittest.TestCase):
 class UpdateAndKeyCheckTests(unittest.TestCase):
     def test_version_tuple_ignores_leading_v(self):
         self.assertEqual(_version_tuple("v1.2.0"), (1, 2, 0))
+        self.assertEqual(_version_tuple("v1.2.0-beta"), (1, 2, 0))
 
     @patch("moviq.core.updater.requests.get")
     def test_update_check_detects_newer_release_and_uses_github_url(self, get):
@@ -604,8 +682,49 @@ class UpdateAndKeyCheckTests(unittest.TestCase):
     def test_update_check_handles_offline_and_rate_limit(self, get):
         get.side_effect = requests.ConnectionError("offline")
         self.assertEqual(check_for_updates("0.1.0"), ("error", None, None))
-        get.side_effect = requests.HTTPError("rate limit")
-        self.assertEqual(check_for_updates("0.1.0"), ("error", None, None))
+        get.side_effect = None
+        response = Mock(status_code=429)
+        get.return_value = response
+        self.assertEqual(
+            check_for_updates("0.1.0"),
+            ("rate_limited", None, None),
+        )
+        response.status_code = 403
+        self.assertEqual(
+            check_for_updates("0.1.0"),
+            ("rate_limited", None, None),
+        )
+
+    @patch("moviq.core.updater.requests.get")
+    def test_update_check_rejects_release_urls_outside_repository(self, get):
+        response = Mock()
+        response.json.return_value = {
+            "tag_name": "v0.2.0",
+            "html_url": "https://github.com/asadse7en/Moviq-evil/releases/tag/v0.2.0",
+        }
+        get.return_value = response
+
+        self.assertEqual(
+            check_for_updates("0.1.0"),
+            ("error", None, None),
+        )
+
+    @patch("moviq.core.updater.requests.get")
+    def test_update_check_accepts_prerelease_tags(self, get):
+        response = Mock()
+        response.json.return_value = {
+            "tag_name": "v0.2.0-beta",
+            "html_url": "https://github.com/asadse7en/Moviq/releases/tag/v0.2.0-beta",
+        }
+        get.return_value = response
+
+        self.assertEqual(
+            check_for_updates("0.1.0"),
+            (
+                "available", "v0.2.0-beta",
+                "https://github.com/asadse7en/Moviq/releases/tag/v0.2.0-beta",
+            ),
+        )
 
     def test_invalid_v3_key_is_rejected_without_a_network_request(self):
         self.assertEqual(check_tmdb_key("not-a-valid-v3-key"), "Wrong format")
@@ -613,17 +732,19 @@ class UpdateAndKeyCheckTests(unittest.TestCase):
 
     @patch("moviq.core.tmdb._SESSION.get")
     def test_key_check_reports_offline_network_error(self, request):
+        network_state.reset()
         request.side_effect = requests.ConnectionError("offline")
         with patch("moviq.core.tmdb._REQUEST_LIMITER.acquire"), patch.object(
             TMDB, "_wait",
         ):
             self.assertEqual(
                 check_tmdb_key("a" * 32),
-                "Couldn't reach TMDB",
+                "Offline",
             )
 
     @patch("moviq.core.tmdb._SESSION.get")
     def test_key_check_maps_authorization_failure_to_rejected(self, request):
+        network_state.reset()
         request.return_value = Mock(status_code=401)
 
         with patch("moviq.core.tmdb._REQUEST_LIMITER.acquire"):
