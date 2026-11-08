@@ -319,7 +319,7 @@ class TVDateAndCompactMatchingTests(unittest.TestCase):
         trace = Mock()
 
         with (
-            patch("moviq.core.match_pipeline.dbg", trace),
+            patch("moviq.core.match_pipeline.trace", trace),
             self.assertRaisesRegex(
                 RuntimeError, "Episode service unavailable",
             ),

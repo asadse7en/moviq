@@ -544,6 +544,20 @@ class MediaModeDetectionTests(unittest.TestCase):
             app.clear = Mock()
             app.update_media_mode_selector = Mock()
             app.save_config = Mock()
+            app.root = Mock()
+            app.root.winfo_exists.return_value = True
+            app.root.after.side_effect = lambda *args, **kwargs: (
+                args[1](*args[2:]) if len(args) > 2 else None
+            )
+
+            class ImmediateWorkerPool:
+                def submit(self, fn, *args, **kwargs):
+                    future = Mock()
+                    future.result.return_value = fn(*args, **kwargs)
+                    future.add_done_callback.side_effect = lambda cb: cb(future)
+                    return future
+
+            app._worker_pool = ImmediateWorkerPool()
 
             with patch(
                 "moviq.ui.app.ask_yes_no", return_value=True,
@@ -567,6 +581,20 @@ class MediaModeDetectionTests(unittest.TestCase):
             app.items = []
             app.update_media_mode_selector = Mock()
             app.save_config = Mock()
+            app.root = Mock()
+            app.root.winfo_exists.return_value = True
+            app.root.after.side_effect = lambda *args, **kwargs: (
+                args[1](*args[2:]) if len(args) > 2 else None
+            )
+
+            class ImmediateWorkerPool:
+                def submit(self, fn, *args, **kwargs):
+                    future = Mock()
+                    future.result.return_value = fn(*args, **kwargs)
+                    future.add_done_callback.side_effect = lambda cb: cb(future)
+                    return future
+
+            app._worker_pool = ImmediateWorkerPool()
 
             with patch("moviq.ui.app.ask_yes_no", return_value=False):
                 app._confirm_detected_media_mode([episode])

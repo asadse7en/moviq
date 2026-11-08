@@ -32,6 +32,7 @@ from moviq.core.updater import (
 )
 from moviq.ui.settings._common import TMDB_KEY_URL, TMDB_SIGNUP_URL
 from moviq.ui.settings import SettingsView
+from moviq.ui.settings import general as settings_general
 
 
 class SettingsStoreTests(unittest.TestCase):
@@ -548,9 +549,9 @@ class FormattingSettingsTests(unittest.TestCase):
             ("api_link",),
         ]
 
-        with patch(
-            "moviq.ui.settings.general.webbrowser.open",
-        ) as open_url:
+        with patch.object(
+            settings_general, "webbrowser", create=True,
+        ) as webbrowser_mock:
             self.assertEqual(
                 SettingsView._open_api_help_link(event, text), "break",
             )
@@ -559,7 +560,7 @@ class FormattingSettingsTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            [call.args[0] for call in open_url.call_args_list],
+            [call.args[0] for call in webbrowser_mock.open.call_args_list],
             [TMDB_SIGNUP_URL, TMDB_KEY_URL],
         )
 
