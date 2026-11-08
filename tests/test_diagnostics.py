@@ -8,12 +8,15 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from moviq import debug_trace
 from moviq.diagnostics import (
     _report_item,
     configure_auto_export,
     export_app_report,
 )
 from moviq.ui.app import App
+
+trace = debug_trace
 
 
 def _app():
@@ -124,7 +127,7 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("ok", included)
 
     def test_trace_capture_is_in_memory_and_restored(self):
-        from moviq import trace
+        from moviq import debug_trace as trace
 
         prior_trace_end = trace.trace_end
         prior_records = trace._RECORDS

@@ -23,12 +23,12 @@ try {
         $python = $pythonCommand.Source
     }
 
-    $dependencyCheck = "import importlib.util, sys; required = ['PyInstaller', 'PIL', 'requests', 'sv_ttk', 'tkinterdnd2']; missing = [name for name in required if importlib.util.find_spec(name) is None]; print(', '.join(missing)); sys.exit(bool(missing))"
+    $dependencyCheck = "import importlib.util, sys; required = ['PyInstaller', 'PIL', 'requests', 'sv_ttk', 'tkinterdnd2', 'customtkinter', 'resvg_py']; missing = [name for name in required if importlib.util.find_spec(name) is None]; print(', '.join(missing)); sys.exit(bool(missing))"
     $missingDependencies = @(& $python -c $dependencyCheck)
     if ($LASTEXITCODE -ne 0) {
         $missingList = ($missingDependencies -join ", ").Trim()
         if (-not $missingList) {
-            $missingList = "PyInstaller, Pillow, requests, sv-ttk, tkinterdnd2"
+            $missingList = "PyInstaller, Pillow, requests, sv-ttk, tkinterdnd2, customtkinter, resvg_py"
         }
         throw "Missing build dependencies ($missingList). From the project root, install them with: `"$python`" -m pip install -r packaging\requirements-build.txt"
     }

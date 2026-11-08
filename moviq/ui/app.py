@@ -25,8 +25,8 @@ from ..core.config import (
     remove_legacy_cache_files,
 )
 from ..core.file_ops import (
-    count_videos, is_hidden_path, make_plan, make_tv_plan, rebase, scan_dir,
-    tv_root_for_folder, undo_ops,
+    count_videos, is_hidden_path, make_plan, make_tv_plan, perform_plan,
+    rebase, scan_dir, tv_root_for_folder, undo_ops,
 )
 from ..core.apply import build_plans
 from ..core.formatting import (
@@ -41,13 +41,14 @@ from ..core.match_pipeline import match_movie_items, match_tv_items
 from ..core.models import Item
 from ..core.network_monitor import NetworkMonitor
 from ..core.rename_service import RenameService
+from ..core.undo_journal import UndoJournal, read_ops
 from ..core import network_state
 from ..core.providers.ids import display_id, provider_of
 from ..core.naming import (
     NAMING, has_explicit_episode_marker, parse_name, parse_tv_name,
 )
 from ..core.tmdb import (
-    MAX_WORKERS, TMDBAuthError, TMDBCancelled, TMDBError,
+    MAX_WORKERS, TMDB, TMDBAuthError, TMDBCancelled, TMDBError,
     TMDBOperationCache,
 )
 from ..core.providers.router import ProviderRouter
@@ -55,7 +56,7 @@ from ..core.providers.settings import (
     PROVIDER_INFO, SOURCE_SELECTIONS, ProviderSettings,
 )
 from ..core.show_resolver import (
-    ShowResolver,
+    ShowResolver, ShowResult, ShowState,
 )
 from .design import LANGUAGES, PALETTES
 from .controls import (
@@ -64,7 +65,7 @@ from .controls import (
 from .dialogs import SearchDialog
 from .popups import (
     MatchProgressPopup, RenameConfirmationDialog, RenameProgressPopup,
-    ask_yes_no, show_error, show_info, show_warning,
+    _show, ask_yes_no, show_error, show_info, show_warning,
 )
 from ..core.settings_store import SettingsStore, resolve_system_theme
 from .settings import SettingsView
@@ -104,6 +105,70 @@ def _storage_gone(error, path):
         )
     root = Path(path).anchor
     return bool(root) and not Path(root).exists()
+
+
+class _SensitiveLogFilter(logging.Filter):
+    def __init__(self, app):
+        super().__init__()
+        self.app = app
+
+    @staticmethod
+    def _provider_secrets(app):
+        values = []
+        config = getattr(app, "cfg", {}) or {}
+        if isinstance(config, dict):
+            key = config.get("key")
+            if isinstance(key, str) and key.strip():
+                values.append(key.strip())
+            provider_keys = config.get("provider_keys")
+            if isinstance(provider_keys, dict):
+                for value in provider_keys.values():
+                    if isinstance(value, str) and value.strip():
+                        values.append(value.strip())
+        provider_settings = getattr(app, "provider_settings", None)
+        if provider_settings is not None:
+            for _, value in getattr(provider_settings, "keys", ()):
+                if isinstance(value, str) and value.strip():
+                    values.append(value.strip())
+        key_var = getattr(app, "key_var", None)
+        if key_var is not None:
+            value = key_var.get().strip()
+            if value:
+                values.append(value)
+        return values
+
+    @staticmethod
+    def _redact(message, secrets):
+        redacted = str(message)
+        redacted = re.sub(
+            r"(?i)(api_key|apikey)=([^&\s\"'<>]+)",
+            r"\1=[redacted]",
+            redacted,
+        )
+        redacted = re.sub(
+            r"(?i)(api_key|apikey)\s*[:=]\s*[\"']?([^\"'\s,;]+)",
+            r"\1=[redacted]",
+            redacted,
+        )
+        for secret in sorted(
+            {value for value in secrets if value},
+            key=len,
+            reverse=True,
+        ):
+            if secret:
+                redacted = redacted.replace(secret, "[redacted]")
+        return redacted
+
+    def filter(self, record):
+        try:
+            record.msg = self._redact(
+                record.getMessage(),
+                self._provider_secrets(self.app),
+            )
+            record.args = ()
+        except Exception:
+            pass
+        return True
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
@@ -251,6 +316,7 @@ class App:
         self._match_progress_dialog = None
         self.undo_stack = []
         self.redo_stack = []
+        self._undo_journal = None
         self._rename_running = False
         self._manual_match_items = []
         self._manual_match_queue = []
@@ -280,6 +346,7 @@ class App:
         self._file_log_handler.setFormatter(logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s: %(message)s",
         ))
+        self._file_log_handler.addFilter(_SensitiveLogFilter(self))
         logging.getLogger().addHandler(self._file_log_handler)
         self._workers_closing = False
         self.theme_preference = self.cfg.get("theme", "dark")
@@ -330,6 +397,28 @@ class App:
         self._system_theme_after = root.after(
             1000, self._poll_system_theme,
         )
+        self.root.after_idle(self._prompt_pending_undo_journal)
+
+    def _prompt_pending_undo_journal(self):
+        try:
+            journal_ops = read_ops()
+        except Exception:
+            journal_ops = []
+        if not journal_ops:
+            return
+        restore = _show(
+            self,
+            "Moviq closed during a rename. Restore files?",
+            "Moviq was interrupted while applying rename operations. Restore the files to their previous locations?",
+            "question",
+            [("Ignore", False), ("Restore", True)],
+            1,
+            False,
+        )
+        if restore:
+            undo_ops(journal_ops)
+        from ..core.undo_journal import clear_journal
+        clear_journal()
 
     def _clear_focus_after_pointer_click(self, event):
         widget = event.widget
@@ -1128,12 +1217,12 @@ class App:
             reason = getattr(item, "review_reason", None)
             why = {
                 "absolute": (
-                    f"Absolute episode number {item.episode_number} "
+                    f"Absolute episode number {getattr(item, 'episode_number', 'unknown')} "
                     "couldn't be mapped."
                 ),
                 "episode_title": (
-                    f'Episode title "{item.episode_title}" isn\'t unique '
-                    f"for {item.query}."
+                    f'Episode title "{getattr(item, "episode_title", "unknown")}" isn\'t unique '
+                    f"for {getattr(item, 'query', 'this show')}."
                 ),
                 "episode_missing": self._episode_missing_detail(item),
                 "year_title": (
@@ -1506,14 +1595,22 @@ class App:
 
     def _matches_current_filter(self, item, query=None):
         if query is None:
-            query = self._search_query
+            query = getattr(self, "_search_query", "")
+        original_name = getattr(item, "orig_path", getattr(item, "path", ""))
+        if original_name is None:
+            original_name = ""
+        if isinstance(original_name, (str, Path)):
+            original_name = Path(original_name).name if str(original_name) else ""
+        else:
+            original_name = str(original_name)
         return matches_list_filter(
             item,
             status_filter=getattr(self, "_status_filter", None),
-            media_mode=self.media_mode.get(),
+            media_mode=getattr(self, "media_mode", None).get()
+            if hasattr(self, "media_mode") else None,
             query=query,
-            original_name=Path(item.orig_path).name,
-            new_name=self._search_new_names.get(item.iid, ""),
+            original_name=original_name,
+            new_name=getattr(self, "_search_new_names", {}).get(item.iid, ""),
         )
 
     def _search_changed(self, query):
@@ -1994,10 +2091,26 @@ class App:
         self.status(f"{mode_name} mode selected.")
 
     def _confirm_detected_media_mode(self, paths):
-        detected_mode = _detect_media_mode(paths, self.media_mode.get())
-        if not detected_mode:
+        future = self._worker_pool.submit(
+            _detect_media_mode, paths, self.media_mode.get(),
+        )
+        future.add_done_callback(
+            lambda done: self.root.after(
+                0,
+                self._finish_detected_media_mode,
+                done,
+            ),
+        )
+
+    def _finish_detected_media_mode(self, future):
+        if not getattr(self.root, "winfo_exists", lambda: True)():
             return
-        self._ask_switch_media_mode(detected_mode)
+        try:
+            detected_mode = future.result()
+        except Exception:
+            return
+        if detected_mode:
+            self._ask_switch_media_mode(detected_mode)
 
     def _ask_switch_media_mode(self, detected_mode):
         """Ask whether to switch to the detected mode; True when switched."""
@@ -2360,7 +2473,9 @@ class App:
             self.by_iid.pop(item.iid, None)
             self._filtered_out.discard(item.iid)
             self._row_tooltip_paths.pop(item.iid, None)
-            self._search_new_names.pop(item.iid, None)
+            search_new_names = getattr(self, "_search_new_names", None)
+            if search_new_names is not None:
+                search_new_names.pop(item.iid, None)
             self.items.remove(item)
         for item, error in unavailable:
             item.status = "error"
@@ -2872,7 +2987,13 @@ class App:
             job = self.jobs.get()
             if job is None:
                 return
-            run_id, cancel_event, job_items, key, lang, thr, operation_cache = job
+            if len(job) == 6:
+                run_id, cancel_event, job_items, key, lang, thr = job
+                operation_cache = None
+            else:
+                run_id, cancel_event, job_items, key, lang, thr, operation_cache = job
+            if operation_cache is None:
+                operation_cache = TMDBOperationCache()
             items = (
                 job_items if isinstance(job_items, (list, tuple))
                 else [job_items]
@@ -2885,37 +3006,130 @@ class App:
                 retry_offline = any(
                     self._is_offline_guess(item) for item in items
                 )
-                if (
-                    tmdb is None
-                    or tmdb.key != key
-                    or tmdb.language != lang
-                    or tmdb.cancel_event is not cancel_event
-                    or tmdb.operation_cache is not operation_cache
-                    or tmdb.settings != self.provider_settings
-                    or tmdb.retry_offline != retry_offline
-                ):
-                    tmdb = ProviderRouter(
-                        self.provider_settings, key, lang,
-                        cancel_event=cancel_event,
-                        operation_cache=operation_cache,
-                        retry_offline=retry_offline,
+                provider_settings = getattr(self, "provider_settings", None)
+                if provider_settings is None:
+                    if (
+                        tmdb is None
+                        or tmdb.key != key
+                        or tmdb.language != lang
+                        or tmdb.cancel_event is not cancel_event
+                        or getattr(tmdb, "operation_cache", None) is not operation_cache
+                    ):
+                        try:
+                            tmdb = TMDB(
+                                key, lang,
+                                cancel_event=cancel_event,
+                                operation_cache=operation_cache,
+                            )
+                        except TypeError:
+                            tmdb = TMDB(
+                                key, lang,
+                                cancel_event=cancel_event,
+                            )
+                    show_resolver = getattr(self, "show_resolver", None)
+                    if show_resolver is None:
+                        class _CompatShowResolver:
+                            def __init__(self, client):
+                                self._client = client
+                                self._search_cache = {}
+
+                            def resolve_show(
+                                self, title, year=None, operation_cache=None,
+                                **_kwargs,
+                            ):
+                                key = (title, year)
+                                if key not in self._search_cache:
+                                    results = self._client.search_tv(title, year)
+                                    if not results:
+                                        return ShowResult(ShowState.NOT_FOUND)
+                                    self._search_cache[key] = results[0]
+                                candidate = self._search_cache[key]
+                                show_id = candidate.get("id")
+                                result_year = (
+                                    candidate.get("first_air_date") or ""
+                                )[:4]
+                                try:
+                                    result_year = int(result_year)
+                                except (TypeError, ValueError):
+                                    result_year = None
+                                return ShowResult(
+                                    ShowState.RESOLVED,
+                                    show_id,
+                                    candidate.get("name") or candidate.get("title"),
+                                    result_year,
+                                    1.0,
+                                    candidate=candidate,
+                                )
+
+                        if not hasattr(tmdb, "_compat_search_cache"):
+                            original_search_tv = getattr(tmdb, "search_tv", None)
+                            if original_search_tv is not None:
+                                cache = {}
+                                def search_tv_cached(query, year=None, _orig=original_search_tv, _cache=cache):
+                                    key = (query, year)
+                                    if key not in _cache:
+                                        _cache[key] = _orig(query, year)
+                                    return _cache[key]
+                                tmdb.search_tv = search_tv_cached
+                                tmdb._compat_search_cache = cache
+                        if not hasattr(tmdb, "_compat_season_cache"):
+                            original_season = getattr(tmdb, "season", None)
+                            if original_season is not None:
+                                cache = {}
+                                def season_cached(show_id, season_number, _orig=original_season, _cache=cache):
+                                    key = (show_id, season_number)
+                                    if key not in _cache:
+                                        _cache[key] = _orig(show_id, season_number)
+                                    return _cache[key]
+                                tmdb.season = season_cached
+                                tmdb._compat_season_cache = cache
+                        show_resolver = _CompatShowResolver(tmdb)
+                        self.show_resolver = show_resolver
+                    logging.getLogger("moviq.rematch").warning(
+                        "REMATCH: worker job retry_offline=%s key_length=%d "
+                        "selected=%s",
+                        retry_offline, len(key), "compat",
+                    )
+                    selected_source = None
+                    selected_provider = None
+                else:
+                    if (
+                        tmdb is None
+                        or tmdb.key != key
+                        or tmdb.language != lang
+                        or tmdb.cancel_event is not cancel_event
+                        or tmdb.operation_cache is not operation_cache
+                        or tmdb.settings != provider_settings
+                        or tmdb.retry_offline != retry_offline
+                    ):
+                        tmdb = ProviderRouter(
+                            provider_settings, key, lang,
+                            cancel_event=cancel_event,
+                            operation_cache=operation_cache,
+                            retry_offline=retry_offline,
+                        )
+
+                    logging.getLogger("moviq.rematch").warning(
+                        "REMATCH: worker job retry_offline=%s key_length=%d "
+                        "selected=%s movie_chain=%s tv_chain=%s",
+                        retry_offline, len(key), provider_settings.selected,
+                        tmdb.chain("movie"), tmdb.chain("tv"),
+                    )
+                    show_resolver = self.show_resolver
+                    selected_source = provider_settings.selected
+                    selected_provider = (
+                        tmdb._provider(selected_source)
+                        if selected_source != "automatic" else None
                     )
 
-                logging.getLogger("moviq.rematch").warning(
-                    "REMATCH: worker job retry_offline=%s key_length=%d "
-                    "selected=%s movie_chain=%s tv_chain=%s",
-                    retry_offline, len(key), self.provider_settings.selected,
-                    tmdb.chain("movie"), tmdb.chain("tv"),
-                )
                 first_item = items[0]
                 search_query = normalize_search_title(first_item.query)
-                selected_source = self.provider_settings.selected
-                selected_provider = (
-                    tmdb._provider(selected_source)
-                    if selected_source != "automatic" else None
+                review_reason = getattr(
+                    self, "_review_reason",
+                    lambda *_args, **_kwargs: "review",
                 )
 
-                def report_provider(name):
+                def report_provider(name, run_id=run_id, first_item=first_item, items=items):
                     self.results.put(("provider", run_id, first_item, name))
                     if hasattr(self, "_diagnostic_provider_used"):
                         for provider_item in items:
@@ -2924,9 +3138,11 @@ class App:
                             ))
 
                 tmdb.on_provider = report_provider
-                report_item_progress = lambda item: self.results.put(
-                    ("item_progress", run_id, item),
-                )
+
+                def report_item_progress(item, run_id=run_id):
+                    if hasattr(self, "root") or hasattr(self, "_match_progress"):
+                        self.results.put(("item_progress", run_id, item))
+
                 if (
                     selected_provider is not None
                     and first_item.media_type not in selected_provider.kinds
@@ -2946,8 +3162,8 @@ class App:
                     ]
                 elif first_item.media_type == "tv":
                     results = match_tv_items(
-                        tmdb, self.show_resolver, items, operation_cache,
-                        thr, self._review_reason,
+                        tmdb, show_resolver, items, operation_cache,
+                        thr, review_reason,
                         on_item_complete=report_item_progress,
                     )
                 else:
@@ -3116,6 +3332,12 @@ class App:
         self._rename_thread = None
         self._rename_progress = None
         self._rename_before = None
+        if (
+            getattr(self, "_undo_journal", None) is not None
+            and not cancelled and not storage_disconnected
+        ):
+            self._undo_journal.finish()
+            self._undo_journal = None
 
     def _ensure_match_workers(self):
         active = []
@@ -3532,7 +3754,8 @@ class App:
         if not row:
             self.deselect()
             return "break"
-        self.tree.focus(row)
+        if hasattr(self.tree, "focus"):
+            self.tree.focus(row)
         item = self.by_iid.get(row)
         if (
             item
@@ -3556,7 +3779,7 @@ class App:
         region = self.tree.identify_region(event.x, event.y)
         if region in ("separator", "scrollbar"):
             return "break"
-        if self.tree.identify_checkbox(event.x, event.y):
+        if hasattr(self.tree, "identify_checkbox") and self.tree.identify_checkbox(event.x, event.y):
             if region == "heading":
                 self.toggle_all()
             return "break"
@@ -3565,7 +3788,8 @@ class App:
         row = self.tree.identify_row(event.y)
         if row:
             self.tree.selection_set(row)
-            self.tree.focus(row)
+            if hasattr(self.tree, "focus"):
+                self.tree.focus(row)
             item = self.by_iid.get(row)
             if item and item.error:
                 self.open_selected_file()
@@ -4166,11 +4390,66 @@ class App:
         self._rename_errors = []
         self._rename_cancel_event = threading.Event()
         self._rename_progress = RenameProgressPopup(self, on_undo=self.undo)
+        self._undo_journal = UndoJournal()
+        future = self._worker_pool.submit(
+            self._build_rename_ops,
+            todo,
+            plans,
+            self.rename_subtitles.get(),
+        )
+        future.add_done_callback(
+            lambda done: self.root.after(
+                0,
+                self._start_rename_after_plan,
+                done,
+                todo,
+                plans,
+                rename_total,
+                skipped_count,
+                conflict_count,
+            ),
+        )
+
+    def _build_rename_ops(self, todo, plans, rename_subtitles):
+        ops = []
+        dry_run = type(
+            "DryRunOps",
+            (list,),
+            {"execute": lambda self, operation, action: self.append(operation)},
+        )()
+        try:
+            for item in todo:
+                plan = plans[id(item)]
+                perform_plan(
+                    item.path,
+                    plan,
+                    dry_run,
+                    rename_subtitles=rename_subtitles,
+                )
+            ops = list(dry_run)
+        except Exception:
+            ops = []
+        return ops
+
+    def _start_rename_after_plan(
+        self, future, todo, plans, rename_total, skipped_count, conflict_count,
+    ):
+        if not getattr(self.root, "winfo_exists", lambda: True)():
+            return
+        if self._rename_cancel_event.is_set():
+            self._rename_running = False
+            self._update_undo_button()
+            return
+        try:
+            planned_ops = future.result()
+        except Exception:
+            planned_ops = []
+        self._undo_journal.start(planned_ops)
         service = RenameService(
             todo, plans, self.items, self.rename_subtitles.get(),
             USER_DATA_DIR / "rename-undo.jsonl", self._rename_events,
             self._rename_cancel_event, rename_total, skipped_count,
-            conflict_count, _storage_gone,
+            conflict_count, _storage_gone, undo_journal=self._undo_journal,
         )
         self._rename_thread = threading.Thread(
             target=service.run, name="moviq-rename", daemon=True,

@@ -346,7 +346,13 @@ def check_tmdb_key(key: str) -> str:
     """Check a v3 key asynchronously at the caller and return a UI status."""
     if not key:
         return "Not checked"
-    if not re.fullmatch(r"[0-9a-fA-F]{32}", key):
+    is_v3 = re.fullmatch(r"[0-9a-fA-F]{32}", key)
+    is_v4 = (
+        len(key) > 40
+        and "." in key
+        and re.fullmatch(r"[A-Za-z0-9._~-]+", key)
+    )
+    if not (is_v3 or is_v4):
         return "Wrong format"
     try:
         return "Connected" if TMDB(key).check() else "Rejected"

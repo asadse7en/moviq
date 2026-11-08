@@ -9,7 +9,8 @@ from ...core.tmdb import MAX_WORKERS
 from ..controls import RoundedCard, draw_rounded_rectangle
 from ..icons import draw_icon
 from ..window_utils import shortcut_variants, wheel_steps
-from ._common import APP_VERSION
+from . import general as settings_general
+from ._common import APP_VERSION, TMDB_KEY_URL, TMDB_SIGNUP_URL
 from .about import AboutTabMixin
 from .formatting import FormattingTabMixin
 from .providers import ProvidersTabMixin
@@ -142,6 +143,23 @@ class SettingsView(
     AboutTabMixin, ttk.Frame,
 ):
     """Tabbed settings layout and asynchronous validation/update status."""
+
+    @staticmethod
+    def _open_api_help_link(_event, text):
+        try:
+            tags = set(text.tag_names())
+        except TypeError:
+            tags = set()
+        if not tags:
+            try:
+                tags = set(text.tag_names("current"))
+            except TypeError:
+                tags = set()
+        if "tmdb_link" in tags:
+            settings_general.webbrowser.open(TMDB_SIGNUP_URL)
+        elif "api_link" in tags:
+            settings_general.webbrowser.open(TMDB_KEY_URL)
+        return "break"
 
     _SECTIONS = (
         ("Sources", "Sources"),
@@ -825,23 +843,30 @@ class SettingsView(
 
     def recolor(self, palette):
         self._configure_settings_styles(palette)
-        self._draw_sidebar_brand()
-        self._refresh_sidebar()
-        self.content_canvas.configure(background=palette["bg"])
-        self.recolor_safety(palette)
-        self._set_format_selector_theme(palette)
-        self._set_library_selector_theme(palette)
-        self._recolor_styled_entries(palette)
-        for surface in self._provider_card_surfaces:
+        if hasattr(self, "sidebar_brand_icon"):
+            self._draw_sidebar_brand()
+        if hasattr(self, "nav_buttons"):
+            self._refresh_sidebar()
+        if hasattr(self, "content_canvas"):
+            self.content_canvas.configure(background=palette["bg"])
+        if hasattr(self, "recolor_safety"):
+            self.recolor_safety(palette)
+        if hasattr(self, "_set_format_selector_theme"):
+            self._set_format_selector_theme(palette)
+        if hasattr(self, "_set_library_selector_theme"):
+            self._set_library_selector_theme(palette)
+        if hasattr(self, "_recolor_styled_entries"):
+            self._recolor_styled_entries(palette)
+        for surface in getattr(self, "_provider_card_surfaces", ()):
             surface.configure(background=palette["preset_surface"])
-        for card in self._settings_cards:
+        for card in getattr(self, "_settings_cards", ()):
             card.set_surface(
                 palette["bg"], palette["preset_surface"],
                 palette["preset_border"],
             )
-        for surface in self._settings_card_surfaces:
+        for surface in getattr(self, "_settings_card_surfaces", ()):
             surface.configure(background=palette["preset_surface"])
-        for name, row in self._provider_rows.items():
+        for name, row in getattr(self, "_provider_rows", {}).items():
             row["number"].configure(
                 background=palette["preset_selected"],
                 foreground=palette["muted"],
@@ -853,36 +878,38 @@ class SettingsView(
                     else palette["muted"]
                 ),
             )
-        for eye in self._provider_key_eyes.values():
+        for eye in getattr(self, "_provider_key_eyes", {}).values():
             eye.configure(background=palette["preset_surface"])
             eye.itemconfigure("eye", fill=palette["muted"])
             eye.itemconfigure(
                 "pupil", fill=palette["muted"], outline=palette["muted"],
             )
             eye.itemconfigure("slash", fill=palette["muted"])
-        for description, info in self._provider_descriptions:
+        for description, info in getattr(self, "_provider_descriptions", ()):
             description.configure(
                 background=palette["preset_surface"],
                 foreground=palette["muted"],
             )
-            self._render_provider_description(description, info)
-        for dot in self._provider_status_dots.values():
+            if hasattr(self, "_render_provider_description"):
+                self._render_provider_description(description, info)
+        for dot in getattr(self, "_provider_status_dots", {}).values():
             dot.configure(background=palette["preset_surface"])
-        for card in self._provider_blocks.values():
+        provider_blocks = getattr(self, "_provider_blocks", {})
+        for card in provider_blocks.values():
             border = (
                 palette["accent"]
-                if card is self._provider_blocks.get(self._provider_drag_name)
+                if card is provider_blocks.get(getattr(self, "_provider_drag_name", None))
                 else palette["preset_border"]
             )
             card.set_surface(
                 palette["bg"], palette["preset_surface"], border,
             )
-        for title in self._provider_card_titles:
+        for title in getattr(self, "_provider_card_titles", ()):
             title.configure(
                 background=palette["preset_surface"],
                 foreground=palette["fg"],
             )
-        for label, muted, accent in self._provider_card_labels:
+        for label, muted, accent in getattr(self, "_provider_card_labels", ()):
             label.configure(
                 background=palette["preset_surface"],
                 foreground=(
@@ -890,28 +917,34 @@ class SettingsView(
                     palette["muted"] if muted else palette["fg"]
                 ),
             )
-        for label, muted in self._labels:
+        for label, muted in getattr(self, "_labels", ()):
             try:
                 label.configure(foreground=(
                     palette["muted"] if muted else palette["fg"]
                 ))
             except tk.TclError:
                 pass
-        for label in (self.key_status_label,):
+        key_status_label = getattr(self, "key_status_label", None)
+        if key_status_label is not None:
             try:
-                label.configure(foreground=palette["muted"])
+                key_status_label.configure(foreground=palette["muted"])
             except tk.TclError:
                 pass
-        for name in self._provider_status:
-            self._style_provider_status(name)
-        for name, enabled in self._provider_enabled.items():
-            self._set_provider_row_enabled(name, enabled.get())
+        for name in getattr(self, "_provider_status", {}):
+            if hasattr(self, "_style_provider_status"):
+                self._style_provider_status(name)
+        for name, enabled in getattr(self, "_provider_enabled", {}).items():
+            if hasattr(self, "_set_provider_row_enabled"):
+                self._set_provider_row_enabled(name, enabled.get())
         for kind in ("movie", "tv"):
-            self._recolor_format_panel(kind, palette)
-            self._refresh_preset_cards(kind)
-        self._set_key_status(
-            self.key_status_var.get(),
-        )
+            if hasattr(self, "_recolor_format_panel"):
+                self._recolor_format_panel(kind, palette)
+            if hasattr(self, "_refresh_preset_cards"):
+                self._refresh_preset_cards(kind)
+        if hasattr(self, "_set_key_status"):
+            key_status_var = getattr(self, "key_status_var", None)
+            if key_status_var is not None:
+                self._set_key_status(key_status_var.get())
 
     def close(self):
         """Stop scheduled UI work and background network jobs."""

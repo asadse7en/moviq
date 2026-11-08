@@ -6,6 +6,7 @@ import uuid
 
 from .apply import apply_item_plan
 from .file_ops import rebase, undo_ops
+from .undo_journal import UndoJournal
 
 
 class RenameJournalError(RuntimeError):
@@ -60,13 +61,19 @@ class _OperationJournal:
 
 
 class _JournaledOperations(list):
-    def __init__(self, journal):
+    def __init__(self, journal, undo_journal=None):
         super().__init__()
         self.journal = journal
+        self.undo_journal = undo_journal
 
     def execute(self, operation, action):
         self.journal.execute(
-            operation, action, on_success=lambda: self.append(operation),
+            operation,
+            action,
+            on_success=lambda: (
+                self.append(operation),
+                self.undo_journal.append(operation) if self.undo_journal is not None else None,
+            ),
         )
 
     def rollback(self, start):
@@ -90,7 +97,7 @@ class RenameService:
     def __init__(
         self, items, plans, all_items, rename_subtitles, journal_path,
         events, cancel_event, total, skipped_count, conflict_count,
-        storage_gone=None,
+        storage_gone=None, undo_journal=None,
     ):
         self.items = items
         self.plans = plans
@@ -103,6 +110,7 @@ class RenameService:
         self.skipped_count = skipped_count
         self.conflict_count = conflict_count
         self.storage_gone = storage_gone
+        self.undo_journal = undo_journal or UndoJournal()
 
     def run(self):
         renamed_count = 0
@@ -119,7 +127,7 @@ class RenameService:
                 id(item): copy.copy(item) for item in self.all_items
             }
             with _OperationJournal(self.journal_path) as journal:
-                operations = _JournaledOperations(journal)
+                operations = _JournaledOperations(journal, self.undo_journal)
 
                 def apply_folder_renames(start):
                     for operation in operations[start:]:

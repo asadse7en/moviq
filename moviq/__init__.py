@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+from . import debug_trace
+
 __version__ = "1.1.1"
 
 

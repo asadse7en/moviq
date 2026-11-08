@@ -172,7 +172,7 @@ def build_main_page(app, page):
             "Manually match selected files, or all files if none are selected",
         ),
     ):
-        _tooltip = ToolTip(widget, text, app.pal["card"], app.pal["fg"])
+        ToolTip(widget, text, app.pal["card"], app.pal["fg"])
 
     ttk.Separator(
         page, orient="horizontal", style="HeaderDivider.TSeparator",

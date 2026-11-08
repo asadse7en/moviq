@@ -1660,10 +1660,10 @@ class SettingsDropdown(tk.Frame):
             self._chevron_id = None
         start = self._chevron_angle
         end = math.pi if opening else 0.0
-        started = time.monotonic()
+        self._chevron_started = time.monotonic()
 
         def advance():
-            progress = min(1.0, (time.monotonic() - started) / 0.12)
+            progress = min(1.0, (time.monotonic() - self._chevron_started) / 0.12)
             eased = 1 - (1 - progress) ** 3
             self._chevron_angle = start + (end - start) * eased
             self._draw_control()

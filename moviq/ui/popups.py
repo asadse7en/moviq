@@ -20,7 +20,7 @@ def apply_titlebar_theme(window, dark):
         (
             {"caption": "#1c1c1c", "text": "#edf2f7", "border": "#1c1c1c"}
             if dark else
-            {"caption": "#fafafa", "text": "#1f2937", "border": "#fafafa"}
+            {"caption": "#fafafa", "text": "#1f2937", "border": "#d1d5db"}
         ),
     )
 
@@ -73,7 +73,18 @@ def apply_titlebar_theme(window, dark):
         except (AttributeError, OSError, tk.TclError):
             return
 
-    apply()
+    handler = getattr(window, "_moviq_titlebar_handler", None)
+    if handler is None:
+        def on_configure(_event=None):
+            apply()
+
+        window._moviq_titlebar_handler = on_configure
+        try:
+            window.bind("<Configure>", on_configure, add="+")
+        except AttributeError:
+            pass
+    if getattr(window, "winfo_viewable", lambda: False)():
+        apply()
 
 
 class MatchProgressPopup:
@@ -404,12 +415,13 @@ class MatchProgressPopup:
             )
 
     def _truncate_current_text(self, text):
-        if self.current_font.measure(text) <= 620:
+        max_width = 440
+        if self.current_font.measure(text) <= max_width:
             return text
         shortened = text
         while shortened and self.current_font.measure(
             shortened + "...",
-        ) > 620:
+        ) > max_width:
             shortened = shortened[:-1]
         return f"{shortened.rstrip()}..." if shortened else "..."
 
@@ -478,24 +490,36 @@ class MatchProgressPopup:
             f"{progress:.1f}%"
             if 0 < progress < 1 else f"{int(progress)}%"
         )
-        self.progress_count_var.set(f"{completed} of {total}")
-        self.percent_var.set(percent)
-        self._set_progress(progress)
-        self.current_var.set(
-            self._truncate_current_text(current or "Preparing files..."),
-        )
-        if source:
-            self.source_var.set(
+        progress_count_var = getattr(self, "progress_count_var", None)
+        if progress_count_var is not None:
+            progress_count_var.set(f"{completed} of {total}")
+        percent_var = getattr(self, "percent_var", None)
+        if percent_var is not None:
+            percent_var.set(percent)
+        if hasattr(self, "_set_progress"):
+            self._set_progress(progress)
+        current_var = getattr(self, "current_var", None)
+        if current_var is not None:
+            text = current or "Preparing files..."
+            total_display = max(total, 1)
+            if text != "Preparing files..." and total_display > 0:
+                file_number = min(completed + 1, total_display)
+                noun = "Renaming file" if getattr(self, "task", None) == "rename" else "Matching file"
+                text = f"{noun} {file_number} of {total_display}: {text}"
+            current_var.set(self._truncate_current_text(text))
+        source_var = getattr(self, "source_var", None)
+        if source and source_var is not None:
+            source_var.set(
                 PROVIDER_INFO.get(source, {"label": source})["label"],
             )
-        for variable, value in zip(
-            self.counter_vars, (matched, flagged, failed),
-        ):
+        counter_vars = getattr(self, "counter_vars", ())
+        for variable, value in zip(counter_vars, (matched, flagged, failed)):
             variable.set(str(value))
-        if self.window.winfo_exists():
-            self.window.update_idletasks()
-            if self.task == "rename":
-                self.window.update()
+        window = getattr(self, "window", None)
+        if window is not None and getattr(window, "winfo_exists", lambda: False)():
+            window.update_idletasks()
+            if getattr(self, "task", None) == "rename":
+                window.update()
 
     def complete(
         self, completed, total, matched, flagged, failed, cancelled=False,

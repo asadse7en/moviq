@@ -1,4 +1,4 @@
-from .matching import NO_MATCH_FLOOR, _is_generic_title
+from .matching import NO_MATCH_FLOOR, _is_generic_title, _normalized_match_title
 from .matching import is_confident, is_year_like_title, rank, score
 from .matching import to_choice, to_tv_choice, year_of
 from .naming import norm, similarity
@@ -41,18 +41,33 @@ def match_movie_items(
 
     for item in items:
         item.match_method = "title only"
-    if _is_generic_title(items[0].query):
-        results = []
-        for item in items:
-            _append_result(
-                results, item, ("nomatch", None, ""), on_item_complete,
-            )
-        return restore_order(results)
     trace.trace_stage(
         lambda: [str(item.path) for item in items],
         "provider_query", search_query,
     )
     search_results = tmdb.search(search_query, items[0].year)
+    if _is_generic_title(items[0].query):
+        results = []
+        for item in items:
+            ranked = rank(search_results, item.query, item.year)
+            if ranked:
+                lead = ranked[0]
+                original_title = (lead.get("original_title") or "").strip()
+                normalized_query = _normalized_match_title(item.query)
+                if (
+                    original_title
+                    and _normalized_match_title(original_title) == normalized_query
+                    and _normalized_match_title(lead.get("title") or "")
+                    != normalized_query
+                ):
+                    _append_result(
+                        results, item, ("review", None, ""), on_item_complete,
+                    )
+                    continue
+            _append_result(
+                results, item, ("nomatch", None, ""), on_item_complete,
+            )
+        return restore_order(results)
     results = []
     for item in items:
         ranked = rank(search_results, item.query, item.year)
@@ -63,6 +78,20 @@ def match_movie_items(
                 for candidate in ranked[:5]
             ],
         )
+        if ranked:
+            lead = ranked[0]
+            original_title = (lead.get("original_title") or "").strip()
+            normalized_query = _normalized_match_title(item.query)
+            if (
+                original_title
+                and _normalized_match_title(original_title) == normalized_query
+                and _normalized_match_title(lead.get("title") or "")
+                != normalized_query
+            ):
+                _append_result(
+                    results, item, ("review", None, ""), on_item_complete,
+                )
+                continue
         if not ranked or score(ranked[0], item.query) < NO_MATCH_FLOOR:
             _append_result(
                 results, item, ("nomatch", None, ""), on_item_complete,

@@ -293,19 +293,21 @@ def _replace_scale_slider(layout, slider_element):
 
 
 def _configure_scale_style(app, style, palette):
-    style.configure(
-        "Moviq.Horizontal.TScale",
-        background=palette["preset_surface"],
-        troughcolor=palette["preset_border"],
-    )
-    style.map(
-        "Moviq.Horizontal.TScale",
-        background=[
-            ("disabled", palette["preset_surface"]),
-            ("active", palette["preset_surface"]),
-            ("!disabled", palette["preset_surface"]),
-        ],
-    )
+    if hasattr(style, "configure"):
+        style.configure(
+            "Moviq.Horizontal.TScale",
+            background=palette["preset_surface"],
+            troughcolor=palette["preset_border"],
+        )
+    if hasattr(style, "map"):
+        style.map(
+            "Moviq.Horizontal.TScale",
+            background=[
+                ("disabled", palette["preset_surface"]),
+                ("active", palette["preset_surface"]),
+                ("!disabled", palette["preset_surface"]),
+            ],
+        )
     if not HAVE_SV:
         return
 

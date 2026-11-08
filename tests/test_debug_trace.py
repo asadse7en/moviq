@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from moviq import trace
+from moviq import debug_trace
+
+trace = debug_trace
 
 
 class ParserTraceTests(unittest.TestCase):

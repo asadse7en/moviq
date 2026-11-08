@@ -7,7 +7,7 @@ from pathlib import Path
 def configure_auto_export(include_all=False):
     previous_trace_setting = os.environ.pop("PARSER_TRACE", None)
     try:
-        from . import trace
+        from . import debug_trace as trace
     finally:
         if previous_trace_setting is not None:
             os.environ["PARSER_TRACE"] = previous_trace_setting

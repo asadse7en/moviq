@@ -1,257 +1,57 @@
-name: Release
+﻿name: Release
 
 on:
   push:
     tags:
-      - "v*"
-  workflow_dispatch:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+  release:
+    runs-on: windows-latest
     steps:
-      - name: Check out repo
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
+          cache: 'pip'
 
-      - name: Install test dependencies
+      - name: Verify tag matches project version
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb python3-tk python3-venv
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart('v')
+          $projectVersion = python -c "from moviq import __version__; print(__version__)"
+          if ($version -ne $projectVersion) {
+              throw "Tag '$tag' does not match moviq.__version__ ('$projectVersion')."
+          }
 
-      - name: Create virtualenv and install app
-        run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[gui]"
+      - name: Install build dependencies
+        run: pip install -r packaging/requirements-build.txt
 
       - name: Run unit tests
-        run: |
-          . .venv/bin/activate
-          xvfb-run -a python -m unittest discover -s tests
+        run: python -m unittest discover -s tests
 
-      - name: Verify tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          . .venv/bin/activate
-          version="$(python -c "from moviq import __version__; print(__version__)")"
-          tag="${GITHUB_REF_NAME}"
-          expected="v${version}"
-          if [ "$tag" != "$expected" ]; then
-            echo "Tag $tag does not match moviq.__version__ ($expected)"
-            exit 1
-          fi
-
-  windows:
-    name: Windows
-    needs: test
-    runs-on: windows-2025
-    timeout-minutes: 30
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set version
+      - name: Ensure Inno Setup is installed
         shell: pwsh
         run: |
-          $version = python -c "from moviq import __version__; print(__version__)"
-          "MOVIQ_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+              choco install innosetup -y
+          }
 
-      - name: Install dependencies
+      - name: Build release artifacts
         shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[gui,build]"
+        run: powershell -File packaging/build.ps1
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup -y
-
-      - name: Build Windows release
-        shell: pwsh
-        run: pwsh packaging/build.ps1
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+      - name: Publish the release artifacts
+        uses: softprops/action-gh-release@v2
         with:
-          name: windows-release
-          path: release/dist/v${{ env.MOVIQ_VERSION }}/*
-          if-no-files-found: error
-
-  macos:
-    name: macOS (${{ matrix.arch }})
-    needs: test
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x64
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set version
-        shell: bash
-        run: |
-          version="$(python -c "from moviq import __version__; print(__version__)")"
-          echo "MOVIQ_VERSION=${version}" >> "$GITHUB_ENV"
-          echo "MOVIQ_ARCH=${{ matrix.arch }}" >> "$GITHUB_ENV"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[gui,build]"
-
-      - name: Build macOS app
-        run: |
-          pyinstaller packaging/moviq.spec --noconfirm --clean --distpath dist --workpath build
-          codesign --force --deep --sign - dist/Moviq.app
-
-      - name: Create DMG
-        run: |
-          hdiutil create -volname Moviq -srcfolder dist/Moviq.app -ov -format UDZO "dist/Moviq-${MOVIQ_VERSION}-macos-${MOVIQ_ARCH}.dmg"
-
-      - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-${{ matrix.arch }}
-          path: dist/Moviq-${{ env.MOVIQ_VERSION }}-macos-${{ matrix.arch }}.dmg
-          if-no-files-found: error
-
-  linux:
-    name: Linux
-    needs: test
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set version
-        shell: bash
-        run: |
-          version="$(python -c "from moviq import __version__; print(__version__)")"
-          echo "MOVIQ_VERSION=${version}" >> "$GITHUB_ENV"
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-tk python3-venv libfuse2
-
-      - name: Create venv and install app
-        run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[gui,build]"
-
-      - name: Build Linux app
-        run: |
-          . .venv/bin/activate
-          pyinstaller packaging/moviq.spec --noconfirm --clean --distpath dist --workpath build
-
-      - name: Create tar.gz
-        run: |
-          tar -czf "dist/Moviq-${MOVIQ_VERSION}-linux-x64.tar.gz" -C dist Moviq
-
-      - name: Create AppImage
-        shell: bash
-        run: |
-          set -e
-          rm -rf AppDir
-          mkdir -p AppDir/usr/bin
-          cp -a dist/Moviq/. AppDir/usr/bin/
-          cp assets/moviq-icon-512.png AppDir/moviq.png
-
-          cat > AppDir/AppRun <<'EOF'
-          #!/bin/sh
-          set -e
-          APPDIR="$(dirname "$(readlink -f "$0")")"
-          exec "$APPDIR/usr/bin/moviq" "$@"
-          EOF
-          chmod +x AppDir/AppRun
-
-          cat > AppDir/moviq.desktop <<'EOF'
-          [Desktop Entry]
-          Name=Moviq
-          Exec=moviq
-          Icon=moviq
-          Type=Application
-          Categories=AudioVideo;Utility;
-          EOF
-
-          curl -fsSL -o appimagetool-x86_64.AppImage \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir "dist/Moviq-${MOVIQ_VERSION}-linux-x64.AppImage"
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-release
-          path: |
-            dist/Moviq-${{ env.MOVIQ_VERSION }}-linux-x64.tar.gz
-            dist/Moviq-${{ env.MOVIQ_VERSION }}-linux-x64.AppImage
-          if-no-files-found: error
-
-  release:
-    name: Publish release
-    needs:
-      - windows
-      - macos
-      - linux
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          cd artifacts
-          find . -type f -not -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
-
-      - name: Create GitHub release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes artifacts/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release/dist/v${{ github.ref_name }}/*

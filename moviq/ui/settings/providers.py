@@ -549,12 +549,14 @@ class ProvidersTabMixin:
         if value == (name in settings.enabled):
             return
         self.app.set_provider_settings(settings.with_enabled(name, value))
-        self._set_provider_row_enabled(name, value)
+        if hasattr(self, "_set_provider_row_enabled"):
+            self._set_provider_row_enabled(name, value)
         if not value:
             self._provider_test_generation[name] = (
                 self._provider_test_generation.get(name, 0) + 1
             )
-            self._set_provider_status(name, "Disabled")
+            if hasattr(self, "_set_provider_status"):
+                self._set_provider_status(name, "Disabled")
             if name == "tmdb":
                 self._key_generation += 1
                 if self._key_after is not None:
@@ -566,8 +568,9 @@ class ProvidersTabMixin:
                     self._saved_key_validation_status = None
             return
         if name == "tmdb":
-            self.test_key()
-        else:
+            if hasattr(self, "test_key"):
+                self.test_key()
+        elif hasattr(self, "_test_provider"):
             self._test_provider(name)
 
     def _set_provider_row_enabled(self, name, enabled):

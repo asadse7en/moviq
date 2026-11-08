@@ -35,6 +35,59 @@ class Plan:
         self.move_generic_assets = False
         self.preserve_source_dirs = False
 
+
+def _shorten_stem_for_windows_path(dest_dir, stem, suffix):
+    dest_dir = Path(dest_dir)
+    candidate = stem or ""
+    if len(os.fspath(dest_dir / (candidate + suffix))) <= 259:
+        return candidate
+
+    max_stem_len = 259 - len(os.fspath(dest_dir)) - 1 - len(suffix)
+    if max_stem_len <= 0:
+        return None
+
+    tag_patterns = (
+        r"\(\d{4}\)",
+        r"\[[^\]]*(?:[A-Za-z]+id-\d+|id-\d+)[^\]]*\]",
+        r"\bS\d{1,2}E\d{1,4}\b",
+        r"\b\d{1,2}x\d{1,4}\b",
+        r"\bSeason\s+\d{1,2}\b",
+        r"\bEpisode\s+\d{1,4}\b",
+        r"\bE\d{1,4}\b",
+    )
+    kept = []
+    for pattern in tag_patterns:
+        for match in re.finditer(pattern, candidate, flags=re.IGNORECASE):
+            tag = match.group(0)
+            if tag and tag not in kept:
+                kept.append(tag)
+
+    if kept:
+        stripped = re.sub(
+            "|".join(re.escape(tag) for tag in kept),
+            " ",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        stripped = re.sub(r"[\s._-]+", " ", stripped).strip(" ._-")
+        tag_text = " ".join(kept)
+        prefix = stripped[: max(0, max_stem_len - len(tag_text) - 1)]
+        prefix = prefix.rstrip(" ._-")
+        shortened = f"{prefix} {tag_text}" if prefix else tag_text
+        shortened = re.sub(r"\s+", " ", shortened).strip(" ._-")
+        if shortened and len(os.fspath(dest_dir / (shortened + suffix))) <= 259:
+            return shortened
+        tag_text = tag_text[:max_stem_len].rstrip(" ._-")
+        if tag_text and len(os.fspath(dest_dir / (tag_text + suffix))) <= 259:
+            return tag_text
+
+    truncated = re.sub(r"\s+", " ", candidate).strip(" ._-")
+    truncated = truncated[:max_stem_len].rstrip(" ._-")
+    if truncated and len(os.fspath(dest_dir / (truncated + suffix))) <= 259:
+        return truncated
+    return None
+
+
 def is_hidden_path(path):
     path = Path(path)
     if path.name.startswith("."):
@@ -166,6 +219,9 @@ def make_plan(path, root, choice, make_folder, rename_folder, rename_file,
             dest_dir = rename_dir
     else:
         dest_dir = parent / fname if make_folder else parent
+    shortened = _shorten_stem_for_windows_path(dest_dir, new_stem, path.suffix)
+    if shortened is not None:
+        new_stem = shortened
     plan = Plan(dest_dir / (new_stem + path.suffix), dest_dir, rename_dir,
                 new_stem)
     plan.move_generic_assets = nvideos == 1
@@ -209,6 +265,9 @@ def make_tv_plan(
         if create_show_folder and root.name != show_folder else root
     )
     dest_dir = show_dir / season_folder if create_season_folder else show_dir
+    shortened = _shorten_stem_for_windows_path(dest_dir, new_stem, Path(path).suffix)
+    if shortened is not None:
+        new_stem = shortened
     plan = Plan(dest_dir / (new_stem + Path(path).suffix), dest_dir, None, new_stem)
     plan.cleanup_root = (
         root if create_show_folder or create_season_folder else None
@@ -254,6 +313,23 @@ def _move_asset(src, dest_dir, ops):
     )
 
 
+def _matches_longest_video_prefix(path, video):
+    path_stem = path.stem.casefold()
+    video_stem = video.stem.casefold()
+    if not path_stem.startswith(video_stem):
+        return False
+    matching_stems = [
+        other.stem.casefold()
+        for other in path.parent.iterdir()
+        if other.is_file()
+        and other.suffix.lower() in VIDEO_EXT
+        and path_stem.startswith(other.stem.casefold())
+    ]
+    if not matching_stems:
+        return True
+    return max(matching_stems, key=len) == video_stem
+
+
 def _execute_operation(ops, operation, action):
     execute = getattr(ops, "execute", None)
     if execute is not None:
@@ -270,11 +346,6 @@ def move_files(
     old_stem = video.stem
     group = [video]
     attached_exts = SIDECAR_EXT | IMAGE_EXT if include_images else SIDECAR_EXT
-    other_video_stems = [
-        path.stem.casefold() for path in video.parent.iterdir()
-        if path.is_file() and path != video
-        and path.suffix.lower() in VIDEO_EXT
-    ]
     for path in video.parent.iterdir():
         if (
             not path.is_file() or path == video
@@ -284,15 +355,11 @@ def move_files(
             continue
         part = path.stem[len(old_stem):]
         if path.suffix.lower() in SIDECAR_EXT:
-            if (
-                not _SIDECAR_TAGS.fullmatch(part)
-                or any(
-                    path.stem.casefold().startswith(video_stem)
-                    for video_stem in other_video_stems
-                )
-            ):
+            if not _SIDECAR_TAGS.fullmatch(part):
                 continue
         elif not path.name[len(old_stem):].startswith((".", "-", "_", " ")):
+            continue
+        if not _matches_longest_video_prefix(path, video):
             continue
         group.append(path)
     for p in group:

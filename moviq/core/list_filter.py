@@ -18,11 +18,16 @@ def matches_list_filter(
     item, status_filter=None, media_mode=None, query="", new_name="",
     original_name="",
 ):
-    if media_mode and item.media_type != media_mode:
+    media_type = getattr(item, "media_type", None)
+    if media_mode and media_type is not None and media_type != media_mode:
         return False
 
-    status = item.status
+    status = getattr(item, "status", None)
     if status_filter not in (None, "all"):
+        if status is None:
+            if status_filter == "error":
+                return is_error_item(item)
+            return False
         if status_filter == "ready":
             if is_error_item(item) or status not in ("auto", "manual"):
                 return False
@@ -33,7 +38,12 @@ def matches_list_filter(
             if status != "review" or is_error_item(item):
                 return False
         elif status_filter == "nomatch":
-            if status != "nomatch" and not is_error_item(item):
+            if is_error_item(item):
+                return False
+            if status != "nomatch":
+                return False
+        elif status_filter == "error":
+            if not is_error_item(item):
                 return False
         elif status != status_filter:
             return False
