@@ -136,7 +136,11 @@ def main() -> int:
         cwd=REPO_ROOT,
         check=True,
     )
-    subprocess.run(["git", "tag", f"v{next_version}"], cwd=REPO_ROOT, check=True)
+    subprocess.run(
+        ["git", "tag", "-a", f"v{next_version}", "-m", f"Moviq {next_version}"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
 
     print(f"Version: {next_version}")
     print("Push commands:")
