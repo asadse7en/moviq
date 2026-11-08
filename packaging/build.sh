@@ -53,7 +53,7 @@ EOF
   chmod +x "$app_dir/AppRun"
 
   appimage_tool="$repo_root/release/build/appimagetool-x86_64.AppImage"
-  curl -L "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage" -o "$appimage_tool"
+  curl -fL --retry 3 "https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage" -o "$appimage_tool"
   chmod +x "$appimage_tool"
   APPIMAGE_EXTRACT_AND_RUN=1 "$appimage_tool" "$app_dir" "$output_dir/Moviq-${version}-linux-x64.AppImage"
 fi
