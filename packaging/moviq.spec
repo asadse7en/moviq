@@ -15,7 +15,7 @@ datas = [
     *[
         (
             str(path),
-            str(Path("moviq") / "ui" / "assets" / path.relative_to(ui_asset_root)),
+            str(Path("moviq") / "ui" / "assets" / path.relative_to(ui_asset_root).parent),
         )
         for path in ui_asset_root.rglob("*")
         if path.is_file()
