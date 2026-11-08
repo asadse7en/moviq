@@ -45,6 +45,7 @@ Icon=moviq
 Categories=Utility;
 Terminal=false
 EOF
+  cp "$app_dir/usr/share/applications/moviq.desktop" "$app_dir/moviq.desktop"
   cat > "$app_dir/AppRun" <<'EOF'
 #!/bin/sh
 set -eu
@@ -56,7 +57,7 @@ EOF
   appimage_tool="$repo_root/release/build/appimagetool-x86_64.AppImage"
   curl -fL --retry 3 "https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage" -o "$appimage_tool"
   chmod +x "$appimage_tool"
-  APPIMAGE_EXTRACT_AND_RUN=1 "$appimage_tool" "$app_dir" "$output_dir/Moviq-${version}-linux-x64.AppImage"
+  ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$appimage_tool" "$app_dir" "$output_dir/Moviq-${version}-linux-x64.AppImage"
 fi
 
 if [[ "$target" == "macos" ]]; then
