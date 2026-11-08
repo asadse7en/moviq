@@ -192,5 +192,6 @@ jobs:
         with:
           draft: true
           generate_release_notes: true
+          name: Moviq ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: release-upload/*
