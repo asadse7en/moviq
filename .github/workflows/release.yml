@@ -11,7 +11,16 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+          - runner: ubuntu-22.04
+          - runner: macos-latest
+          - runner: macos-15-intel
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -34,34 +43,77 @@ jobs:
           }
 
       - name: Install build dependencies
-        run: pip install -r packaging/requirements-build.txt
+        shell: bash
+        run: |
+          python -m pip install -r packaging/requirements-build.txt
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk libfuse2
 
       - name: Run unit tests
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: python -m unittest discover -s tests
 
-      - name: Ensure Inno Setup is installed
-        shell: pwsh
-        run: |
-          $iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
-          if (-not $iscc) {
-              choco install innosetup -y
-          }
-
-      - name: Build release artifacts
+      - name: Build release artifacts (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: powershell -File packaging/build.ps1
 
+      - name: Build release artifacts (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash packaging/build.sh linux
+
+      - name: Build release artifacts (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash packaging/build.sh macos
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: moviq-build-${{ matrix.runner }}
+          path: release/dist/**
+
+  publish:
+    needs: release
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare combined release folder
+        shell: bash
+        run: |
+          mkdir -p "release/dist/${{ github.ref_name }}"
+          find release-artifacts -type f -exec cp -f {} "release/dist/${{ github.ref_name }}/" \;
+          find "release/dist/${{ github.ref_name }}" -type f -exec sha256sum {} + > "release/dist/${{ github.ref_name }}/SHA256SUMS.txt"
+
+      - name: Verify tag matches project version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          project_version="$(python -c "from moviq import __version__; print(__version__)")"
+          if [ "$version" != "$project_version" ]; then
+            echo "Tag '$tag' does not match moviq.__version__ ('$project_version')."
+            exit 1
+          fi
+
       - name: Publish the release artifacts
-        if: github.event_name != 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: release/dist/v${{ github.ref_name }}/*
-
-      - name: Upload build artifacts for manual runs
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: moviq-test-build
-          path: release/dist/**
+          files: release/dist/${{ github.ref_name }}/*

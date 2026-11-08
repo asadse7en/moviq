@@ -39,97 +39,100 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-win_exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name=f"Moviq-Portable-{version}",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(asset_root / "moviq-icon.ico"),
-)
-win_coll = COLLECT(
-    win_exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name=f"Moviq-Portable-{version}",
-)
+if sys.platform == "win32":
+    win_exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name=f"Moviq-Portable-{version}",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=str(asset_root / "moviq-icon.ico"),
+    )
+    win_coll = COLLECT(
+        win_exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name=f"Moviq-Portable-{version}",
+    )
 
-mac_exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name="Moviq",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=str(asset_root / "moviq-icon.icns"),
-)
-mac_coll = COLLECT(
-    mac_exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="Moviq",
-)
-mac_bundle = BUNDLE(
-    mac_coll,
-    name="Moviq.app",
-    icon=str(asset_root / "moviq-icon.icns"),
-    bundle_identifier="io.github.asadse7en.moviq",
-    info_plist={
-        "CFBundleShortVersionString": version,
-        "CFBundleVersion": version,
-        "NSHighResolutionCapable": True,
-        "LSMinimumSystemVersion": "11.0",
-    },
-)
+if sys.platform == "darwin":
+    mac_exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="Moviq",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=str(asset_root / "moviq-icon.icns"),
+    )
+    mac_coll = COLLECT(
+        mac_exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name="Moviq",
+    )
+    mac_bundle = BUNDLE(
+        mac_coll,
+        name="Moviq.app",
+        icon=str(asset_root / "moviq-icon.icns"),
+        bundle_identifier="io.github.asadse7en.moviq",
+        info_plist={
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "11.0",
+        },
+    )
 
-linux_exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name="moviq",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-linux_coll = COLLECT(
-    linux_exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="Moviq",
-)
+if sys.platform == "linux":
+    linux_exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="moviq",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+    linux_coll = COLLECT(
+        linux_exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name="Moviq",
+    )
