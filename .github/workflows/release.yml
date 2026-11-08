@@ -69,8 +69,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-tk libfuse2
+          sudo apt-get update && sudo apt-get install -y python3-tk libfuse2 desktop-file-utils
 
       - name: Run unit tests
         if: runner.os == 'Windows'

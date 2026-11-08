@@ -35,11 +35,12 @@ if [[ "$target" == "linux" ]]; then
   mkdir -p "$app_dir/usr/bin" "$app_dir/usr/share/applications"
   cp -a dist/Moviq/. "$app_dir/usr/bin/"
   cp "$repo_root/assets/moviq-icon-512.png" "$app_dir/moviq.png"
-  cat > "$app_dir/usr/share/applications/moviq.desktop" <<EOF
+  cat > "$app_dir/usr/share/applications/moviq.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Moviq
-Exec=usr/bin/moviq
+Comment=Rename movie and TV files for Jellyfin and Plex
+Exec=moviq
 Icon=moviq
 Categories=Utility;
 Terminal=false
