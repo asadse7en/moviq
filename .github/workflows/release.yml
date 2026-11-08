@@ -1,6 +1,7 @@
 ﻿name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -22,6 +23,7 @@ jobs:
           cache: 'pip'
 
       - name: Verify tag matches project version
+        if: github.event_name != 'workflow_dispatch'
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -50,8 +52,16 @@ jobs:
         run: powershell -File packaging/build.ps1
 
       - name: Publish the release artifacts
+        if: github.event_name != 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: release/dist/v${{ github.ref_name }}/*
+
+      - name: Upload build artifacts for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: moviq-test-build
+          path: release/dist/**
