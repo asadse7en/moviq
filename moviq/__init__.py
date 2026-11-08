@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import debug_trace
 
-__version__ = "1.2.1"
+__version__ = "2.0.0"
 
 
 def resource_path(rel):
