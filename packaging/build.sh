@@ -75,5 +75,18 @@ if [[ "$target" == "macos" ]]; then
       ;;
   esac
 
-  hdiutil create -volname "Moviq" -srcfolder "dist/Moviq.app" -format UDZO -ov -o "$output_dir/Moviq-${version}-macos-${arch_name}.dmg"
+  dmg_path="$output_dir/Moviq-${version}-macos-${arch_name}.dmg"
+  for attempt in $(seq 1 5); do
+    hdiutil detach -force /Volumes/Moviq >/dev/null 2>&1 || true
+    rm -f "$dmg_path"
+    if hdiutil create -volname "Moviq" -srcfolder "dist/Moviq.app" -format UDZO -fs HFS+ -ov -o "$dmg_path"; then
+      break
+    fi
+    if [[ "$attempt" -lt 5 ]]; then
+      sleep 10
+    else
+      echo "Failed to create macOS DMG after 5 attempts" >&2
+      exit 1
+    fi
+  done
 fi
