@@ -29,6 +29,34 @@ from moviq.ui.theme import (
     _switch_indicator_png,
 )
 
+_TEST_USER_DATA_TEMP = None
+_TEST_USER_DATA_PATCHERS = []
+
+
+def setUpModule():
+    global _TEST_USER_DATA_TEMP
+    _TEST_USER_DATA_TEMP = tempfile.TemporaryDirectory()
+    user_data_dir = Path(_TEST_USER_DATA_TEMP.name)
+    for target, value in (
+        ("moviq.core.config.USER_DATA_DIR", user_data_dir),
+        ("moviq.core.undo_journal.USER_DATA_DIR", user_data_dir),
+        (
+            "moviq.core.undo_journal.JOURNAL_PATH",
+            user_data_dir / "undo_journal.json",
+        ),
+        ("moviq.ui.app.USER_DATA_DIR", user_data_dir),
+    ):
+        patcher = patch(target, value)
+        patcher.start()
+        _TEST_USER_DATA_PATCHERS.append(patcher)
+
+
+def tearDownModule():
+    for patcher in reversed(_TEST_USER_DATA_PATCHERS):
+        patcher.stop()
+    _TEST_USER_DATA_PATCHERS.clear()
+    _TEST_USER_DATA_TEMP.cleanup()
+
 
 class SwitchThemeTests(unittest.TestCase):
     @staticmethod
@@ -725,6 +753,65 @@ class StatusPresentationTests(unittest.TestCase):
             "done": (table_colors["done"][1], table_colors["done"][0]),
         })
         app.filter_control.set_selected.assert_called_once_with("all")
+
+
+class RenameJournalLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _app_with_journal(journal):
+        app = App.__new__(App)
+        app._rename_errors = []
+        app._rename_running = True
+        app._vcount = set()
+        app._rename_before = None
+        app._rename_progress = None
+        app._undo_journal = journal
+        app.refresh_all = Mock()
+        app.status = Mock()
+        app._update_undo_button = Mock()
+        app._push_rename_undo = Mock()
+        return app
+
+    def test_cancel_finishes_undo_journal(self):
+        journal = Mock()
+        app = self._app_with_journal(journal)
+
+        App._finish_rename(
+            app, [], [], 0, 0, 0, True, 0, 0, 0, False, 0,
+        )
+
+        journal.finish.assert_called_once_with()
+        self.assertIsNone(app._undo_journal)
+
+    def test_storage_disconnect_keeps_undo_journal(self):
+        journal = Mock()
+        app = self._app_with_journal(journal)
+
+        with patch("moviq.ui.app.show_warning"):
+            App._finish_rename(
+                app, [], [], 0, 0, 0, False, 0, 0, 0, True, 1,
+            )
+
+        journal.finish.assert_not_called()
+        self.assertIs(app._undo_journal, journal)
+
+    def test_restore_prompt_uses_short_wrapped_message(self):
+        app = App.__new__(App)
+        with patch(
+            "moviq.ui.app.read_ops",
+            return_value=[("move", Path("before"), Path("after"))],
+        ), patch(
+            "moviq.ui.app._show", return_value=False,
+        ) as show, patch(
+            "moviq.core.undo_journal.clear_journal",
+        ):
+            App._prompt_pending_undo_journal(app)
+
+        self.assertEqual(show.call_args.args[1], "Restore interrupted rename?")
+        self.assertEqual(
+            show.call_args.args[2],
+            "Moviq was interrupted during a rename.\n"
+            "Restore files to their previous locations?",
+        )
 
 
 class MatchCancellationTests(unittest.TestCase):

@@ -408,8 +408,9 @@ class App:
             return
         restore = _show(
             self,
-            "Moviq closed during a rename. Restore files?",
-            "Moviq was interrupted while applying rename operations. Restore the files to their previous locations?",
+            "Restore interrupted rename?",
+            "Moviq was interrupted during a rename.\n"
+            "Restore files to their previous locations?",
             "question",
             [("Ignore", False), ("Restore", True)],
             1,
@@ -3334,7 +3335,7 @@ class App:
         self._rename_before = None
         if (
             getattr(self, "_undo_journal", None) is not None
-            and not cancelled and not storage_disconnected
+            and not storage_disconnected
         ):
             self._undo_journal.finish()
             self._undo_journal = None

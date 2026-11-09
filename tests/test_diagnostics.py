@@ -180,9 +180,9 @@ class DiagnosticsTests(unittest.TestCase):
             ))
             stack.enter_context(patch("moviq.ui.app.App", return_value=app))
             stack.enter_context(patch("moviq.ui.app.HAVE_DND", False))
-            stack.enter_context(patch("moviq.__main__.tk.Tk", return_value=root))
+            stack.enter_context(patch("tkinter.Tk", return_value=root))
             stack.enter_context(patch(
-                "moviq.__main__.tk.PhotoImage",
+                "tkinter.PhotoImage",
                 side_effect=tk.TclError("no image"),
             ))
             main(["--test"])

@@ -24,6 +24,7 @@ from moviq.core.matching import (
 from moviq.core.match_pipeline import match_tv_items
 from moviq.core.models import Item
 from moviq.core.rename_service import RenameService
+from moviq.core.undo_journal import NullUndoJournal
 from moviq.core.naming import (
     folder_name_for, parse_name, parse_tv_episode, parse_tv_episode_title,
     parse_tv_name, tv_episode_name_for,
@@ -1995,11 +1996,39 @@ class FileOperationTests(unittest.TestCase):
 
 
 class RenameServiceTests(unittest.TestCase):
+    def setUp(self):
+        self.user_data_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.user_data_temp.cleanup)
+        user_data_dir = Path(self.user_data_temp.name)
+        for target, value in (
+            ("moviq.core.config.USER_DATA_DIR", user_data_dir),
+            ("moviq.core.undo_journal.USER_DATA_DIR", user_data_dir),
+            (
+                "moviq.core.undo_journal.JOURNAL_PATH",
+                user_data_dir / "undo_journal.json",
+            ),
+            ("moviq.ui.app.USER_DATA_DIR", user_data_dir),
+        ):
+            patcher = patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_storage_gone_detects_device_io_errors(self):
         self.assertTrue(
             _storage_gone(OSError(errno.EIO, "drive disconnected"), ""),
         )
         self.assertFalse(_storage_gone(OSError(errno.EACCES, "denied"), ""))
+
+    def test_null_undo_journal_is_a_no_op(self):
+        journal = NullUndoJournal()
+
+        self.assertIs(journal.start([("move", "before", "after")]), journal)
+        self.assertIs(journal.append(("move", "before", "after")), journal)
+        self.assertIs(journal.finish(), journal)
+        self.assertEqual(journal.read(), [])
+        self.assertFalse(
+            (Path(self.user_data_temp.name) / "undo_journal.json").exists(),
+        )
 
     def test_successful_rename_reports_progress_and_journals_operations(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -2014,6 +2043,7 @@ class RenameServiceTests(unittest.TestCase):
                 [item], {id(item): object()}, [item], True, journal_path,
                 events, Event(), 1, 0, 0,
             )
+            self.assertIsInstance(service.undo_journal, NullUndoJournal)
 
             def rename(path, _plan, ops, rename_subtitles=True):
                 ops.execute(
@@ -2055,6 +2085,9 @@ class RenameServiceTests(unittest.TestCase):
             self.assertEqual(
                 [record["phase"] for record in records],
                 ["before", "after"],
+            )
+            self.assertFalse(
+                (Path(self.user_data_temp.name) / "undo_journal.json").exists(),
             )
 
     def test_partial_item_failure_is_rolled_back_and_journaled(self):

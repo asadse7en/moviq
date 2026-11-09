@@ -42,13 +42,17 @@ def _atomic_write(path, payload):
         raise
 
 
-def write_ops(ops, path=JOURNAL_PATH):
+def write_ops(ops, path=None):
+    if path is None:
+        path = JOURNAL_PATH
     serialized = [_serialize_op(op) for op in ops]
     _atomic_write(path, serialized)
     return serialized
 
 
-def append_op(operation, path=JOURNAL_PATH):
+def append_op(operation, path=None):
+    if path is None:
+        path = JOURNAL_PATH
     ops = read_ops(path)
     if operation is not None:
         ops.append(_serialize_op(operation))
@@ -56,7 +60,9 @@ def append_op(operation, path=JOURNAL_PATH):
     return ops
 
 
-def read_ops(path=JOURNAL_PATH):
+def read_ops(path=None):
+    if path is None:
+        path = JOURNAL_PATH
     path = Path(path)
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -72,7 +78,9 @@ def read_ops(path=JOURNAL_PATH):
     ]
 
 
-def clear_journal(path=JOURNAL_PATH):
+def clear_journal(path=None):
+    if path is None:
+        path = JOURNAL_PATH
     path = Path(path)
     try:
         path.unlink()
@@ -88,7 +96,9 @@ class PlannedOps(list):
 
 
 class UndoJournal:
-    def __init__(self, path=JOURNAL_PATH):
+    def __init__(self, path=None):
+        if path is None:
+            path = JOURNAL_PATH
         self.path = Path(path)
         self._ops = []
 
@@ -117,7 +127,7 @@ class UndoJournal:
         return list(self._ops)
 
     @classmethod
-    def restore_pending(cls, path=JOURNAL_PATH):
+    def restore_pending(cls, path=None):
         return read_ops(path)
 
     def __enter__(self):
@@ -125,3 +135,17 @@ class UndoJournal:
 
     def __exit__(self, *_args):
         self.finish()
+
+
+class NullUndoJournal:
+    def start(self, ops=None):
+        return self
+
+    def append(self, operation):
+        return self
+
+    def finish(self):
+        return self
+
+    def read(self):
+        return []

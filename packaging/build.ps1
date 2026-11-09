@@ -5,6 +5,28 @@ $temporaryPublishDirectory = $null
 $temporaryBackupDirectory = $null
 $stagingDirectory = $null
 
+function Move-DirectoryWithRetry($source, $destination) {
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try {
+            [System.IO.Directory]::Move($source, $destination)
+            return
+        }
+        catch [System.IO.IOException] {
+            if ($attempt -eq 6) {
+                throw
+            }
+        }
+        catch [System.UnauthorizedAccessException] {
+            if ($attempt -eq 6) {
+                throw
+            }
+        }
+
+        Write-Warning "release folder is locked, retrying $($attempt + 1) of 6"
+        Start-Sleep -Seconds 3
+    }
+}
+
 try {
     Set-Location -LiteralPath $projectRoot
 
@@ -257,15 +279,48 @@ try {
         $temporaryBackupDirectory = Join-Path $releaseDistPath (
             ".$versionDirectoryName-$([Guid]::NewGuid().ToString('N')).bak"
         )
-        [System.IO.Directory]::Move(
-            $versionOutputDirectory, $temporaryBackupDirectory
-        )
+        Move-DirectoryWithRetry `
+            $versionOutputDirectory `
+            $temporaryBackupDirectory
     }
     try {
-        [System.IO.Directory]::Move(
-            $temporaryPublishDirectory, $versionOutputDirectory
-        )
-        $temporaryPublishDirectory = $null
+        try {
+            Move-DirectoryWithRetry `
+                $temporaryPublishDirectory `
+                $versionOutputDirectory
+            $temporaryPublishDirectory = $null
+        }
+        catch {
+            if (
+                $_.Exception -isnot [System.IO.IOException] -and
+                $_.Exception -isnot [System.UnauthorizedAccessException]
+            ) {
+                throw
+            }
+
+            New-Item -ItemType Directory -Path $versionOutputDirectory -Force |
+                Out-Null
+            foreach ($fileName in @(
+                $archiveName, $installerName, "SHA256SUMS.txt"
+            )) {
+                [System.IO.File]::Copy(
+                    (Join-Path $temporaryPublishDirectory $fileName),
+                    (Join-Path $versionOutputDirectory $fileName),
+                    $true
+                )
+            }
+            try {
+                Remove-Item `
+                    -LiteralPath $temporaryPublishDirectory `
+                    -Recurse `
+                    -Force `
+                    -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Could not remove temporary release folder $temporaryPublishDirectory`: $($_.Exception.Message)"
+            }
+            $temporaryPublishDirectory = $null
+        }
     }
     catch {
         if (

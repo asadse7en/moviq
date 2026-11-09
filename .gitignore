@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 unready_report.json
 release/
+smoke-logs/
 docs/
 .env
 REFACTOR_RULES.md

@@ -6,7 +6,7 @@ import uuid
 
 from .apply import apply_item_plan
 from .file_ops import rebase, undo_ops
-from .undo_journal import UndoJournal
+from .undo_journal import NullUndoJournal
 
 
 class RenameJournalError(RuntimeError):
@@ -110,7 +110,9 @@ class RenameService:
         self.skipped_count = skipped_count
         self.conflict_count = conflict_count
         self.storage_gone = storage_gone
-        self.undo_journal = undo_journal or UndoJournal()
+        self.undo_journal = (
+            undo_journal if undo_journal is not None else NullUndoJournal()
+        )
 
     def run(self):
         renamed_count = 0
