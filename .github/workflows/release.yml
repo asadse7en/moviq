@@ -252,11 +252,12 @@ jobs:
           if-no-files-found: error
 
       - name: Upload smoke test logs
-        if: failure()
+        if: always() && (github.event_name == 'workflow_dispatch' || failure())
         uses: actions/upload-artifact@v7
         with:
           name: smoke-logs-${{ matrix.runner }}
           path: smoke-logs/
+          retention-days: 7
 
   checksums:
     needs: release
@@ -273,7 +274,7 @@ jobs:
         shell: bash
         run: |
           cd release-artifacts
-          sha256sum * > SHA256SUMS.txt
+          sha256sum Moviq-* > SHA256SUMS.txt
 
       - name: Upload checksums artifact
         uses: actions/upload-artifact@v7
@@ -318,4 +319,6 @@ jobs:
           generate_release_notes: true
           name: Moviq ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: release-upload/*
+          files: |
+            release-upload/Moviq-*
+            release-upload/SHA256SUMS.txt
