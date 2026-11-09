@@ -4,13 +4,33 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "assets/**"
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "assets/**"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-22.04
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -21,8 +41,35 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: Install build dependencies
-        run: pip install -r packaging/requirements-build.txt
+      - name: Install dependencies
+        run: python -m pip install -r packaging/requirements-build.txt
+
+      - name: Install Linux GUI test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb
 
       - name: Run unit tests
-        run: python -m unittest discover -s tests
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a python -X faulthandler -m unittest discover -s tests -v > test-output.log 2>&1
+          else
+            python -X faulthandler -m unittest discover -s tests -v > test-output.log 2>&1
+          fi
+          test_status=$?
+          cat test-output.log
+          if [[ $test_status -ne 0 ]]; then
+            failing_test="$(grep -E '^(FAIL|ERROR): ' test-output.log | head -n 1 | sed -E 's/^(FAIL|ERROR): ([^ ]+).*/\2/')"
+            if [[ -z "$failing_test" ]]; then
+              failing_test="$(grep -E '^test_.* \([^)]*\) \.\.\.' test-output.log | tail -n 1 | sed -E 's/ \.\.\..*$//')"
+            fi
+            if [[ -z "$failing_test" ]]; then
+              failing_test="unknown test (see test output)"
+            fi
+            echo "Tests failed on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Tests failed::$failing_test"
+          fi
+          exit "$test_status"

@@ -1,6 +1,7 @@
 import base64
 import queue
 import struct
+import sys
 import tempfile
 import threading
 import tkinter as tk
@@ -235,6 +236,10 @@ class FileDialogInitialDirectoryTests(unittest.TestCase):
 
 
 class WindowStateTests(unittest.TestCase):
+    @unittest.skipUnless(
+        sys.platform == "win32",
+        "Maximized window state restoration is Windows-specific",
+    )
     def test_restores_maximized_state_after_clamping_geometry(self):
         class Root:
             def __init__(self):
