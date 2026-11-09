@@ -160,9 +160,17 @@ jobs:
 
           $setupExe = Join-Path $releaseDir "Moviq-$version-windows-x64-setup.exe"
           $installDir = Join-Path $env:RUNNER_TEMP "moviq-installed"
-          & $setupExe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installDir"
-          if ($LASTEXITCODE -ne 0) { throw "Silent installer exited with code $LASTEXITCODE." }
+          $setupLog = Join-Path $env:RUNNER_TEMP "setup.log"
+          $proc = Start-Process -FilePath $setupExe -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$installDir","/LOG=$setupLog") -Wait -PassThru
+          New-Item -ItemType Directory -Path smoke-logs -Force | Out-Null
+          if (Test-Path -LiteralPath $setupLog) { Copy-Item -LiteralPath $setupLog -Destination smoke-logs }
+          if ($proc.ExitCode -ne 0) { Get-Content $setupLog -ErrorAction SilentlyContinue; throw "Installer exited with code $($proc.ExitCode)." }
           $installedExe = Join-Path $installDir "$portableName.exe"
+          if (-not (Test-Path -LiteralPath $installedExe)) {
+            Get-Content $setupLog -ErrorAction SilentlyContinue
+            Get-ChildItem -Recurse $installDir -ErrorAction SilentlyContinue
+            throw "Installer finished but $installedExe is missing."
+          }
           python packaging/smoke_test.py windows-installed $installedExe --smoke-test windows-installed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
