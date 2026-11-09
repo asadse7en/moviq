@@ -1,4 +1,4 @@
-﻿name: Release
+name: Release
 
 on:
   workflow_dispatch:
@@ -7,10 +7,69 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python-version: '3.12'
+          - os: ubuntu-22.04
+            python-version: '3.12'
+          - os: macos-latest
+            python-version: '3.12'
+          - os: ubuntu-22.04
+            python-version: '3.10'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: python -m pip install -r packaging/requirements-build.txt
+
+      - name: Install Linux GUI test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set +e
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            xvfb-run -a python -X faulthandler -m unittest discover -s tests -v > test-output.log 2>&1
+          else
+            python -X faulthandler -m unittest discover -s tests -v > test-output.log 2>&1
+          fi
+          test_status=$?
+          cat test-output.log
+          if [[ $test_status -ne 0 ]]; then
+            failing_test="$(grep -E '^(FAIL|ERROR): ' test-output.log | head -n 1 | sed -E 's/^(FAIL|ERROR): ([^ ]+).*/\2/')"
+            if [[ -z "$failing_test" ]]; then
+              failing_test="$(grep -E '^test_.* \([^)]*\) \.\.\.' test-output.log | tail -n 1 | sed -E 's/ \.\.\..*$//')"
+            fi
+            if [[ -z "$failing_test" ]]; then
+              failing_test="unknown test (see test output)"
+            fi
+            echo "Tests failed on ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Tests failed::$failing_test"
+          fi
+          exit "$test_status"
+
   release:
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -24,7 +83,6 @@ jobs:
             arch: arm64
           - runner: macos-15-intel
             arch: x64
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -50,7 +108,7 @@ jobs:
           "MOVIQ_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify tag matches project version
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'push'
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
@@ -62,19 +120,14 @@ jobs:
 
       - name: Install build dependencies
         shell: bash
-        run: |
-          python -m pip install -r packaging/requirements-build.txt
+        run: python -m pip install -r packaging/requirements-build.txt
 
-      - name: Install Linux build dependencies
+      - name: Install Linux build and smoke-test dependencies
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          sudo apt-get update && sudo apt-get install -y python3-tk libfuse2 desktop-file-utils
-
-      - name: Run unit tests
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: python -m unittest discover -s tests
+          sudo apt-get update
+          sudo apt-get install -y python3-tk xvfb libfuse2 desktop-file-utils
 
       - name: Build release artifacts (Windows)
         if: runner.os == 'Windows'
@@ -90,6 +143,60 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: bash packaging/build.sh macos
+
+      - name: Smoke-test Windows release files
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:MOVIQ_VERSION
+          $releaseDir = "release/dist/v$version"
+          $portableName = "Moviq-Portable-$version"
+          $portableDir = Join-Path $env:RUNNER_TEMP "moviq-portable"
+          $portableZip = Join-Path $releaseDir "Moviq-$version-windows-x64-portable.zip"
+          $portableExe = Join-Path $portableDir "$portableName\$portableName.exe"
+          Expand-Archive -LiteralPath $portableZip -DestinationPath $portableDir -Force
+          python packaging/smoke_test.py windows-portable $portableExe --smoke-test windows-portable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $setupExe = Join-Path $releaseDir "Moviq-$version-windows-x64-setup.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "moviq-installed"
+          & $setupExe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installDir"
+          if ($LASTEXITCODE -ne 0) { throw "Silent installer exited with code $LASTEXITCODE." }
+          $installedExe = Join-Path $installDir "$portableName.exe"
+          python packaging/smoke_test.py windows-installed $installedExe --smoke-test windows-installed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Smoke-test Linux release files
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          release_dir="release/dist/v${MOVIQ_VERSION}"
+          appimage="$release_dir/Moviq-${MOVIQ_VERSION}-linux-x64.AppImage"
+          tarball="$release_dir/Moviq-${MOVIQ_VERSION}-linux-x64.tar.gz"
+          tar_dir="$RUNNER_TEMP/moviq-tar"
+          mkdir -p "$tar_dir"
+          tar -xzf "$tarball" -C "$tar_dir"
+          xvfb-run -a python packaging/smoke_test.py linux-appimage \
+            env APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" \
+            --smoke-test linux-appimage
+          xvfb-run -a python packaging/smoke_test.py linux-tar \
+            "$tar_dir/Moviq/moviq" --smoke-test linux-tar
+
+      - name: Smoke-test macOS release file
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          release_dir="release/dist/v${MOVIQ_VERSION}"
+          dmg="$release_dir/Moviq-${MOVIQ_VERSION}-macos-${{ matrix.arch }}.dmg"
+          mount_dir="$RUNNER_TEMP/moviq-dmg"
+          app_dir="$RUNNER_TEMP/moviq-installed"
+          mkdir -p "$mount_dir" "$app_dir"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg"
+          ditto "$mount_dir/Moviq.app" "$app_dir/Moviq.app"
+          hdiutil detach "$mount_dir"
+          python packaging/smoke_test.py macos-installed \
+            "$app_dir/Moviq.app/Contents/MacOS/Moviq" \
+            --smoke-test macos-installed
 
       - name: Upload Windows setup artifact
         if: runner.os == 'Windows'
@@ -136,6 +243,13 @@ jobs:
           archive: false
           if-no-files-found: error
 
+      - name: Upload smoke test logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-logs-${{ matrix.runner }}
+          path: smoke-logs/
+
   checksums:
     needs: release
     runs-on: ubuntu-latest
@@ -162,9 +276,11 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: checksums
-    if: github.event_name != 'workflow_dispatch'
+    needs: [test, release, checksums]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -188,7 +304,7 @@ jobs:
           fi
 
       - name: Publish the release artifacts
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           draft: true
           generate_release_notes: true
