@@ -789,7 +789,7 @@ class App:
         self.apply_theme(self.mode)
         self.sync_settings()
         self.update_summary()
-        self.show_page("main" if self.key_var.get().strip() else "settings")
+        self.show_page("main")
 
     def show_page(self, name):
         self.page_main.pack_forget()
