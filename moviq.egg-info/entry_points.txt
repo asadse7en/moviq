@@ -1,2 +1,0 @@
-[gui_scripts]
-moviq = moviq.__main__:main

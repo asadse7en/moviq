@@ -9,7 +9,10 @@ from tkinter import ttk
 import webbrowser
 
 from ..core.providers.settings import PROVIDER_INFO
-from .controls import RoundedCard, create_action_button
+from .controls import (
+    RoundedCard, create_action_button, draw_rounded_rectangle,
+)
+from .icons import draw_icon
 from .window_utils import set_window_icon
 
 
@@ -762,7 +765,6 @@ class AppPopup(tk.Toplevel):
             foreground=palette["accent"],
             font="TkTextFont",
         )
-
     def _build_content(self, title, message, kind):
         palette = self.palette
         ttk.Separator(
@@ -916,25 +918,227 @@ class ApiKeyPromptDialog(AppPopup):
     def __init__(self, app):
         super().__init__(
             app,
-            "Get better matches with a free API key",
-            "Moviq works without a key, but TMDb or OMDb give more accurate "
-            "results. Both are free and neither asks for a credit card.",
+            "Moviq",
+            "",
             "info",
             [
                 ("Cancel", "cancel"),
-                ("Open Sources", "sources"),
                 ("Run anyway", "run"),
+                ("Add API key", "sources"),
             ],
-            1,
+            2,
             "cancel",
-            links=(
-                {
-                    "text": "Get a free TMDb key",
-                    "url": "https://www.themoviedb.org/settings/api",
-                },
-                {
-                    "text": "Get a free OMDb key",
-                    "url": "https://www.omdbapi.com/apikey.aspx",
-                },
+        )
+
+    def _build_content(self, _title, _message, _kind):
+        palette = self.palette
+        scale = self.app.UI_SCALE
+        scaled = lambda value: round(value * scale)
+        width = scaled(560)
+        background = palette["card"]
+        style = ttk.Style(self)
+        style.configure("ApiKeyPrompt.TFrame", background=background)
+
+        ttk.Separator(
+            self,
+            orient="horizontal",
+            style="Popup.Divider.TSeparator",
+        ).pack(side="top", fill="x")
+        content = ttk.Frame(
+            self, style="ApiKeyPrompt.TFrame",
+            padding=(scaled(20), scaled(20), scaled(20), scaled(16)),
+        )
+        content.pack(fill="both", expand=True)
+        content.columnconfigure(0, weight=1)
+
+        top = ttk.Frame(content, style="ApiKeyPrompt.TFrame")
+        top.grid(row=0, column=0, sticky="ew")
+        top.columnconfigure(1, weight=1)
+
+        tile_size = scaled(40)
+        tile = tk.Canvas(
+            top, width=tile_size, height=tile_size, background=background,
+            highlightthickness=0, bd=0,
+        )
+        tile.grid(row=0, column=0, rowspan=2, sticky="n",
+                  padx=(0, scaled(16)))
+        draw_rounded_rectangle(
+            tile, 0, 0, tile_size, tile_size, scaled(12),
+            palette["logo_bg"], palette["logo_bg"], background=background,
+        )
+        draw_icon(
+            tile, "key", scaled(20), palette["accent"],
+            (tile_size / 2, tile_size / 2),
+        )
+        ttk.Label(
+            top,
+            text="Get more accurate matches",
+            style="Popup.Title.TLabel",
+        ).grid(row=0, column=1, sticky="w")
+        message = ttk.Label(
+            top,
+            text=(
+                "Moviq works without a key, but a free TMDb or OMDb key "
+                "gives better results."
+            ),
+            style="Popup.Message.TLabel",
+            wraplength=scaled(460),
+            justify="left",
+        )
+        message.grid(
+            row=1, column=1, sticky="w", pady=(scaled(4), 0),
+        )
+
+        cards = ttk.Frame(content, style="ApiKeyPrompt.TFrame")
+        cards.grid(
+            row=1, column=0, sticky="ew", pady=(scaled(24), 0),
+        )
+        cards.columnconfigure(0, weight=1, uniform="provider-card")
+        cards.columnconfigure(1, weight=1, uniform="provider-card")
+
+        providers = (
+            (
+                "Get a TMDb key",
+                "https://www.themoviedb.org/settings/api",
+            ),
+            (
+                "Get an OMDb key",
+                "https://www.omdbapi.com/apikey.aspx",
             ),
         )
+
+        def open_link(url):
+            webbrowser.open(url)
+
+        def set_card_surface(target, children, active):
+            surface = palette["btn_hi"] if active else palette["btn"]
+            border = (
+                palette["accent"] if active else palette["header_border"]
+            )
+            target.set_surface(background, surface, border)
+            for child in children[2:]:
+                if isinstance(child, (tk.Canvas, tk.Frame, tk.Label)):
+                    child.configure(background=surface)
+
+        def update_card_hover(target, children):
+            pointer = self.winfo_containing(
+                self.winfo_pointerx(), self.winfo_pointery(),
+            )
+            while pointer is not None and pointer is not target:
+                pointer = getattr(pointer, "master", None)
+            set_card_surface(target, children, pointer is not None)
+
+        for column, (title, url) in enumerate(providers):
+            card = RoundedCard(
+                cards,
+                background=background,
+                surface=palette["btn"],
+                border=palette["header_border"],
+                radius=scaled(10),
+                height=scaled(88),
+            )
+            card.grid(
+                row=0, column=column, sticky="ew",
+                padx=(0, scaled(6)) if column == 0 else (scaled(6), 0),
+            )
+            card.content.configure(
+                padx=scaled(14), pady=scaled(12),
+            )
+            card.content.columnconfigure(0, weight=1)
+            card.content.rowconfigure(0, weight=1)
+            text_frame = tk.Frame(
+                card.content, background=palette["btn"],
+                bd=0, highlightthickness=0,
+            )
+            text_frame.grid(row=0, column=0, sticky="w")
+            heading = tk.Label(
+                text_frame, text=title, background=palette["btn"],
+                foreground=palette["fg"], font="TkHeadingFont", anchor="w",
+            )
+            heading.pack(anchor="w")
+            subtitle = tk.Label(
+                text_frame, text="Free, no credit card",
+                background=palette["btn"], foreground=palette["muted"],
+                font="TkTextFont", anchor="w",
+            )
+            subtitle.pack(anchor="w", pady=(scaled(2), 0))
+            icon = tk.Canvas(
+                card.content, width=scaled(18), height=scaled(18),
+                background=palette["btn"], highlightthickness=0, bd=0,
+            )
+            icon.grid(row=0, column=1, sticky="e", padx=(scaled(8), 0))
+            draw_icon(
+                icon, "external-link", scaled(16), palette["accent"],
+                (scaled(9), scaled(9)),
+            )
+
+            widgets = [card, card.content, text_frame, heading, subtitle, icon]
+
+            def on_enter(_event, target=card, children=widgets):
+                set_card_surface(target, children, True)
+
+            def on_leave(_event, target=card, children=widgets):
+                self.after_idle(
+                    lambda: update_card_hover(target, children),
+                )
+
+            for widget in widgets:
+                widget.configure(cursor="hand2")
+                widget.bind(
+                    "<Button-1>",
+                    lambda _event, target=url: open_link(target),
+                )
+                widget.bind(
+                    "<Enter>", on_enter,
+                )
+                widget.bind(
+                    "<Leave>", on_leave,
+                )
+
+        footer = ttk.Frame(content, style="ApiKeyPrompt.TFrame")
+        footer.grid(
+            row=2, column=0, sticky="ew", pady=(scaled(20), 0),
+        )
+        footer.columnconfigure(1, weight=1)
+        cancel = tk.Label(
+            footer,
+            text="Cancel",
+            background=background,
+            foreground=palette["muted"],
+            activeforeground=palette["fg"],
+            cursor="hand2",
+            takefocus=1,
+            padx=scaled(4),
+            pady=scaled(6),
+        )
+        cancel.grid(row=0, column=0, sticky="w")
+        cancel.bind("<Button-1>", lambda _event: self._choose("cancel"))
+        cancel.bind("<Return>", lambda _event: self._choose("cancel"))
+        cancel.bind("<space>", lambda _event: self._choose("cancel"))
+        cancel.bind("<Enter>", lambda _event: cancel.configure(
+            foreground=palette["fg"],
+        ))
+        cancel.bind("<Leave>", lambda _event: cancel.configure(
+            foreground=palette["muted"],
+        ))
+
+        buttons = ttk.Frame(footer, style="ApiKeyPrompt.TFrame")
+        buttons.grid(row=0, column=2, sticky="e")
+        for label, value, primary in (
+            ("Run anyway", "run", False),
+            ("Add API key", "sources", True),
+        ):
+            button = create_action_button(
+                buttons,
+                label,
+                lambda result=value: self._choose(result),
+                palette,
+                primary=primary,
+                ui_scale=scale,
+            )
+            button.pack(side="left", padx=(scaled(10), 0))
+            if primary:
+                self.default_button = button
+
+        self.update_idletasks()
+        self.geometry(f"{width}x{self.winfo_reqheight()}")
