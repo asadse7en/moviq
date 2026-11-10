@@ -259,6 +259,20 @@ jobs:
           path: smoke-logs/
           retention-days: 7
 
+  smoke-report:
+    needs: [release]
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge smoke test reports
+        uses: actions/upload-artifact/merge@v7
+        with:
+          name: smoke-report
+          pattern: smoke-logs-*
+          separate-directories: true
+          delete-merged: true
+          retention-days: 7
+
   checksums:
     needs: release
     runs-on: ubuntu-latest

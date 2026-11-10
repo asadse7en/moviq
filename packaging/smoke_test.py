@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageGrab
+from PIL import Image, ImageGrab
 
 
 TIMEOUT_SECONDS = 60
@@ -21,6 +21,7 @@ EXPECTED_STAGES = (
     "main page built",
     "icons loaded",
     "settings dir writable",
+    "window painted",
 )
 
 
@@ -32,7 +33,7 @@ def _platform_name():
     }.get(platform.system(), platform.system().lower())
 
 
-def _capture_screenshot(path):
+def _capture_screenshot(path, geometry):
     if sys.platform == "darwin":
         subprocess.run(
             ["screencapture", "-x", str(path)],
@@ -45,9 +46,50 @@ def _capture_screenshot(path):
 
     with Image.open(path) as screenshot:
         image = screenshot.convert("RGB")
-        background = Image.new("RGB", image.size, image.getpixel((0, 0)))
-        if ImageChops.difference(image, background).getbbox() is None:
-            raise RuntimeError("screenshot is blank")
+        root_x, root_y, width, height, screen_width, _screen_height = geometry
+        scale = image.width / screen_width
+        region = image.crop((
+            round(root_x * scale),
+            round(root_y * scale),
+            round((root_x + width) * scale),
+            round((root_y + height) * scale),
+        ))
+        colors = region.getcolors(maxcolors=30)
+        if colors is not None and len(colors) < 30:
+            raise RuntimeError(
+                f"window region looks unpainted ({len(colors)} distinct colors)",
+            )
+
+
+def _parse_geometry(line):
+    match = re.fullmatch(
+        r"GEOMETRY:\s+(-?\d+)\s+(-?\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*",
+        line.strip(),
+    )
+    if match is None:
+        raise RuntimeError("invalid GEOMETRY output")
+    geometry = tuple(int(value) for value in match.groups())
+    if geometry[4] <= 0:
+        raise RuntimeError("invalid GEOMETRY screen width")
+    return geometry
+
+
+def _focus_process(pid):
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(
+            [
+                "osascript", "-e",
+                "tell application \"System Events\" to set frontmost of "
+                f"(first process whose unix id is {pid}) to true",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=SCREENSHOT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def _last_stage_or_error(lines, fallback):
@@ -116,6 +158,9 @@ def main(argv=None):
     events = queue.Queue()
     screenshot_error = None
     screenshot_captured = False
+    screenshot_attempted = False
+    geometry = None
+    painted_stage_seen = False
     timed_out = False
     return_code = None
     launch_error = None
@@ -174,13 +219,25 @@ def main(argv=None):
                 streams_open -= 1
                 continue
             output_lines.append((stream_name, line))
+            if stream_name == "stdout" and line.startswith("GEOMETRY:"):
+                try:
+                    geometry = _parse_geometry(line)
+                except Exception as error:
+                    screenshot_error = str(error)
             if (
                 stream_name == "stdout"
-                and "STAGE: settings dir writable ok" in line
-                and not screenshot_captured
+                and "STAGE: window painted ok" in line
             ):
+                painted_stage_seen = True
+            if (
+                painted_stage_seen
+                and geometry is not None
+                and not screenshot_attempted
+            ):
+                screenshot_attempted = True
                 try:
-                    _capture_screenshot(screenshot_path)
+                    _focus_process(process.pid)
+                    _capture_screenshot(screenshot_path, geometry)
                     screenshot_captured = True
                     screenshot_error = None
                 except Exception as error:
@@ -196,14 +253,6 @@ def main(argv=None):
             process.kill()
             process.wait()
     finally:
-        if not screenshot_captured:
-            try:
-                _capture_screenshot(screenshot_path)
-                screenshot_captured = True
-                screenshot_error = None
-            except Exception as error:
-                screenshot_error = str(error)
-
         for stream_name in ("stdout", "stderr"):
             print(f"--- {stream_name} ---", flush=True)
             print(

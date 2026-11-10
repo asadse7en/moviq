@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 from uuid import uuid4
@@ -24,6 +25,12 @@ def _run_smoke_test(name):
 
     def stage(name):
         print(f"STAGE: {name} ok", flush=True)
+
+    def pump_events(duration):
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            root.update()
+            time.sleep(0.05)
 
     with tempfile.TemporaryDirectory(prefix="moviq-smoke-home-") as home:
         os.environ["HOME"] = home
@@ -62,6 +69,7 @@ def _run_smoke_test(name):
                 root.lift()
                 root.focus_force()
                 root.attributes("-topmost", True)
+                app.show_page("main")
                 root.update()
                 stage("main page built")
 
@@ -91,7 +99,24 @@ def _run_smoke_test(name):
                 test_path.unlink()
                 stage("settings dir writable")
                 root.after_cancel(watchdog_id)
-                root.after(1500, shutdown)
+                pump_events(1.5)
+                if sys.platform == "darwin":
+                    x = root.winfo_rootx()
+                    y = root.winfo_rooty()
+                    width = root.winfo_width()
+                    height = root.winfo_height()
+                    root.geometry(f"{width + 1}x{height}+{x}+{y}")
+                    root.geometry(f"{width}x{height}+{x}+{y}")
+                    root.update()
+                print("STAGE: window painted ok", flush=True)
+                print(
+                    "GEOMETRY: "
+                    f"{root.winfo_rootx()} {root.winfo_rooty()} "
+                    f"{root.winfo_width()} {root.winfo_height()} "
+                    f"{root.winfo_screenwidth()} {root.winfo_screenheight()}",
+                    flush=True,
+                )
+                root.after(4000, shutdown)
             except MissingIconError as error:
                 finish(3, error=error)
             except Exception as error:
@@ -137,7 +162,8 @@ def _run_smoke_test(name):
             root._moviq_icon = tk.PhotoImage(
                 file=resource("assets/moviq-icon.png"),
             )
-            root.iconphoto(True, root._moviq_icon)
+            if sys.platform != "darwin":
+                root.iconphoto(True, root._moviq_icon)
             user_data_dir = Path(user_data_dir)
             watchdog_id = root.after(30000, watchdog)
             root.after_idle(ready)
@@ -264,7 +290,8 @@ def main(argv=None):
         root._moviq_icon = tk.PhotoImage(
             file=resource("assets/moviq-icon.png"),
         )
-        root.iconphoto(True, root._moviq_icon)
+        if sys.platform != "darwin":
+            root.iconphoto(True, root._moviq_icon)
     except (OSError, tk.TclError):
         pass
     app = App(root)
