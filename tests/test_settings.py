@@ -39,6 +39,7 @@ class SettingsStoreTests(unittest.TestCase):
     def test_new_settings_use_system_theme_and_blank_api_key(self):
         self.assertEqual(DEFAULTS["theme"], "system")
         self.assertEqual(DEFAULTS["key"], "")
+        self.assertFalse(DEFAULTS["api_key_prompt_seen"])
         self.assertEqual(DEFAULTS["window_state"], "normal")
 
     def test_loads_legacy_values_and_fills_new_defaults(self):

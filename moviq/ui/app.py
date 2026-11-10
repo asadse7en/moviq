@@ -64,8 +64,9 @@ from .controls import (
 )
 from .dialogs import SearchDialog
 from .popups import (
-    MatchProgressPopup, RenameConfirmationDialog, RenameProgressPopup,
-    _show, ask_yes_no, show_error, show_info, show_warning,
+    ApiKeyPromptDialog, MatchProgressPopup, RenameConfirmationDialog,
+    RenameProgressPopup, _show, ask_yes_no, show_error, show_info,
+    show_warning,
 )
 from ..core.settings_store import SettingsStore, resolve_system_theme
 from .settings import SettingsView
@@ -284,8 +285,9 @@ def _resolver_client(key, language, providers, operation_cache):
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, smoke_test=False):
         self.root = root
+        self._smoke_test = smoke_test
         root.title(f"Moviq {APP_VERSION}")
         self.UI_SCALE = float(root.winfo_fpixels("1i")) / 96
         self.settings_store = SettingsStore(
@@ -2964,8 +2966,27 @@ class App:
     def match_all(self):
         self.match_run()
 
+    def _maybe_show_api_key_prompt(self):
+        if self._smoke_test or self.cfg.get("api_key_prompt_seen", False):
+            return True
+        if (
+            self.key_var.get().strip()
+            or self.provider_settings.key("omdb").strip()
+        ):
+            return True
+        self.settings_store.set("api_key_prompt_seen", True)
+        self.settings_store.save_now()
+        result = ApiKeyPromptDialog(self).result
+        if result == "sources":
+            self.show_page("settings")
+            self.settings_view.focus_provider_source("tmdb")
+            return False
+        return result == "run"
+
     def match_run(self):
         """Match selected rows, or all eligible rows if nothing is selected."""
+        if not self._maybe_show_api_key_prompt():
+            return
         selected = self.selected()
         chosen = self._action_scope_items()
         if not selected:
@@ -3937,6 +3958,8 @@ class App:
         self._start_manual_matches([sel[0]])
 
     def match_manually(self):
+        if not self._maybe_show_api_key_prompt():
+            return
         if self._manual_match_active:
             self._manual_match_early_return(
                 "Manual Match is already in progress.",

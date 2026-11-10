@@ -47,6 +47,7 @@ TV_SAMPLE = {
 }
 DEFAULTS = {
     "key": "",
+    "api_key_prompt_seen": False,
     "theme": "system",
     "language": "en-US  English",
     "threshold": 90,
@@ -190,7 +191,8 @@ class SettingsStore:
         for key in (
             "auto_match", "confirm_apply", "tag_id",
             "movie_folder", "tv_folder", "rename_subtitles",
-            "movie_create_folder", "tv_create_show_folder",
+            "api_key_prompt_seen", "movie_create_folder",
+            "tv_create_show_folder",
             "tv_create_season_folder",
         ):
             if not isinstance(merged.get(key), bool):

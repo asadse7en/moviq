@@ -65,7 +65,7 @@ def _run_smoke_test(name):
                 root.focus_force()
                 root.update_idletasks()
                 stage("window created")
-                app = App(root)
+                app = App(root, smoke_test=True)
                 root.lift()
                 root.focus_force()
                 root.attributes("-topmost", True)

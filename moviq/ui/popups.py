@@ -6,6 +6,7 @@ import tkinter.font as tkfont
 import time
 from ctypes import wintypes
 from tkinter import ttk
+import webbrowser
 
 from ..core.providers.settings import PROVIDER_INFO
 from .controls import RoundedCard, create_action_button
@@ -695,7 +696,10 @@ class RenameProgressPopup(MatchProgressPopup):
 
 
 class AppPopup(tk.Toplevel):
-    def __init__(self, app, title, message, kind, buttons, default, cancel_value):
+    def __init__(
+        self, app, title, message, kind, buttons, default, cancel_value,
+        links=(),
+    ):
         super().__init__(app.root)
         set_window_icon(self)
         self.app = app
@@ -704,6 +708,7 @@ class AppPopup(tk.Toplevel):
         self.default = default
         self.default_value = buttons[default][1]
         self.cancel_value = cancel_value
+        self.links = links
         self.palette = app.pal
         self.title(title)
         self.configure(bg=self.palette["bg"])
@@ -751,6 +756,12 @@ class AppPopup(tk.Toplevel):
             foreground=palette["muted"],
             font="TkTextFont",
         )
+        style.configure(
+            "Popup.Link.TLabel",
+            background=palette["card"],
+            foreground=palette["accent"],
+            font="TkTextFont",
+        )
 
     def _build_content(self, title, message, kind):
         palette = self.palette
@@ -790,8 +801,30 @@ class AppPopup(tk.Toplevel):
         )
         body.grid(row=1, column=1, sticky="w")
 
+        footer_row = 2
+        if self.links:
+            links_frame = ttk.Frame(card, style="Popup.TFrame")
+            links_frame.grid(
+                row=2, column=1, sticky="w", pady=(8, 0),
+            )
+            for link in self.links:
+                label = ttk.Label(
+                    links_frame,
+                    text=link["text"],
+                    style="Popup.Link.TLabel",
+                    cursor="hand2",
+                )
+                label.pack(anchor="w", pady=(2, 0))
+                label.bind(
+                    "<Button-1>",
+                    lambda _event, url=link["url"]: webbrowser.open(url),
+                )
+            footer_row = 3
+
         footer = ttk.Frame(card, style="Popup.TFrame")
-        footer.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(20, 0))
+        footer.grid(
+            row=footer_row, column=0, columnspan=2, sticky="ew", pady=(20, 0),
+        )
         for index, (label, value) in enumerate(self.buttons):
             is_default = index == self.default
             button = create_action_button(
@@ -876,4 +909,32 @@ class RenameConfirmationDialog:
             [("Cancel", False), ("Rename", True)],
             1,
             False,
+        )
+
+
+class ApiKeyPromptDialog(AppPopup):
+    def __init__(self, app):
+        super().__init__(
+            app,
+            "Get better matches with a free API key",
+            "Moviq works without a key, but TMDb or OMDb give more accurate "
+            "results. Both are free and neither asks for a credit card.",
+            "info",
+            [
+                ("Cancel", "cancel"),
+                ("Open Sources", "sources"),
+                ("Run anyway", "run"),
+            ],
+            1,
+            "cancel",
+            links=(
+                {
+                    "text": "Get a free TMDb key",
+                    "url": "https://www.themoviedb.org/settings/api",
+                },
+                {
+                    "text": "Get a free OMDb key",
+                    "url": "https://www.omdbapi.com/apikey.aspx",
+                },
+            ),
         )
