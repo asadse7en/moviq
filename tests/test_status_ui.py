@@ -242,18 +242,23 @@ class WindowStateTests(unittest.TestCase):
     )
     def test_restores_maximized_state_after_clamping_geometry(self):
         class Root:
-            def __init__(self):
+            def __init__(self, screen_width=1920):
+                self.screen_width = screen_width
                 self.geometry_value = None
                 self.state_value = None
+                self.minsize_value = None
 
             def winfo_screenwidth(self):
-                return 1920
+                return self.screen_width
 
             def winfo_screenheight(self):
                 return 1080
 
-            def minsize(self, *_args):
+            def update_idletasks(self):
                 pass
+
+            def minsize(self, *_args):
+                self.minsize_value = _args
 
             def geometry(self, value):
                 self.geometry_value = value
@@ -264,11 +269,39 @@ class WindowStateTests(unittest.TestCase):
         app = App.__new__(App)
         app.root = Root()
         app.UI_SCALE = 1
+        app.header_layout = SimpleNamespace(
+            remeasure=Mock(),
+            minimum_window_width=Mock(return_value=1000),
+            default_window_width=Mock(return_value=1400),
+        )
 
         app._restore_window_geometry("1200x800+50+40", "zoomed")
 
         self.assertEqual(app.root.geometry_value, "1200x800+50+40")
+        self.assertEqual(app.root.minsize_value, (1000, 560))
         self.assertEqual(app.root.state_value, "zoomed")
+
+    def test_default_window_width_uses_header_and_ninety_percent_cap(self):
+        app = App.__new__(App)
+        app.root = type("Root", (), {
+            "winfo_screenwidth": lambda _self: 1000,
+            "winfo_screenheight": lambda _self: 1080,
+            "update_idletasks": lambda _self: None,
+            "minsize": lambda _self, *_args: None,
+            "geometry": lambda _self, value: setattr(
+                _self, "geometry_value", value,
+            ),
+        })()
+        app.UI_SCALE = 1
+        app.header_layout = SimpleNamespace(
+            remeasure=Mock(),
+            minimum_window_width=Mock(return_value=700),
+            default_window_width=Mock(return_value=1400),
+        )
+
+        app._restore_window_geometry(None)
+
+        self.assertEqual(app.root.geometry_value, "900x720+0+0")
 
 
 class TitlebarThemeTests(unittest.TestCase):

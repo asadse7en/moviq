@@ -1,5 +1,8 @@
 import ctypes
 import math
+import os
+import shlex
+import subprocess
 import sys
 import tkinter as tk
 import tkinter.font as tkfont
@@ -14,6 +17,40 @@ from .controls import (
 )
 from .icons import draw_icon
 from .window_utils import set_window_icon
+
+
+def _open_browser_tab(url):
+    if sys.platform == "win32":
+        executable = None
+        tab_argument = None
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\Shell\Associations"
+                r"\UrlAssociations\https\UserChoice",
+            ) as key:
+                prog_id, _ = winreg.QueryValueEx(key, "ProgId")
+            with winreg.OpenKey(
+                winreg.HKEY_CLASSES_ROOT,
+                rf"{prog_id}\shell\open\command",
+            ) as key:
+                command, _ = winreg.QueryValueEx(key, None)
+            executable = shlex.split(command, posix=False)[0].strip('"')
+            browser = os.path.splitext(os.path.basename(executable))[0].casefold()
+            if browser in {
+                "chrome", "msedge", "brave", "vivaldi", "opera", "chromium",
+            }:
+                tab_argument = "--new-tab"
+            elif browser == "firefox":
+                tab_argument = "-new-tab"
+        except (ImportError, OSError, IndexError, ValueError):
+            executable = None
+        if executable and tab_argument:
+            subprocess.Popen([executable, tab_argument, url])
+            return
+    webbrowser.open(url, new=2)
 
 
 def apply_titlebar_theme(window, dark):
@@ -978,8 +1015,9 @@ class ApiKeyPromptDialog(AppPopup):
         message = ttk.Label(
             top,
             text=(
-                "Moviq works without a key, but a free TMDb or OMDb key "
-                "gives better results."
+                "We recommend a free TMDB or OMDb API key for accurate "
+                "movie matching. Without one, Moviq guesses from filenames. "
+                "TVmaze handles TV shows without a key."
             ),
             style="Popup.Message.TLabel",
             wraplength=scaled(460),
@@ -1008,7 +1046,7 @@ class ApiKeyPromptDialog(AppPopup):
         )
 
         def open_link(url):
-            webbrowser.open(url)
+            _open_browser_tab(url)
 
         def set_card_surface(target, children, active):
             surface = palette["btn_hi"] if active else palette["btn"]

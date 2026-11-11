@@ -23,6 +23,7 @@ ICON_ASSETS = {
     "trash": "trash-2",
     "file-plus": "file-plus",
     "folder-plus": "folder-plus",
+    "ellipsis": "ellipsis",
 }
 
 
@@ -593,6 +594,7 @@ class ToolbarIconGroup(tk.Canvas):
         )
         self._hover_index = None
         self._pressed_index = None
+        self.visible_actions = self.actions
         self.bind("<Configure>", self._draw)
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", self._on_leave)
@@ -619,6 +621,16 @@ class ToolbarIconGroup(tk.Canvas):
             self.icons[name] = icon
             self._draw()
 
+    def set_visible_actions(self, names):
+        visible = set(names)
+        self.visible_actions = tuple(
+            action for action in self.actions if action[0] in visible
+        )
+        self._hover_index = None
+        self._pressed_index = None
+        self.configure(width=self.cell_width * len(self.visible_actions))
+        self._draw()
+
     def set_state(self, name, state):
         if name in self.states:
             self.states[name] = state
@@ -631,14 +643,17 @@ class ToolbarIconGroup(tk.Canvas):
     def _index_at(self, x):
         return min(
             max(0, x // max(1, self.cell_width)),
-            len(self.actions) - 1,
+            len(self.visible_actions) - 1,
         )
 
     def _on_motion(self, event):
+        if not self.visible_actions:
+            return
         index = self._index_at(event.x)
         self.configure(
             cursor=(
-                "arrow" if self.states[self.actions[index][0]] == "disabled"
+                "arrow"
+                if self.states[self.visible_actions[index][0]] == "disabled"
                 else "hand2"
             ),
         )
@@ -646,7 +661,7 @@ class ToolbarIconGroup(tk.Canvas):
             self._hover_index = index
             self._draw()
         if hasattr(self, "tooltip"):
-            name = self.actions[index][0]
+            name = self.visible_actions[index][0]
             self.tooltip.set_text(self.tooltips[name])
 
     def _on_leave(self, _event):
@@ -661,12 +676,14 @@ class ToolbarIconGroup(tk.Canvas):
         return "break"
 
     def _on_release(self, event):
+        if not self.visible_actions:
+            return "break"
         index = self._index_at(event.x)
         if (
             self._pressed_index == index
-            and self.states[self.actions[index][0]] == "normal"
+            and self.states[self.visible_actions[index][0]] == "normal"
         ):
-            name = self.actions[index][0]
+            name = self.visible_actions[index][0]
             self.commands[name]()
         self._pressed_index = None
         self._draw()
@@ -686,7 +703,7 @@ class ToolbarIconGroup(tk.Canvas):
             background=self.cget("background"),
         )
         for index, (name, _icon, _command, _tooltip) in enumerate(
-            self.actions,
+            self.visible_actions,
         ):
             left = index * self.cell_width
             right = min(width, left + self.cell_width)
@@ -696,7 +713,9 @@ class ToolbarIconGroup(tk.Canvas):
             ):
                 self.create_rectangle(
                     left + (1 if index else 6), 1,
-                    right - (1 if index < len(self.actions) - 1 else 6),
+                    right - (
+                        1 if index < len(self.visible_actions) - 1 else 6
+                    ),
                     height - 1, fill=palette["hover_background"],
                     outline="",
                 )

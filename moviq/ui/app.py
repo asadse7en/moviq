@@ -288,6 +288,9 @@ class App:
     def __init__(self, root, smoke_test=False):
         self.root = root
         self._smoke_test = smoke_test
+        self._root_was_viewable = bool(root.winfo_viewable())
+        if self._root_was_viewable:
+            root.withdraw()
         root.title(f"Moviq {APP_VERSION}")
         self.UI_SCALE = float(root.winfo_fpixels("1i")) / 96
         self.settings_store = SettingsStore(
@@ -295,10 +298,6 @@ class App:
             on_batch_done=self._flush_pending_refresh,
         )
         self.cfg = self.settings_store.data
-        self._restore_window_geometry(
-            self.cfg.get("window_geometry"),
-            self.cfg.get("window_state", "normal"),
-        )
 
         self.items = []
         self.by_iid = {}
@@ -365,7 +364,6 @@ class App:
         self._theme_listener = self._apply_theme_listener
         register_theme_listener(root, self._theme_listener)
         self.have_sv = HAVE_SV
-        self._toolbar_compact = False
         self._sum_pending = False
         self.anchor = None
         self._row_tooltip_paths = {}
@@ -378,6 +376,14 @@ class App:
             self.settings_store.data,
         )
         self.build_ui()
+        self.root.update_idletasks()
+        self.header_layout.remeasure()
+        self._restore_window_geometry(
+            self.cfg.get("window_geometry"),
+            self.cfg.get("window_state", "normal"),
+        )
+        if self._root_was_viewable:
+            root.deiconify()
         root.bind_all(
             "<Button-1>", self._clear_focus_after_pointer_click, add="+",
         )
@@ -437,6 +443,8 @@ class App:
         self.root.after_idle(self.root.focus_set)
 
     def _restore_window_geometry(self, geometry, window_state="normal"):
+        self.root.update_idletasks()
+        self.header_layout.remeasure()
         match = re.fullmatch(
             r"(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?", str(geometry or ""),
         )
@@ -449,17 +457,25 @@ class App:
 
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        min_width = min(round(900 * self.UI_SCALE), screen_width)
+        min_width = min(
+            self.header_layout.minimum_window_width(), screen_width,
+        )
         min_height = min(round(560 * self.UI_SCALE), screen_height)
+        self._window_min_height = min_height
         self.root.minsize(min_width, min_height)
         if not match:
-            width = round(1180 * self.UI_SCALE)
+            width = min(
+                self.header_layout.default_window_width(),
+                round(screen_width * 0.9),
+            )
             height = round(720 * self.UI_SCALE)
         width = min(screen_width, max(min_width, width))
         height = min(screen_height, max(min_height, height))
         x = min(max(0, x), max(0, screen_width - width))
         y = min(max(0, y), max(0, screen_height - height))
         self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.update_idletasks()
+        self.header_layout.remeasure()
         if sys.platform == "win32" and window_state == "zoomed":
             self.root.state("zoomed")
 
@@ -540,6 +556,8 @@ class App:
             self.root, name="MoviqTitleFont", family=fam or "TkDefaultFont",
             size=18, weight="bold",
         )
+        if hasattr(self, "header_layout"):
+            self.header_layout.remeasure()
 
     def apply_theme(self, mode):
         return apply_root_theme(self.root, mode)
@@ -561,6 +579,8 @@ class App:
             self.toolbar_icon_group.set_tooltip("theme", tooltip)
             if getattr(self.toolbar_icon_group, "_hover_index", None) == 2:
                 self.icon_group_tooltip.set_text(tooltip)
+        if hasattr(self, "header_layout"):
+            self.header_layout.update_overflow_menu()
 
     def cycle_theme(self):
         next_preference = {
@@ -583,7 +603,7 @@ class App:
         buttons = [
             self.rename_all_button, self.add_files_button,
             self.add_folder_button, self.auto_match_button,
-            self.manual_match_button,
+            self.manual_match_button, self.overflow_button,
         ]
         for button in buttons:
             button.set_theme(
@@ -638,8 +658,18 @@ class App:
         self.menu.configure(bg=pal["card"], fg=pal["fg"],
                             activebackground=pal["accent"],
                             activeforeground="#ffffff")
+        self.overflow_menu.configure(
+            bg=pal["card"], fg=pal["fg"],
+            activebackground=pal["accent"],
+            activeforeground="#ffffff",
+            disabledforeground=pal["muted"],
+        )
+        self.overflow_tooltip.background = pal["card"]
+        self.overflow_tooltip.foreground = pal["fg"]
         if hasattr(self, "settings_view"):
             self.settings_view.recolor(pal)
+        if hasattr(self, "header_layout"):
+            self.header_layout.remeasure()
 
     # ---- settings values ----------------------------------------------------
     def language(self):
@@ -1640,7 +1670,11 @@ class App:
             else self.search_slot.winfo_width()
         )
         self.search_box.set_width(
-            max(1, min(round(320 * scale), available)),
+            max(
+                self.header_layout.search_min_width
+                if hasattr(self, "header_layout") else 1,
+                min(round(320 * scale), available),
+            ),
         )
 
     def focus_search(self):
@@ -1751,18 +1785,6 @@ class App:
         self._refresh_filter_chip_styles()
         self.update_summary()
 
-    def _update_toolbar_responsive(self, event=None):
-        if event is not None and event.widget is not self.root:
-            return
-        compact = self.root.winfo_width() < 1100
-        if compact == self._toolbar_compact:
-            return
-        self._toolbar_compact = compact
-        for button in self.toolbar_buttons:
-            button.set_padding(2 if compact else 12)
-        self.rename_all_button.set_padding(8 if compact else 18)
-        self.update_action_labels()
-
     def status(self, text):
         self.status_var.set(text)
 
@@ -1782,6 +1804,8 @@ class App:
         self.toolbar_icon_group.set_state(
             "undo", "normal" if self.undo_stack and not busy else "disabled",
         )
+        if hasattr(self, "header_layout"):
+            self.header_layout.update_overflow_menu()
 
     def _capture_record(self, item, index=None):
         if index is None:
@@ -1983,6 +2007,8 @@ class App:
             )
             for name in SOURCE_SELECTIONS
         })
+        if hasattr(self, "header_layout"):
+            self.header_layout.remeasure()
 
     def select_source(self, name):
         if not self.provider_settings.can_select(name, self.key_var.get()):
@@ -3854,12 +3880,21 @@ class App:
         selected = len(selected_items)
         total = len(getattr(self, "items", ()))
         subset_selected = 0 < selected < total
-        self.match_btn_var.set(
+        auto_label = (
             f"Auto Match ({selected})" if subset_selected else "Auto Match"
         )
-        self.manual_match_btn_var.set(
+        manual_label = (
             f"Manual Match ({selected})"
             if subset_selected else "Manual Match"
+        )
+        self._full_match_button_labels = (auto_label, manual_label)
+        compact_labels = (
+            hasattr(self, "header_layout")
+            and self.header_layout.level == 4
+        )
+        self.match_btn_var.set("Auto" if compact_labels else auto_label)
+        self.manual_match_btn_var.set(
+            "Manual" if compact_labels else manual_label,
         )
         rename_count = sum(
             1 for item in selected_items

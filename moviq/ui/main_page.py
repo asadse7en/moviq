@@ -13,6 +13,7 @@ from .controls import (
     RoundedButton, SearchBox, SegmentedModeToggle, SegmentedPillControl,
     ToolbarIconGroup, ToolTip,
 )
+from .header_layout import HeaderLayout
 
 HEADER_SEPARATOR_MARGIN = 10
 
@@ -29,14 +30,19 @@ MAIN_SHORTCUTS = {
 
 def build_main_page(app, page):
     separator_margin = round(HEADER_SEPARATOR_MARGIN * app.UI_SCALE)
+    app.header_separator_margin = separator_margin
     app.match_btn_var = tk.StringVar(value="Auto Match")
     app.manual_match_btn_var = tk.StringVar(value="Manual Match")
     app.apply_btn_var = tk.StringVar(value="Rename All")
     head = ttk.Frame(page, style="Header.TFrame")
+    app.header = head
     head.pack(fill="x", pady=(2, 8))
-    head.columnconfigure(2, weight=1)
+    app.header_brand = ttk.Frame(head, style="Header.TFrame")
+    app.header_title_line = ttk.Frame(
+        app.header_brand, style="Header.TFrame",
+    )
     logo = tk.Canvas(
-        head, width=round(40 * app.UI_SCALE),
+        app.header_title_line, width=round(40 * app.UI_SCALE),
         height=round(40 * app.UI_SCALE),
         background=app.pal["header_bg"],
         highlightthickness=0, bd=0, takefocus=0,
@@ -54,62 +60,69 @@ def build_main_page(app, page):
         round(20 * app.UI_SCALE), round(20 * app.UI_SCALE),
         image=app.logo_image,
     )
-    titles = ttk.Frame(head, style="Header.TFrame")
-    titles.grid(row=0, column=1, sticky="w", padx=(8, 20))
-    ttk.Label(titles, text="Moviq",
-              style="Title.TLabel").pack(anchor="w")
     ttk.Label(
-        titles, text="Match, review, and organize.",
+        app.header_title_line, text="Moviq", style="Title.TLabel",
+    ).grid(row=0, column=1, sticky="w", padx=(8, 20))
+    app.header_title_line.grid(row=0, column=0, sticky="w")
+    app.header_subtitle_indent = round(40 * app.UI_SCALE) + 8
+    app.header_subtitle = ttk.Label(
+        app.header_brand, text="Match, review, and organize.",
         style="HeaderSubtitle.TLabel",
-    ).pack(anchor="w")
+    )
+    app.header_subtitle.grid(
+        row=1, column=0, sticky="w",
+        padx=(app.header_subtitle_indent, 20),
+    )
+    app.header_actions = ttk.Frame(head, style="Toolbar.TFrame")
     app.add_files_button = RoundedButton(
-        head, tk.StringVar(value="Add files"), app.add_files,
+        app.header_actions, tk.StringVar(value="Add files"), app.add_files,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
     app.add_files_button.set_leading_icon("file-plus")
-    app.add_files_button.grid(row=0, column=3, sticky="w", padx=(0, 8))
+    app.add_files_button.grid(row=0, column=0, sticky="w", padx=(0, 8))
     app.add_folder_button = RoundedButton(
-        head, tk.StringVar(value="Add folder"), app.add_folder,
+        app.header_actions, tk.StringVar(value="Add folder"), app.add_folder,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
         padx=12, background=app.pal["header_bg"],
     )
     app.add_folder_button.set_leading_icon("folder-plus")
-    app.add_folder_button.grid(row=0, column=4, sticky="w", padx=(0, 8))
+    app.add_folder_button.grid(row=0, column=1, sticky="w", padx=(0, 8))
+    app.header_actions.columnconfigure(2, weight=0)
     app.header_mode_separator = tk.Frame(
-        head, width=max(1, round(1 * app.UI_SCALE)),
+        app.header_actions, width=max(1, round(1 * app.UI_SCALE)),
         height=round(26 * app.UI_SCALE),
         background=app.pal["header_separator"],
         highlightthickness=0, bd=0,
     )
     app.header_mode_separator.grid(
-        row=0, column=5, sticky="ns",
+        row=0, column=3, sticky="ns",
         padx=(separator_margin, separator_margin),
     )
     app.media_mode_selector = SegmentedModeToggle(
-        head,
+        app.header_actions,
         app.media_mode.get(),
         app.switch_media_mode,
         font="TkDefaultFont",
         background=app.pal["header_bg"],
         ui_scale=app.UI_SCALE,
     )
-    app.media_mode_selector.grid(row=0, column=6, sticky="w", padx=(0, 8))
+    app.media_mode_selector.grid(row=0, column=4, sticky="w", padx=(0, 8))
     app.update_media_mode_selector()
 
     app.header_match_separator = tk.Frame(
-        head, width=max(1, round(1 * app.UI_SCALE)),
+        app.header_actions, width=max(1, round(1 * app.UI_SCALE)),
         height=round(26 * app.UI_SCALE),
         background=app.pal["header_separator"],
         highlightthickness=0, bd=0,
     )
     app.header_match_separator.grid(
-        row=0, column=7, sticky="ns",
+        row=0, column=5, sticky="ns",
         padx=(separator_margin, separator_margin),
     )
-    match_actions = ttk.Frame(head, style="Toolbar.TFrame")
+    match_actions = ttk.Frame(app.header_actions, style="Toolbar.TFrame")
     app.match_actions = match_actions
-    match_actions.grid(row=0, column=8, sticky="e", padx=(0, 8))
+    match_actions.grid(row=0, column=6, sticky="e", padx=(0, 8))
     app.auto_match_button = RoundedButton(
         match_actions, app.match_btn_var, app.match_run,
         font="TkDefaultFont", ui_scale=app.UI_SCALE,
@@ -123,27 +136,28 @@ def build_main_page(app, page):
     )
     app.manual_match_button.pack(side="left")
     app.rename_all_button = RoundedButton(
-        head,
+        app.header_actions,
         app.apply_btn_var, app.apply, font="TkHeadingFont",
         ui_scale=app.UI_SCALE,
         bold=True, variant="accent", padx=18, pady=9, radius=6,
         background=app.pal["header_bg"],
     )
     app.rename_all_button.grid(
-        row=0, column=9, sticky="e", padx=(0, 12),
+        row=0, column=7, sticky="e", padx=(0, 12),
     )
+    app.header_icons = ttk.Frame(head, style="Toolbar.TFrame")
     app.header_icon_separator = tk.Frame(
-        head, width=max(1, round(1 * app.UI_SCALE)),
+        app.header_icons, width=max(1, round(1 * app.UI_SCALE)),
         height=round(26 * app.UI_SCALE),
         background=app.pal["header_separator"],
         highlightthickness=0, bd=0,
     )
     app.header_icon_separator.grid(
-        row=0, column=10, sticky="ns",
+        row=0, column=0, sticky="ns",
         padx=(separator_margin, separator_margin),
     )
     app.toolbar_icon_group = ToolbarIconGroup(
-        head,
+        app.header_icons,
         (
             ("undo", "undo", app.undo, "Undo"),
             ("clear", "trash", app.clear, "Clear all files"),
@@ -153,16 +167,33 @@ def build_main_page(app, page):
         ),
         ui_scale=app.UI_SCALE,
     )
-    app.toolbar_icon_group.grid(row=0, column=11, sticky="e")
+    app.toolbar_icon_group.grid(row=0, column=1, sticky="e")
     app.icon_group_tooltip = ToolTip(
         app.toolbar_icon_group, "Undo", app.pal["card"], app.pal["fg"],
     )
     app.toolbar_icon_group.tooltip = app.icon_group_tooltip
-    app.update_theme_button()
-    app.toolbar_buttons = (
-        app.add_files_button, app.add_folder_button,
-        app.auto_match_button, app.manual_match_button,
+    app.overflow_button = RoundedButton(
+        app.header_icons, tk.StringVar(value="⋯"),
+        lambda: app.header_layout.popup_overflow_menu(),
+        font="TkDefaultFont", ui_scale=app.UI_SCALE,
+        padx=6, background=app.pal["header_bg"],
     )
+    app.overflow_button.set_icon("ellipsis")
+    app.overflow_button.configure(takefocus=True)
+    app.overflow_button._moviq_focus_control = True
+    app.overflow_button.grid(row=0, column=2, padx=(8, 8))
+    app.overflow_tooltip = ToolTip(
+        app.overflow_button, "More", app.pal["card"], app.pal["fg"],
+    )
+    app.overflow_menu = tk.Menu(app.root, tearoff=0)
+    app.overflow_menu.add_command(label="Undo", command=app.undo)
+    app.overflow_menu.add_command(
+        label="Clear all files", command=app.clear,
+    )
+    app.overflow_menu.add_command(
+        label="Theme: Dark", command=app.cycle_theme,
+    )
+    app.update_theme_button()
     for widget, text in (
         (app.add_files_button, "Add files"),
         (app.add_folder_button, "Add folder"),
@@ -199,8 +230,9 @@ def build_main_page(app, page):
         + 2 * app.filter_control.horizontal_padding * app.UI_SCALE
         for label in ("All", "Ready", "Review", "Error", "Done")
     ) + 2
+    app.filter_count_width = round(filter_count_width)
     app.filter_row.columnconfigure(
-        0, minsize=round(filter_count_width),
+        0, minsize=app.filter_count_width,
     )
     app.filter_row.columnconfigure(1, weight=1, minsize=0)
     app.filter_row.columnconfigure(2, weight=0)
@@ -241,7 +273,7 @@ def build_main_page(app, page):
     app.key_var.trace_add(
         "write", lambda *_args: app.refresh_source_control(),
     )
-    app.root.bind("<Configure>", app._update_toolbar_responsive, add="+")
+    app.header_layout = HeaderLayout(app, head)
 
     # Bottom bars are packed BEFORE the list so they are never pushed
     # out of view when the window is small.
