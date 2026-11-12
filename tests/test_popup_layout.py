@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from moviq.ui.popups import MatchProgressPopup
+from moviq.ui.popups import MatchProgressPopup, RenameProgressPopup
 
 
 class MatchProgressPopupCompletionTests(unittest.TestCase):
@@ -88,6 +88,37 @@ class MatchProgressPopupCompletionTests(unittest.TestCase):
         self.assertEqual(popup._progress_value, 1.0)
         self.assertEqual(popup._progress_target, 1.0)
         popup._draw_progress.assert_called_once_with()
+
+
+class RenameProgressPopupCancellationTests(unittest.TestCase):
+    def test_cancel_closes_popup_when_worker_has_not_started(self):
+        popup = RenameProgressPopup.__new__(RenameProgressPopup)
+        popup.cancel_requested = False
+        popup.on_cancel_rename = Mock(return_value=True)
+        popup._close = Mock()
+
+        popup.cancel()
+
+        self.assertTrue(popup.cancel_requested)
+        popup.on_cancel_rename.assert_called_once_with()
+        popup._close.assert_called_once_with()
+
+    def test_cancel_keeps_popup_open_while_worker_stops(self):
+        popup = RenameProgressPopup.__new__(RenameProgressPopup)
+        popup.cancel_requested = False
+        popup.on_cancel_rename = Mock(return_value=False)
+        popup.current_var = Mock()
+        popup.window = Mock()
+        popup.window.winfo_exists.return_value = True
+        popup._close = Mock()
+
+        popup.cancel()
+
+        self.assertTrue(popup.cancel_requested)
+        popup.current_var.set.assert_called_once_with(
+            "Stopping after the current file...",
+        )
+        popup._close.assert_not_called()
 
 
 if __name__ == "__main__":

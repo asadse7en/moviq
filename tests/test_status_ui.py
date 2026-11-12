@@ -20,6 +20,7 @@ from moviq.ui.design import (
     STATUS_ICONS,
     STATUS_TEXT,
 )
+from moviq.ui.header_layout import HeaderLayout
 from moviq.ui.popups import MatchProgressPopup, apply_titlebar_theme
 from moviq.ui.settings.general import GeneralTabMixin
 from moviq.ui.settings import SettingsView
@@ -236,6 +237,69 @@ class FileDialogInitialDirectoryTests(unittest.TestCase):
 
 
 class WindowStateTests(unittest.TestCase):
+    def test_header_configure_selects_cached_level_only_for_new_widths(self):
+        variables = [Mock() for _ in range(3)]
+        app = SimpleNamespace(
+            match_btn_var=variables[0],
+            manual_match_btn_var=variables[1],
+            apply_btn_var=variables[2],
+        )
+        header = SimpleNamespace(bind=Mock())
+        layout = HeaderLayout(app, header)
+        layout.widths = (500, 400, 300, 200)
+        layout._set_level = Mock()
+        layout.remeasure = Mock(side_effect=AssertionError)
+
+        layout._on_configure(SimpleNamespace(width=250))
+        layout._on_configure(SimpleNamespace(width=250))
+
+        layout._set_level.assert_called_once_with(3)
+        layout.remeasure.assert_not_called()
+        for variable in variables:
+            variable.trace_add.assert_not_called()
+
+    def test_header_level_uses_exact_width_thresholds(self):
+        layout = HeaderLayout(SimpleNamespace(), SimpleNamespace(bind=Mock()))
+        layout.widths = (500, 400, 300, 200)
+
+        self.assertEqual(
+            [layout._choose_level(width) for width in (500, 400, 300, 200)],
+            [0, 1, 2, 3],
+        )
+        self.assertEqual(layout._choose_level(199), 3)
+
+    def test_minimum_window_width_uses_l3_or_filter_row_width(self):
+        layout = HeaderLayout(SimpleNamespace(), SimpleNamespace(bind=Mock()))
+        layout.widths = (500, 400, 300, 250)
+        layout._filter_row_min_width = 220
+        self.assertEqual(layout.minimum_window_width(), 290)
+
+        layout._filter_row_min_width = 350
+        self.assertEqual(layout.minimum_window_width(), 390)
+
+    def test_window_minsize_is_only_set_when_the_value_changes(self):
+        app = App.__new__(App)
+        app.root = SimpleNamespace(minsize=Mock())
+
+        app._set_window_minsize(1000, 560)
+        app._set_window_minsize(1000, 560)
+        app._set_window_minsize(1100, 560)
+
+        self.assertEqual(
+            app.root.minsize.call_args_list,
+            [call(1000, 560), call(1100, 560)],
+        )
+
+    def test_search_box_uses_slot_width_clamped_to_200_and_320(self):
+        app = App.__new__(App)
+        app.UI_SCALE = 1
+        app.search_box = SimpleNamespace(set_width=Mock())
+        app.header_layout = SimpleNamespace(search_min_width=200)
+
+        for width, expected in ((320, 320), (800, 320), (120, 200)):
+            app._resize_search_box(SimpleNamespace(width=width))
+            app.search_box.set_width.assert_called_with(expected)
+
     @unittest.skipUnless(
         sys.platform == "win32",
         "Maximized window state restoration is Windows-specific",
@@ -1124,6 +1188,23 @@ class SelectionActionTests(unittest.TestCase):
                     "Manual Match" if selected != 3 else "Manual Match (3)",
                 )
                 app.apply_btn_var.set.assert_called_once_with(expected_rename)
+
+    def test_action_labels_are_not_set_when_the_text_is_unchanged(self):
+        app = App.__new__(App)
+        app.items = []
+        app.tree = SimpleNamespace(selection=lambda: ())
+        app.match_btn_var = Mock()
+        app.match_btn_var.get.return_value = "Auto Match"
+        app.manual_match_btn_var = Mock()
+        app.manual_match_btn_var.get.return_value = "Manual Match"
+        app.apply_btn_var = Mock()
+        app.apply_btn_var.get.return_value = "Rename All"
+
+        app.update_action_labels()
+
+        app.match_btn_var.set.assert_not_called()
+        app.manual_match_btn_var.set.assert_not_called()
+        app.apply_btn_var.set.assert_not_called()
 
     def test_toolbar_statistics_are_recomputed_from_file_statuses(self):
         app = App.__new__(App)

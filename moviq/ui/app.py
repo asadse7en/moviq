@@ -173,6 +173,7 @@ class _SensitiveLogFilter(logging.Filter):
 
 
 MANUAL_REVIEW_STATUSES = {"pending", "review", "nomatch", "error"}
+SEARCH_MAX_WIDTH = 320
 CONFIG_FIELDS = {
     "key": lambda app: app.key_var.get().strip(),
     "theme": lambda app: app.theme_var.get(),
@@ -350,6 +351,7 @@ class App:
         self._file_log_handler.addFilter(_SensitiveLogFilter(self))
         logging.getLogger().addHandler(self._file_log_handler)
         self._workers_closing = False
+        self._match_worker_counter = 0
         self.theme_preference = self.cfg.get("theme", "dark")
         self.mode = (
             resolve_system_theme() if self.theme_preference == "system"
@@ -377,7 +379,6 @@ class App:
         )
         self.build_ui()
         self.root.update_idletasks()
-        self.header_layout.remeasure()
         self._restore_window_geometry(
             self.cfg.get("window_geometry"),
             self.cfg.get("window_state", "normal"),
@@ -398,7 +399,7 @@ class App:
                 str(self.show_resolver.load_error),
             )
         self._worker_pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
-        self._worker_futures = []
+        self._worker_threads = []
         self._ensure_match_workers()
         root.after(100, self.poll)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -444,7 +445,6 @@ class App:
 
     def _restore_window_geometry(self, geometry, window_state="normal"):
         self.root.update_idletasks()
-        self.header_layout.remeasure()
         match = re.fullmatch(
             r"(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?", str(geometry or ""),
         )
@@ -462,7 +462,7 @@ class App:
         )
         min_height = min(round(560 * self.UI_SCALE), screen_height)
         self._window_min_height = min_height
-        self.root.minsize(min_width, min_height)
+        self._set_window_minsize(min_width, min_height)
         if not match:
             width = min(
                 self.header_layout.default_window_width(),
@@ -475,9 +475,15 @@ class App:
         y = min(max(0, y), max(0, screen_height - height))
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self.root.update_idletasks()
-        self.header_layout.remeasure()
         if sys.platform == "win32" and window_state == "zoomed":
             self.root.state("zoomed")
+
+    def _set_window_minsize(self, width, height):
+        size = (int(width), int(height))
+        if getattr(self, "_last_minsize", None) == size:
+            return
+        self.root.minsize(*size)
+        self._last_minsize = size
 
     def _window_geometry(self):
         self.root.update_idletasks()
@@ -502,8 +508,17 @@ class App:
 
     def on_close(self):
         if getattr(self, "_rename_running", False):
-            self.status("Wait for the rename to finish before closing Moviq.")
-            return
+            rename_thread = getattr(self, "_rename_thread", None)
+            if rename_thread is None or not rename_thread.is_alive():
+                self._rename_running = False
+            elif not ask_yes_no(
+                self,
+                "Rename in progress",
+                "Moviq is still renaming files. Quit anyway?",
+            ):
+                return
+            else:
+                self._rename_cancel_event.set()
         self._network_monitor.stop()
         self._hide_tree_tooltip()
         self._workers_closing = True
@@ -557,7 +572,7 @@ class App:
             size=18, weight="bold",
         )
         if hasattr(self, "header_layout"):
-            self.header_layout.remeasure()
+            self.apply_theme(self.mode)
 
     def apply_theme(self, mode):
         return apply_root_theme(self.root, mode)
@@ -1669,13 +1684,12 @@ class App:
             event.width if event is not None
             else self.search_slot.winfo_width()
         )
-        self.search_box.set_width(
-            max(
-                self.header_layout.search_min_width
-                if hasattr(self, "header_layout") else 1,
-                min(round(320 * scale), available),
-            ),
+        minimum = (
+            self.header_layout.search_min_width
+            if hasattr(self, "header_layout") else round(200 * scale)
         )
+        maximum = round(SEARCH_MAX_WIDTH * scale)
+        self.search_box.set_width(max(minimum, min(maximum, available)))
 
     def focus_search(self):
         if not self.page_main.winfo_ismapped():
@@ -2007,8 +2021,6 @@ class App:
             )
             for name in SOURCE_SELECTIONS
         })
-        if hasattr(self, "header_layout"):
-            self.header_layout.remeasure()
 
     def select_source(self, name):
         if not self.provider_settings.can_select(name, self.key_var.get()):
@@ -3389,34 +3401,35 @@ class App:
 
     def _ensure_match_workers(self):
         active = []
-        for future in self._worker_futures:
-            if not future.done():
-                active.append(future)
+        for thread in self._worker_threads:
+            if thread.is_alive():
+                active.append(thread)
                 continue
             if self._workers_closing:
                 continue
-            if future.cancelled():
-                logging.getLogger(__name__).warning(
-                    "Matching worker was canceled unexpectedly; restarting it.",
-                )
-                continue
-            error = future.exception()
-            if error is not None:
-                logging.getLogger(__name__).error(
-                    "Matching worker exited unexpectedly; restarting it.",
-                    exc_info=(type(error), error, error.__traceback__),
-                )
-            else:
-                logging.getLogger(__name__).warning(
-                    "Matching worker stopped unexpectedly; restarting it.",
-                )
-        self._worker_futures = active
+            logging.getLogger(__name__).warning(
+                "Matching worker stopped unexpectedly; restarting it.",
+            )
+        self._worker_threads = active
         if self._workers_closing:
             return
-        self._worker_futures.extend(
-            self._worker_pool.submit(self.worker)
-            for _ in range(MAX_WORKERS - len(active))
-        )
+        for _ in range(MAX_WORKERS - len(active)):
+            self._match_worker_counter += 1
+            thread = threading.Thread(
+                target=self._run_match_worker,
+                daemon=True,
+                name=f"moviq-match-{self._match_worker_counter}",
+            )
+            thread.start()
+            self._worker_threads.append(thread)
+
+    def _run_match_worker(self):
+        try:
+            self.worker()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Matching worker exited unexpectedly.",
+            )
 
     def _process_match_events(self, budget=0.012):
         """Handle queued matching events for at most `budget` seconds.
@@ -3887,23 +3900,20 @@ class App:
             f"Manual Match ({selected})"
             if subset_selected else "Manual Match"
         )
-        self._full_match_button_labels = (auto_label, manual_label)
-        compact_labels = (
-            hasattr(self, "header_layout")
-            and self.header_layout.level == 4
-        )
-        self.match_btn_var.set("Auto" if compact_labels else auto_label)
-        self.manual_match_btn_var.set(
-            "Manual" if compact_labels else manual_label,
-        )
+        if self.match_btn_var.get() != auto_label:
+            self.match_btn_var.set(auto_label)
+        if self.manual_match_btn_var.get() != manual_label:
+            self.manual_match_btn_var.set(manual_label)
         rename_count = sum(
             1 for item in selected_items
             if item.match
             and item.status in ("auto", "manual", "review")
         )
-        self.apply_btn_var.set(
+        rename_text = (
             f"Rename ({rename_count})" if subset_selected else "Rename All"
         )
+        if self.apply_btn_var.get() != rename_text:
+            self.apply_btn_var.set(rename_text)
 
     def update_detail(self):
         sel = self.selected()
@@ -4448,72 +4458,88 @@ class App:
         self._rename_before = rename_before
         self._rename_errors = []
         self._rename_cancel_event = threading.Event()
-        self._rename_progress = RenameProgressPopup(self, on_undo=self.undo)
-        self._undo_journal = UndoJournal()
-        future = self._worker_pool.submit(
-            self._build_rename_ops,
-            todo,
-            plans,
-            self.rename_subtitles.get(),
+        self._rename_progress = RenameProgressPopup(
+            self, on_undo=self.undo, on_cancel=self._cancel_rename,
         )
-        future.add_done_callback(
-            lambda done: self.root.after(
-                0,
-                self._start_rename_after_plan,
-                done,
+        self._undo_journal = None
+        self._rename_thread = threading.Thread(
+            target=self._run_rename,
+            args=(
                 todo,
                 plans,
+                self.rename_subtitles.get(),
                 rename_total,
                 skipped_count,
                 conflict_count,
             ),
+            daemon=True,
+            name="moviq-rename",
         )
+        self._rename_thread.start()
 
-    def _build_rename_ops(self, todo, plans, rename_subtitles):
-        ops = []
+    def _build_rename_ops(
+        self, todo, plans, rename_subtitles, cancel_event=None,
+    ):
         dry_run = type(
             "DryRunOps",
             (list,),
             {"execute": lambda self, operation, action: self.append(operation)},
         )()
-        try:
-            for item in todo:
-                plan = plans[id(item)]
-                perform_plan(
-                    item.path,
-                    plan,
-                    dry_run,
-                    rename_subtitles=rename_subtitles,
-                )
-            ops = list(dry_run)
-        except Exception:
-            ops = []
-        return ops
+        for item in todo:
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            plan = plans[id(item)]
+            perform_plan(
+                item.path,
+                plan,
+                dry_run,
+                rename_subtitles=rename_subtitles,
+            )
+        return list(dry_run)
 
-    def _start_rename_after_plan(
-        self, future, todo, plans, rename_total, skipped_count, conflict_count,
+    def _run_rename(
+        self, todo, plans, rename_subtitles, rename_total, skipped_count,
+        conflict_count,
     ):
-        if not getattr(self.root, "winfo_exists", lambda: True)():
-            return
-        if self._rename_cancel_event.is_set():
-            self._rename_running = False
-            self._update_undo_button()
-            return
         try:
-            planned_ops = future.result()
-        except Exception:
-            planned_ops = []
-        self._undo_journal.start(planned_ops)
-        service = RenameService(
-            todo, plans, self.items, self.rename_subtitles.get(),
-            USER_DATA_DIR / "rename-undo.jsonl", self._rename_events,
-            self._rename_cancel_event, rename_total, skipped_count,
-            conflict_count, _storage_gone, undo_journal=self._undo_journal,
-        )
-        self._rename_thread = threading.Thread(
-            target=service.run, name="moviq-rename", daemon=True,
-        )
-        self._rename_thread.start()
+            planned_ops = self._build_rename_ops(
+                todo, plans, rename_subtitles, self._rename_cancel_event,
+            )
+            if self._rename_cancel_event.is_set():
+                self._rename_events.put((
+                    "rename_complete", [], [], 0, 0, 0, True,
+                    skipped_count, rename_total, conflict_count, False,
+                    len(todo),
+                ))
+                return
+            undo_journal = UndoJournal()
+            undo_journal.start(planned_ops)
+            self._undo_journal = undo_journal
+            service = RenameService(
+                todo, plans, self.items, rename_subtitles,
+                USER_DATA_DIR / "rename-undo.jsonl", self._rename_events,
+                self._rename_cancel_event, rename_total, skipped_count,
+                conflict_count, _storage_gone,
+                undo_journal=undo_journal,
+            )
+            service.run()
+        except Exception as error:
+            self._rename_events.put((
+                "rename_complete", [], [f"Could not prepare rename: {error}"],
+                0, 1, 0, False, skipped_count, rename_total, conflict_count,
+                False, len(todo),
+            ))
+
+    def _cancel_rename(self):
+        self._rename_cancel_event.set()
+        rename_thread = self._rename_thread
+        if rename_thread is not None and rename_thread.is_alive():
+            return False
+        self._rename_running = False
+        self._rename_thread = None
+        self._rename_progress = None
+        self._update_undo_button()
+        return True
 
     def _push_rename_undo(self, records, ops, file_count):
         if not records:

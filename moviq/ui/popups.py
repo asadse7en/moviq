@@ -236,7 +236,10 @@ class MatchProgressPopup:
         heading = ttk.Frame(card, style="MatchPopup.TFrame")
         heading.grid(row=0, column=1, sticky="ew")
         heading.columnconfigure(0, weight=1)
-        self.title_var = tk.StringVar(value="Matching files")
+        self.title_var = tk.StringVar(
+            value="Renaming files" if self.task == "rename"
+            else "Matching files",
+        )
         ttk.Label(
             heading,
             textvariable=self.title_var,
@@ -717,9 +720,10 @@ class MatchProgressPopup:
 
 
 class RenameProgressPopup(MatchProgressPopup):
-    def __init__(self, app, on_undo):
+    def __init__(self, app, on_undo, on_cancel):
         self.cancel_requested = False
         self.on_undo = on_undo
+        self.on_cancel_rename = on_cancel
         super().__init__(
             app,
             on_cancel=self.cancel,
@@ -731,7 +735,9 @@ class RenameProgressPopup(MatchProgressPopup):
 
     def cancel(self):
         self.cancel_requested = True
-        if hasattr(self, "current_var") and self.window.winfo_exists():
+        if self.on_cancel_rename():
+            self._close()
+        elif hasattr(self, "current_var") and self.window.winfo_exists():
             self.current_var.set("Stopping after the current file...")
 
 

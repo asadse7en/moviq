@@ -6,39 +6,26 @@ class HeaderLayout:
         self.app = app
         self.header = header
         self.level = None
-        self.widths = (0, 0, 0, 0, 0)
+        self.widths = (0, 0, 0, 0)
         self.measurements = {}
-        self._after_id = None
         self._measuring = False
         self._last_available_width = None
-        header.bind("<Configure>", self._schedule_relayout, add="+")
-        for variable in (
-            app.match_btn_var, app.manual_match_btn_var, app.apply_btn_var,
-        ):
-            variable.trace_add("write", self._schedule_relayout)
-        self._schedule_relayout()
+        self._filter_row_min_width = None
+        header.bind("<Configure>", self._on_configure, add="+")
 
     @property
     def l0_width(self):
         return self.widths[0]
 
     @property
-    def l4_width(self):
-        return self.widths[4]
+    def l3_width(self):
+        return self.widths[3]
 
-    def _schedule_relayout(self, *_args):
-        if self._measuring or self._after_id is not None:
+    def _on_configure(self, event):
+        if self._measuring or event.width == self._last_available_width:
             return
-        if _args and hasattr(_args[0], "widget"):
-            event = _args[0]
-            if event.width == self._last_available_width:
-                return
-            self._last_available_width = event.width
-        self._after_id = self.header.after_idle(self._relayout_after_idle)
-
-    def _relayout_after_idle(self):
-        self._after_id = None
-        self.remeasure()
+        self._last_available_width = event.width
+        self._set_level(self._choose_level(event.width))
 
     def _flush_geometry(self):
         self.app.root.update_idletasks()
@@ -52,9 +39,10 @@ class HeaderLayout:
         self._measuring = True
         app = self.app
         previous_level = self.level
-        full_labels = getattr(
-            app, "_full_match_button_labels",
-            (app.match_btn_var.get(), app.manual_match_btn_var.get()),
+        previous_labels = (
+            app.match_btn_var.get(),
+            app.manual_match_btn_var.get(),
+            app.apply_btn_var.get(),
         )
         try:
             app.header_subtitle.grid()
@@ -64,8 +52,9 @@ class HeaderLayout:
                 tuple(app.toolbar_icon_group.states),
             )
             app.overflow_button.grid_remove()
-            app.match_btn_var.set(full_labels[0])
-            app.manual_match_btn_var.set(full_labels[1])
+            app.match_btn_var.set("Auto Match (999)")
+            app.manual_match_btn_var.set("Manual Match (999)")
+            app.apply_btn_var.set("Rename (999)")
             self._flush_geometry()
 
             measurements = {
@@ -111,17 +100,6 @@ class HeaderLayout:
             )
             actions_icons = self._measure_widget(app.header_actions)
 
-            app.match_btn_var.set("Auto")
-            app.manual_match_btn_var.set("Manual")
-            self._flush_geometry()
-            measurements["auto_match_short"] = self._measure_widget(
-                app.auto_match_button,
-            )
-            measurements["manual_match_short"] = self._measure_widget(
-                app.manual_match_button,
-            )
-            actions_icons_short = self._measure_widget(app.header_actions)
-
             app.toolbar_icon_group.set_visible_actions(("settings",))
             app.overflow_button.grid()
             self._flush_geometry()
@@ -133,32 +111,29 @@ class HeaderLayout:
             widths = (
                 measurements["brand"] + actions_full + icons_full,
                 brand_without_subtitle + actions_full + icons_full,
-                brand_without_subtitle + actions_icons + icons_full,
+                brand_without_subtitle + actions_full + icons_overflow,
                 brand_without_subtitle + actions_icons + icons_overflow,
-                max(
-                    brand_without_subtitle + icons_overflow,
-                    actions_icons_short,
-                ),
             )
             self.widths = tuple(round(width) for width in widths)
             self.measurements = measurements
+            self._filter_row_min_width = self._measure_filter_row_min_width()
         finally:
-            app.header_subtitle.grid(
-                **({"row": 1, "column": 0, "columnspan": 2,
-                   "sticky": "w", "padx": (app.header_subtitle_indent, 20)}
-                  if previous_level in (None, 0) else {}),
-            )
-            if previous_level not in (None, 0):
+            if previous_level in (None, 0):
+                app.header_subtitle.grid(
+                    row=1, column=0, columnspan=2, sticky="w",
+                    padx=(app.header_subtitle_indent, 20),
+                )
+            else:
                 app.header_subtitle.grid_remove()
             app.add_files_button.set_icon(
                 "file-plus" if previous_level is not None
-                and previous_level >= 2 else None,
+                and previous_level >= 3 else None,
             )
             app.add_folder_button.set_icon(
                 "folder-plus" if previous_level is not None
-                and previous_level >= 2 else None,
+                and previous_level >= 3 else None,
             )
-            if previous_level is not None and previous_level >= 3:
+            if previous_level is not None and previous_level >= 2:
                 app.toolbar_icon_group.set_visible_actions(("settings",))
                 app.overflow_button.grid()
             else:
@@ -166,19 +141,16 @@ class HeaderLayout:
                     tuple(app.toolbar_icon_group.states),
                 )
                 app.overflow_button.grid_remove()
-            app.match_btn_var.set(
-                "Auto" if previous_level == 4 else full_labels[0],
-            )
-            app.manual_match_btn_var.set(
-                "Manual" if previous_level == 4 else full_labels[1],
-            )
+            app.match_btn_var.set(previous_labels[0])
+            app.manual_match_btn_var.set(previous_labels[1])
+            app.apply_btn_var.set(previous_labels[2])
             self._measuring = False
             self._flush_geometry()
 
         self._set_level(self._choose_level(self.header.winfo_width()))
         self._last_available_width = self.header.winfo_width()
         if hasattr(app, "_window_min_height"):
-            app.root.minsize(
+            app._set_window_minsize(
                 min(
                     self.minimum_window_width(),
                     app.root.winfo_screenwidth(),
@@ -194,69 +166,55 @@ class HeaderLayout:
         for level, required in enumerate(self.widths):
             if required <= available:
                 return level
-        return 4
+        return 3
 
     def _set_level(self, level):
         if level == self.level:
             return
+        previous_level = self.level
         self.level = level
         app = self.app
-        app.header_subtitle.grid()
-        if level:
-            app.header_subtitle.grid_remove()
-        app.add_files_button.set_icon(
-            "file-plus" if level >= 2 else None,
-        )
-        app.add_folder_button.set_icon(
-            "folder-plus" if level >= 2 else None,
-        )
-        if level >= 3:
-            app.toolbar_icon_group.set_visible_actions(("settings",))
-            app.overflow_button.grid(row=0, column=2, padx=(8, 8))
-        else:
-            app.toolbar_icon_group.set_visible_actions(
-                tuple(app.toolbar_icon_group.states),
+        if previous_level is None or (previous_level == 0) != (level == 0):
+            if level == 0:
+                app.header_subtitle.grid(
+                    row=1, column=0, columnspan=2, sticky="w",
+                    padx=(app.header_subtitle_indent, 20),
+                )
+            else:
+                app.header_subtitle.grid_remove()
+        if previous_level is None or (previous_level < 3) != (level < 3):
+            app.add_files_button.set_icon(
+                "file-plus" if level >= 3 else None,
             )
-            app.overflow_button.grid_remove()
-
-        for frame in (app.header_brand, app.header_actions, app.header_icons):
-            frame.grid_remove()
-        for column in range(4):
-            app.header.grid_columnconfigure(column, weight=0, minsize=0)
-        for column in range(8):
-            app.header_actions.grid_columnconfigure(
-                column, weight=0, minsize=0,
+            app.add_folder_button.set_icon(
+                "folder-plus" if level >= 3 else None,
             )
-
-        if level < 4:
+        if previous_level is None or (previous_level < 2) != (level < 2):
+            if level >= 2:
+                app.toolbar_icon_group.set_visible_actions(("settings",))
+                app.overflow_button.grid(
+                    row=0, column=2, padx=(8, 8),
+                )
+            else:
+                app.toolbar_icon_group.set_visible_actions(
+                    tuple(app.toolbar_icon_group.states),
+                )
+                app.overflow_button.grid_remove()
+        if previous_level is None:
             app.header_brand.grid(row=0, column=0, sticky="w")
             app.header_actions.grid(row=0, column=1, sticky="w")
             app.header.grid_columnconfigure(2, weight=1)
             app.header_icons.grid(row=0, column=3, sticky="e")
-        else:
-            app.header_brand.grid(row=0, column=0, sticky="w")
-            app.header_icons.grid(row=0, column=1, sticky="e")
-            app.header_actions.grid(
-                row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0),
-            )
-            app.header.grid_columnconfigure(1, weight=1)
-            app.header_actions.grid_columnconfigure(2, weight=1)
-        labels = getattr(
-            app, "_full_match_button_labels",
-            (app.match_btn_var.get(), app.manual_match_btn_var.get()),
-        )
-        auto_label, manual_label = (
-            ("Auto", "Manual") if level == 4 else labels
-        )
-        if app.match_btn_var.get() != auto_label:
-            app.match_btn_var.set(auto_label)
-        if app.manual_match_btn_var.get() != manual_label:
-            app.manual_match_btn_var.set(manual_label)
 
     def filter_row_min_width(self):
+        if self._filter_row_min_width is None:
+            self._filter_row_min_width = self._measure_filter_row_min_width()
+        return self._filter_row_min_width
+
+    def _measure_filter_row_min_width(self):
         app = self.app
         filter_width = max(
-            app.filter_count_width,
+            self._filter_width_with_max_counts(),
             self._measure_widget(app.filter_control),
         )
         return (
@@ -267,14 +225,25 @@ class HeaderLayout:
             + self._measure_widget(app.source_control)
         )
 
+    def _filter_width_with_max_counts(self):
+        control = self.app.filter_control
+        return round(sum(
+            control.font.measure(f"{label} 000")
+            + 2 * control.horizontal_padding * self.app.UI_SCALE
+            for label in ("All", "Ready", "Review", "Error", "Done")
+        ) + 2)
+
     @property
     def search_min_width(self):
         scale = self.app.UI_SCALE
         text_width = tkfont.nametofont("TkDefaultFont").measure("Search")
-        return round(36 * scale) + text_width + round(16 * scale)
+        return max(
+            round(200 * scale),
+            round(36 * scale) + text_width + round(16 * scale),
+        )
 
     def minimum_window_width(self):
-        return max(self.l4_width, self.filter_row_min_width()) + 40
+        return max(self.l3_width, self.filter_row_min_width()) + 40
 
     def default_window_width(self):
         return max(round(1180 * self.app.UI_SCALE), self.l0_width + 40)

@@ -225,14 +225,8 @@ def build_main_page(app, page):
         labels=tuple(variable.get() for variable in app.filter_vars.values()),
         values=tuple(app.filter_vars),
     )
-    filter_count_width = sum(
-        app.filter_control.font.measure(f"{label} 000")
-        + 2 * app.filter_control.horizontal_padding * app.UI_SCALE
-        for label in ("All", "Ready", "Review", "Error", "Done")
-    ) + 2
-    app.filter_count_width = round(filter_count_width)
     app.filter_row.columnconfigure(
-        0, minsize=app.filter_count_width,
+        0, minsize=app.filter_control.winfo_reqwidth(),
     )
     app.filter_row.columnconfigure(1, weight=1, minsize=0)
     app.filter_row.columnconfigure(2, weight=0)
