@@ -1309,6 +1309,7 @@ class SelectionActionTests(unittest.TestCase):
         selected = SimpleNamespace(status="pending")
         unselected = SimpleNamespace(status="pending")
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app.selected = lambda: [selected]
         app.items = [selected, unselected]
         app.start_match = Mock()
@@ -1324,6 +1325,7 @@ class SelectionActionTests(unittest.TestCase):
         formatted = SimpleNamespace(status="no_change")
         auto = SimpleNamespace(status="auto")
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app.selected = lambda: []
         app._status_filter = None
         app.items = [pending, done, confirmed, formatted, auto]
@@ -1354,6 +1356,7 @@ class SelectionActionTests(unittest.TestCase):
             error_code=None,
         )
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app.selected = lambda: [pending, matched, formatted, confirmed]
         app.items = [pending, matched, formatted, confirmed]
         app.start_match = Mock()
@@ -1380,6 +1383,7 @@ class SelectionActionTests(unittest.TestCase):
             status="pending", media_type="movie", is_tv_episode=False,
         )
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app._manual_match_active = False
         app.job_total = 0
         selected.iid = "selected"
@@ -1406,6 +1410,7 @@ class SelectionActionTests(unittest.TestCase):
             status="manual", media_type="movie", is_tv_episode=False,
         )
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app._manual_match_active = False
         app.job_total = 0
         confirmed.iid = "confirmed"

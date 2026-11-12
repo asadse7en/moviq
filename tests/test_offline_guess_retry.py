@@ -68,6 +68,7 @@ class OfflineGuessRetryTests(unittest.TestCase):
             "review", {"id": encode("offline", 1), "title": "The Matrix"},
         )
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app.selected = Mock(return_value=[])
         app._action_scope_items = Mock(return_value=[])
         app.items = [offline]
@@ -134,6 +135,7 @@ class OfflineGuessRetryTests(unittest.TestCase):
             "review", {"id": encode("offline", 1), "title": "The Matrix"},
         )
         app = App.__new__(App)
+        app._maybe_show_api_key_prompt = lambda: True
         app.selected = Mock(return_value=[selected])
         app._action_scope_items = Mock(return_value=[selected])
         app.items = [selected, offline]
