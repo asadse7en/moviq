@@ -681,18 +681,24 @@ class ProvidersTabMixin:
         self._set_provider_status(name, "Testing...")
         settings = self.app.provider_settings
         tmdb_key = self.vars["key"].get().strip()
+        cancel_event = self._track_request()
         self._executor.submit(
             self._provider_test_job, name, settings, tmdb_key, generation,
+            cancel_event,
         )
 
-    def _provider_test_job(self, name, settings, tmdb_key, generation):
+    def _provider_test_job(
+        self, name, settings, tmdb_key, generation, cancel_event,
+    ):
         try:
-            result = test_provider(name, settings, tmdb_key)
+            result = test_provider(
+                name, settings, tmdb_key, cancel_event=cancel_event,
+            )
         except Exception as error:  # never leave the label on "Testing..."
             result = str(error) or "Failed"
+        finally:
+            self._release_request(cancel_event)
         if len(result) > 18:
             result = result[:15] + "..."
-        if not self._closed:
-            self._queue.put((
-                "provider_status", name, generation, result,
-            ))
+        if not self._closed and not cancel_event.is_set():
+            self._queue.put(("provider_status", name, generation, result))

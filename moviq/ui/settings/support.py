@@ -481,13 +481,22 @@ class SettingsSupportMixin:
     def _submit_key_check(self, key, generation):
         self._key_after = None
         self._set_key_status("Checking")
+        cancel_event = self._track_request()
         self._executor.submit(
-            self._check_key_worker, key, generation,
+            self._check_key_worker, key, generation, cancel_event,
         )
 
-    def _check_key_worker(self, key, generation):
-        status = check_tmdb_key(key)
-        self._queue.put(("key", generation, key, status))
+    def _check_key_worker(self, key, generation, cancel_event):
+        try:
+            status = check_tmdb_key(key, cancel_event=cancel_event)
+        except Exception:
+            if not cancel_event.is_set():
+                raise
+        else:
+            if not self._closed and not cancel_event.is_set():
+                self._queue.put(("key", generation, key, status))
+        finally:
+            self._release_request(cancel_event)
 
     def test_key(self):
         network_state.reset()

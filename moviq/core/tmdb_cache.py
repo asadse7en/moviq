@@ -197,6 +197,17 @@ def get_cache():
         return _cache
 
 
+def close_cache():
+    """Close the shared SQLite connection when it has been initialized."""
+    global _cache
+    with _cache_lock:
+        if _cache is None:
+            return
+        cache = _cache
+        _cache = None
+        cache.close()
+
+
 def clear_tmdb_cache():
     cache = get_cache()
     if cache is None:

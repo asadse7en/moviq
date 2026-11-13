@@ -15,7 +15,9 @@ from .formatting import (
     CUSTOM_ID, MOVIE_DEFAULT_ID, MOVIE_FORMATS, TV_DEFAULT_ID, TV_FORMATS,
     format_component,
 )
-from .tmdb import TMDB, TMDBAuthError, TMDBError, TMDBNetworkError
+from .tmdb import (
+    TMDB, TMDBAuthError, TMDBCancelled, TMDBError, TMDBNetworkError,
+)
 
 
 MOVIE_PRESETS = (
@@ -344,7 +346,7 @@ def resolve_system_theme(fallback: str = "dark") -> str:
     return fallback if fallback in ("light", "dark") else "dark"
 
 
-def check_tmdb_key(key: str) -> str:
+def check_tmdb_key(key: str, cancel_event=None) -> str:
     """Check a v3 key asynchronously at the caller and return a UI status."""
     if not key:
         return "Not checked"
@@ -357,9 +359,13 @@ def check_tmdb_key(key: str) -> str:
     if not (is_v3 or is_v4):
         return "Wrong format"
     try:
-        return "Connected" if TMDB(key).check() else "Rejected"
+        return "Connected" if TMDB(
+            key, cancel_event=cancel_event,
+        ).check() else "Rejected"
     except TMDBAuthError:
         return "Rejected"
+    except TMDBCancelled:
+        raise
     except TMDBNetworkError:
         return "Offline"
     except TMDBError as error:

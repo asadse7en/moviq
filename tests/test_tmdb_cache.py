@@ -1,15 +1,29 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from moviq.core.tmdb_cache import (
     CACHE_TTL_SECONDS,
     FAILURE_TTL_SECONDS,
     TMDBCache,
+    close_cache,
 )
 
 
 class TMDBCacheTests(unittest.TestCase):
+    def test_close_cache_closes_initialized_shared_connection(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        cache = TMDBCache(Path(temp.name) / "cache.sqlite3")
+
+        with patch("moviq.core.tmdb_cache._cache", cache):
+            close_cache()
+
+        with self.assertRaises(sqlite3.ProgrammingError):
+            cache._connection.execute("SELECT 1")
+
     def test_cache_key_does_not_include_api_credentials(self):
         first = TMDBCache.key(
             "/search/movie", {"query": "Inception", "api_key": "secret"},

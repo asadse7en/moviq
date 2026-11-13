@@ -51,6 +51,7 @@ from ..core.tmdb import (
     MAX_WORKERS, TMDB, TMDBAuthError, TMDBCancelled, TMDBError,
     TMDBOperationCache,
 )
+from ..core.tmdb_cache import close_cache
 from ..core.providers.router import ProviderRouter
 from ..core.providers.settings import (
     PROVIDER_INFO, SOURCE_SELECTIONS, ProviderSettings,
@@ -321,6 +322,7 @@ class App:
         self._undo_journal = None
         self._rename_running = False
         self._manual_match_items = []
+        self._search_dialog = None
         self._manual_match_queue = []
         self._manual_match_queue_items = {}
         self._manual_match_index = 0
@@ -519,6 +521,7 @@ class App:
                 return
             else:
                 self._rename_cancel_event.set()
+                rename_thread.join(timeout=10)
         self._network_monitor.stop()
         self._hide_tree_tooltip()
         self._workers_closing = True
@@ -528,14 +531,6 @@ class App:
         if self._system_theme_after is not None:
             self.root.after_cancel(self._system_theme_after)
             self._system_theme_after = None
-        if self._matching_run:
-            self._matching_run["cancel_event"].set()
-            self._discard_match_cache(self._matching_run)
-        for _ in range(MAX_WORKERS):
-            self.jobs.put(None)
-        self._worker_pool.shutdown(wait=False, cancel_futures=True)
-        logging.getLogger().removeHandler(self._file_log_handler)
-        self._file_log_handler.close()
         try:
             self.save_config()
         except OSError as error:
@@ -543,10 +538,26 @@ class App:
                 "Could not save settings during shutdown.",
             )
             show_warning(self, "Settings", f"Could not save settings:\n{error}")
+        if self._matching_run:
+            self._matching_run["cancel_event"].set()
+            self._discard_match_cache(self._matching_run)
+        search_dialog = getattr(self, "_search_dialog", None)
+        if search_dialog is not None:
+            search_dialog.close()
+            self._search_dialog = None
         if hasattr(self, "settings_view"):
             self.settings_view.close()
+        for _ in range(MAX_WORKERS):
+            self.jobs.put(None)
+        self._worker_pool.shutdown(wait=False, cancel_futures=True)
+        logging.getLogger().removeHandler(self._file_log_handler)
+        self._file_log_handler.close()
+        close_cache()
         unregister_theme_listener(self.root, self._theme_listener)
         self.root.destroy()
+        watchdog = threading.Timer(1.5, os._exit, args=(0,))
+        watchdog.daemon = True
+        watchdog.start()
 
     # ---- UI ---------------------------------------------------------------
     def setup_fonts(self):
@@ -4133,7 +4144,7 @@ class App:
             item = self._manual_match_queue_items[item_iid]
             self._manual_match_current = item
             try:
-                SearchDialog(
+                self._search_dialog = SearchDialog(
                     self, item,
                     on_close=lambda outcome: self.root.after_idle(
                         lambda: self._manual_match_closed(outcome),
@@ -4148,6 +4159,7 @@ class App:
         self._finish_manual_match()
 
     def _manual_match_closed(self, outcome):
+        self._search_dialog = None
         if (
             outcome in ("matched", "ignored")
             and self._manual_match_current is not None

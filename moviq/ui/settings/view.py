@@ -1,5 +1,6 @@
 import queue
 import re
+import threading
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -179,6 +180,8 @@ class SettingsView(
         self._queue = queue.Queue()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
         self._closed = False
+        self._request_cancel_events = set()
+        self._request_cancel_lock = threading.Lock()
         self._key_after = None
         self._key_generation = 0
         self._key_history = []
@@ -948,7 +951,13 @@ class SettingsView(
 
     def close(self):
         """Stop scheduled UI work and background network jobs."""
+        if self._closed:
+            return
         self._closed = True
+        with self._request_cancel_lock:
+            cancel_events = tuple(self._request_cancel_events)
+        for cancel_event in cancel_events:
+            cancel_event.set()
         root = self._root()
         for sequence, binding_id in self._scroll_bindings:
             root._unbind(("bind", "all", sequence), binding_id)
@@ -979,3 +988,16 @@ class SettingsView(
             except tk.TclError:
                 pass
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _track_request(self):
+        cancel_event = threading.Event()
+        with self._request_cancel_lock:
+            if self._closed:
+                cancel_event.set()
+            else:
+                self._request_cancel_events.add(cancel_event)
+        return cancel_event
+
+    def _release_request(self, cancel_event):
+        with self._request_cancel_lock:
+            self._request_cancel_events.discard(cancel_event)

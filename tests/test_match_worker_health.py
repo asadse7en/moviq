@@ -1,3 +1,4 @@
+import os
 import queue
 import threading
 import unittest
@@ -151,11 +152,20 @@ class RenameShutdownTests(unittest.TestCase):
 
         with patch(
             "moviq.ui.app.ask_yes_no", return_value=True,
-        ), patch("moviq.ui.app.unregister_theme_listener"):
+        ), patch("moviq.ui.app.unregister_theme_listener"), patch(
+            "moviq.ui.app.close_cache",
+        ), patch(
+            "moviq.ui.app.threading.Timer",
+        ) as timer_factory:
             App.on_close(app)
 
         self.assertTrue(app._rename_cancel_event.is_set())
+        rename_thread.join.assert_called_once_with(timeout=10)
         app.root.destroy.assert_called_once_with()
+        timer_factory.assert_called_once_with(
+            1.5, os._exit, args=(0,),
+        )
+        timer_factory.return_value.start.assert_called_once_with()
 
     def test_finished_rename_does_not_prompt_before_close(self):
         rename_thread = Mock()
@@ -164,12 +174,17 @@ class RenameShutdownTests(unittest.TestCase):
 
         with patch(
             "moviq.ui.app.ask_yes_no",
-        ) as ask_yes_no, patch("moviq.ui.app.unregister_theme_listener"):
+        ) as ask_yes_no, patch(
+            "moviq.ui.app.unregister_theme_listener",
+        ), patch("moviq.ui.app.close_cache"), patch(
+            "moviq.ui.app.threading.Timer",
+        ) as timer_factory:
             App.on_close(app)
 
         ask_yes_no.assert_not_called()
         self.assertFalse(app._rename_running)
         app.root.destroy.assert_called_once_with()
+        timer_factory.return_value.start.assert_called_once_with()
 
 
 class RenameCancellationTests(unittest.TestCase):

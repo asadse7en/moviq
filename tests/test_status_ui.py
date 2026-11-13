@@ -589,6 +589,9 @@ class SettingsViewCloseTests(unittest.TestCase):
     def test_unbinds_global_scroll_callbacks_through_tk_root(self):
         root = SimpleNamespace(_unbind=Mock())
         view = SimpleNamespace(
+            _closed=False,
+            _request_cancel_events={threading.Event()},
+            _request_cancel_lock=threading.Lock(),
             _root=lambda: root,
             _scroll_bindings=[("<MouseWheel>", "callback-id")],
             _key_after=None,
@@ -600,6 +603,9 @@ class SettingsViewCloseTests(unittest.TestCase):
 
         SettingsView.close(view)
 
+        self.assertTrue(
+            next(iter(view._request_cancel_events)).is_set(),
+        )
         root._unbind.assert_called_once_with(
             ("bind", "all", "<MouseWheel>"), "callback-id",
         )

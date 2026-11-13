@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -134,6 +135,27 @@ OTHER = [{"id": 2, "title": "Something Else Entirely", "release_date": "1999-01-
 
 
 class RouterTests(unittest.TestCase):
+    def test_provider_test_passes_cancel_event_to_router(self):
+        cancel_event = threading.Event()
+        settings = ProviderSettings(order=("tmdb",), enabled=("tmdb",))
+        provider = Mock(needs_key=False)
+        provider.check.return_value = True
+
+        with patch(
+            "moviq.core.providers.router.ProviderRouter",
+        ) as router_type:
+            router_type.return_value._provider.return_value = provider
+            self.assertEqual(
+                check_provider(
+                    "tmdb", settings, cancel_event=cancel_event,
+                ),
+                "Connected",
+            )
+
+        router_type.assert_called_once_with(
+            settings, "", cancel_event=cancel_event, session=None,
+        )
+
     def test_provider_test_maps_network_errors_and_caps_other_statuses(self):
         provider = Mock(needs_key=False)
         provider.check.side_effect = TMDBNetworkError("offline")

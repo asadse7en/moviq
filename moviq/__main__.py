@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -303,6 +304,9 @@ def main(argv=None):
     except KeyboardInterrupt:
         app.on_close()
     finally:
+        watchdog = threading.Timer(1.5, os._exit, args=(0,))
+        watchdog.daemon = True
+        watchdog.start()
         if cleanup_diagnostics is not None:
             cleanup_diagnostics()
 

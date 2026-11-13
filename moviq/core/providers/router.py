@@ -276,9 +276,13 @@ def build_router(
     )
 
 
-def test_provider(name, settings, tmdb_key="", session=None):
+def test_provider(
+    name, settings, tmdb_key="", session=None, cancel_event=None,
+):
     """Return a short status for the Settings page: Connected / Rejected / ..."""
-    router = ProviderRouter(settings, tmdb_key, session=session)
+    router = ProviderRouter(
+        settings, tmdb_key, cancel_event=cancel_event, session=session,
+    )
     provider = router._provider(name)
     if provider.needs_key and not provider.available():
         return "Needs a key"

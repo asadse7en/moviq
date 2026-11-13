@@ -1023,20 +1023,31 @@ class SearchDialog(
     def keep_current(self):
         self._close("kept")
 
-    def _close(self, outcome="cancelled"):
+    def close(self):
         if self._closed:
             return
         self._closed = True
         if self._search_after_id:
-            self.after_cancel(self._search_after_id)
+            try:
+                self.after_cancel(self._search_after_id)
+            except tk.TclError:
+                pass
             self._search_after_id = None
         if self._poll_after_id:
-            self.after_cancel(self._poll_after_id)
+            try:
+                self.after_cancel(self._poll_after_id)
+            except tk.TclError:
+                pass
             self._poll_after_id = None
         self._cancel_event.set()
         if self._owns_operation_cache:
             self.operation_cache.discard()
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _close(self, outcome="cancelled"):
+        if self._closed:
+            return
+        self.close()
         self.destroy()
         if self.on_close:
             self.on_close(outcome)

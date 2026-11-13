@@ -185,11 +185,19 @@ class DiagnosticsTests(unittest.TestCase):
                 "tkinter.PhotoImage",
                 side_effect=tk.TclError("no image"),
             ))
+            timer_factory = stack.enter_context(patch(
+                "moviq.__main__.threading.Timer",
+            ))
             main(["--test"])
 
         self.assertIs(app._diagnostic_export_after_match, exporter)
         root.mainloop.assert_called_once_with()
         cleanup.assert_called_once_with()
+        timer_factory.assert_called_once_with(
+            1.5, os._exit, args=(0,),
+        )
+        self.assertTrue(timer_factory.return_value.daemon)
+        timer_factory.return_value.start.assert_called_once_with()
 
     def test_match_completion_triggers_the_configured_export(self):
         app = App.__new__(App)
