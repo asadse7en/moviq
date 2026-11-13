@@ -11,7 +11,7 @@ def _append_result(results, item, result, on_item_complete):
     results.append(result)
     trace.trace_end(lambda: str(item.path), result)
     if on_item_complete is not None:
-        on_item_complete(item)
+        on_item_complete(item, result)
 
 
 def match_movie_items(

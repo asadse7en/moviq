@@ -542,14 +542,29 @@ class MatchProgressPopup:
             percent_var.set(percent)
         if hasattr(self, "_set_progress"):
             self._set_progress(progress)
+        matching_complete = (
+            getattr(self, "task", None) == "matching"
+            and completed == total
+        )
+        if matching_complete:
+            source_label = getattr(self, "source_label", None)
+            if source_label is not None:
+                source_label.grid_remove()
         current_var = getattr(self, "current_var", None)
         if current_var is not None:
-            text = current or "Preparing files..."
-            total_display = max(total, 1)
-            if text != "Preparing files..." and total_display > 0:
-                file_number = min(completed + 1, total_display)
-                noun = "Renaming file" if getattr(self, "task", None) == "rename" else "Matching file"
-                text = f"{noun} {file_number} of {total_display}: {text}"
+            if matching_complete:
+                text = "Finishing..."
+            else:
+                text = current or "Preparing files..."
+                total_display = max(total, 1)
+                if text != "Preparing files..." and total_display > 0:
+                    file_number = min(completed + 1, total_display)
+                    noun = (
+                        "Renaming file"
+                        if getattr(self, "task", None) == "rename"
+                        else "Matching file"
+                    )
+                    text = f"{noun} {file_number} of {total_display}: {text}"
             current_var.set(self._truncate_current_text(text))
         source_var = getattr(self, "source_var", None)
         if source and source_var is not None:
@@ -581,7 +596,7 @@ class MatchProgressPopup:
             self.update_progress(
                 "", completed, total, matched, flagged, failed,
             )
-            self.current_var.set("Finishing up...")
+            self.current_var.set("Finishing...")
             self.cancel_button.set_state("disabled")
             self._completion_after = self.window.after(
                 round((0.7 - elapsed) * 1000),

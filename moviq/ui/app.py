@@ -2902,7 +2902,7 @@ class App:
             (active_run["id"], active_run["total"], active_run["done"])
             if active_run is not None else None
         )
-        logging.getLogger("moviq.rematch").warning(
+        logging.getLogger("moviq.rematch").debug(
             "REMATCH: start_match items=%d matching_run=%s run_id/total/done=%s "
             "first_items=%s",
             len(items), active_run is not None, run_details,
@@ -2931,7 +2931,7 @@ class App:
                 retry_offline=self._is_offline_guess(item),
             )
         ]
-        logging.getLogger("moviq.rematch").warning(
+        logging.getLogger("moviq.rematch").debug(
             "REMATCH: eligible_items=%d", len(items),
         )
         key = self.key_var.get().strip()
@@ -2958,7 +2958,6 @@ class App:
                 "originals": {},
                 "history_before": {},
                 "completed": set(),
-                "progress_items": set(),
                 "done": 0,
                 "total": 0,
                 "current": None,
@@ -3069,9 +3068,12 @@ class App:
                 job_items if isinstance(job_items, (list, tuple))
                 else [job_items]
             )
+            posted_items = set()
             if cancel_event.is_set():
                 continue
             for item in items:
+                if cancel_event.is_set():
+                    break
                 self.results.put(("started", run_id, item))
             try:
                 retry_offline = any(
@@ -3156,7 +3158,7 @@ class App:
                                 tmdb._compat_season_cache = cache
                         show_resolver = _CompatShowResolver(tmdb)
                         self.show_resolver = show_resolver
-                    logging.getLogger("moviq.rematch").warning(
+                    logging.getLogger("moviq.rematch").debug(
                         "REMATCH: worker job retry_offline=%s key_length=%d "
                         "selected=%s",
                         retry_offline, len(key), "compat",
@@ -3180,7 +3182,7 @@ class App:
                             retry_offline=retry_offline,
                         )
 
-                    logging.getLogger("moviq.rematch").warning(
+                    logging.getLogger("moviq.rematch").debug(
                         "REMATCH: worker job retry_offline=%s key_length=%d "
                         "selected=%s movie_chain=%s tv_chain=%s",
                         retry_offline, len(key), provider_settings.selected,
@@ -3201,18 +3203,24 @@ class App:
                 )
 
                 def report_provider(name, run_id=run_id, first_item=first_item, items=items):
+                    if cancel_event.is_set():
+                        return
                     self.results.put(("provider", run_id, first_item, name))
                     if hasattr(self, "_diagnostic_provider_used"):
                         for provider_item in items:
+                            if cancel_event.is_set():
+                                break
                             self.results.put((
                                 "provider_used", run_id, provider_item, name,
                             ))
 
                 tmdb.on_provider = report_provider
 
-                def report_item_progress(item, run_id=run_id):
-                    if hasattr(self, "root") or hasattr(self, "_match_progress"):
-                        self.results.put(("item_progress", run_id, item))
+                def report_item_progress(item, result, run_id=run_id):
+                    if cancel_event.is_set():
+                        return
+                    self.results.put(("finished", run_id, item, *result))
+                    posted_items.add(id(item))
 
                 if (
                     selected_provider is not None
@@ -3248,10 +3256,11 @@ class App:
                         lambda: str(item.path),
                         lambda: ("error", None, str(error)),
                     )
-                cancel_event.set()
-                self.results.put((
-                    "auth_error", run_id, items[0], str(error),
-                ))
+                if not cancel_event.is_set():
+                    self.results.put((
+                        "auth_error", run_id, items[0], str(error),
+                    ))
+                    cancel_event.set()
                 continue
             except TMDBCancelled:
                 for item in items:
@@ -3288,8 +3297,10 @@ class App:
                     ("error", None, str(e))
                     for _item in items
                 ]
-            if not cancel_event.is_set():
-                for item, out in zip(items, results):
+            for item, out in zip(items, results):
+                if cancel_event.is_set():
+                    break
+                if id(item) not in posted_items:
                     self.results.put(("finished", run_id, item, *out))
 
     def poll(self):
@@ -3484,11 +3495,6 @@ class App:
                         if provider_used is not None:
                             provider_used[str(item.path)] = result[0]
                         continue
-                    if kind == "item_progress":
-                        run["progress_items"].add(id(item))
-                        run["current"] = item
-                        pending["progress"] = True
-                        continue
                     if kind == "auth_error":
                         flush()
                         self._stop_matching_for_auth(run, result[0])
@@ -3502,21 +3508,6 @@ class App:
                     review_match = match if status == "review" else None
                     if status == "review":
                         match = None
-                    result_match = match or review_match
-                    result_match_id = (
-                        result_match.get("id")
-                        if isinstance(result_match, dict) else None
-                    )
-                    result_provider = (
-                        provider_of(result_match_id)
-                        if isinstance(result_match_id, int)
-                        and not isinstance(result_match_id, bool)
-                        else None
-                    )
-                    logging.getLogger("moviq.rematch").warning(
-                        "REMATCH: result path=%s status=%s provider=%s",
-                        item.path.name, status, result_provider,
-                    )
                     if item_ids is None:
                         item_ids = {id(row) for row in self.items}
                     if id(item) in item_ids:
@@ -3581,7 +3572,8 @@ class App:
         matched, flagged, failed = self._match_counts(run)
         if self._match_progress_dialog:
             self._match_progress_dialog.complete(
-                run["done"], run["total"], matched, flagged, failed,
+                self._match_progress_count(run), run["total"],
+                matched, flagged, failed,
                 cancelled=True,
             )
         self._record_match_history(run)
@@ -3612,25 +3604,21 @@ class App:
     @staticmethod
     def _match_counts(run):
         completed = run["completed"]
-        matched = sum(
-            1 for item in completed
-            if item.status in ("auto", "manual", "no_change")
-        )
-        flagged = sum(
-            1 for item in completed
-            if item.status == "review" and not item.error
-        )
         failed = sum(
             1 for item in completed
             if item.status in ("nomatch", "error") or item.error
         )
+        matched = sum(
+            1 for item in completed
+            if item.status in ("auto", "manual", "no_change")
+            and not item.error
+        )
+        flagged = len(completed) - matched - failed
         return matched, flagged, failed
 
     @staticmethod
     def _match_progress_count(run):
-        return max(
-            run["done"], len(run.get("progress_items", ())),
-        )
+        return run["done"]
 
     def _update_match_progress(self):
         run = self._matching_run
@@ -3673,7 +3661,8 @@ class App:
         try:
             if run["show_dialog"] and self._match_progress_dialog:
                 self._match_progress_dialog.complete(
-                    run["done"], run["total"], matched, flagged, failed,
+                    self._match_progress_count(run), run["total"],
+                    matched, flagged, failed,
                 )
         except Exception:
             logging.getLogger(__name__).exception(

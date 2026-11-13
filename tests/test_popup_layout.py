@@ -5,6 +5,47 @@ from moviq.ui.popups import MatchProgressPopup, RenameProgressPopup
 
 
 class MatchProgressPopupCompletionTests(unittest.TestCase):
+    def test_all_results_show_finishing_and_hide_waiting_badge(self):
+        popup = MatchProgressPopup.__new__(MatchProgressPopup)
+        popup.completed = False
+        popup.task = "matching"
+        popup.current_var = Mock()
+        popup.progress_count_var = Mock()
+        popup.percent_var = Mock()
+        popup.counter_vars = []
+        popup.source_var = Mock()
+        popup.source_label = Mock()
+        popup._truncate_current_text = lambda text: text
+        popup._set_progress = Mock()
+        popup.window = Mock()
+        popup.window.winfo_exists.return_value = False
+
+        popup.update_progress("last.mkv", 3, 3, 1, 1, 1)
+
+        popup.current_var.set.assert_called_once_with("Finishing...")
+        popup.source_label.grid_remove.assert_called_once_with()
+
+    def test_incomplete_results_show_the_current_matching_file(self):
+        popup = MatchProgressPopup.__new__(MatchProgressPopup)
+        popup.completed = False
+        popup.task = "matching"
+        popup.current_var = Mock()
+        popup.progress_count_var = Mock()
+        popup.percent_var = Mock()
+        popup.counter_vars = []
+        popup.source_label = Mock()
+        popup._truncate_current_text = lambda text: text
+        popup._set_progress = Mock()
+        popup.window = Mock()
+        popup.window.winfo_exists.return_value = False
+
+        popup.update_progress("next.mkv", 1, 3, 1, 0, 0)
+
+        popup.current_var.set.assert_called_once_with(
+            "Matching file 2 of 3: next.mkv",
+        )
+        popup.source_label.grid_remove.assert_not_called()
+
     def test_progress_update_clamps_completed_count(self):
         popup = MatchProgressPopup.__new__(MatchProgressPopup)
         popup.completed = False

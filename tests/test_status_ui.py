@@ -1049,15 +1049,26 @@ class MatchCountTests(unittest.TestCase):
         failed = Item(Path("Failed.mkv"), Path("Shows"))
         failed.status = "review"
         failed.error = "TMDB episode title unavailable"
+        other_status = Item(Path("Pending.mkv"), Path("Movies"))
+        other_status.status = "pending"
 
         self.assertEqual(
             App._match_counts({
                 "completed": {
                     correct_named_movie, already_formatted_movie,
-                    confirmed_movie, needs_review, failed,
+                    confirmed_movie, needs_review, failed, other_status,
                 },
             }),
-            (3, 1, 1),
+            (3, 2, 1),
+        )
+
+    def test_progress_count_uses_applied_results_only(self):
+        self.assertEqual(
+            App._match_progress_count({
+                "done": 2,
+                "progress_items": {1, 2, 3},
+            }),
+            2,
         )
 
     def test_automatic_match_is_no_change_when_its_destination_is_unchanged(self):

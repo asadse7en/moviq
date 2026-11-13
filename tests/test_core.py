@@ -502,10 +502,12 @@ class MatchingTests(unittest.TestCase):
         results = match_tv_items(
             FakeTMDB(), resolver, [item], None, 0.9,
             lambda *_args: "partial",
-            on_item_complete=progress.append,
+            on_item_complete=lambda completed_item, result: progress.append(
+                (completed_item, result),
+            ),
         )
 
-        self.assertEqual(progress, [item])
+        self.assertEqual(progress, [(item, results[0])])
         self.assertEqual(results[0][0], "auto")
         self.assertEqual(results[0][1]["season_number"], 1)
         self.assertEqual(results[0][1]["episode_number"], 1)
