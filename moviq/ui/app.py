@@ -2495,7 +2495,8 @@ class App:
             )
         ]
         if matchable and self.auto_match.get():
-            self.start_match(matchable)
+            if self._maybe_show_api_key_prompt():
+                self.start_match(matchable)
         waiting = getattr(self, "_import_waiting", [])
         if waiting:
             self.add_paths(waiting.pop(0))

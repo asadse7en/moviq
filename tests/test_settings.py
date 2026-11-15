@@ -12,6 +12,7 @@ from moviq.core.formatting import (
     CUSTOM_ID,
     MOVIE_FORMATS,
     TV_DEFAULT_ID,
+    TV_FORMATS,
     format_component,
 )
 from moviq.core.naming import NAMING, folder_name_for, tv_episode_name_for
@@ -41,6 +42,15 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertEqual(DEFAULTS["key"], "")
         self.assertFalse(DEFAULTS["api_key_prompt_seen"])
         self.assertEqual(DEFAULTS["window_state"], "normal")
+
+    def test_default_tv_fields_come_from_default_preset(self):
+        preset = next(item for item in TV_FORMATS if item[0] == TV_DEFAULT_ID)
+
+        self.assertEqual(DEFAULTS["tv_preset_id"], preset[0])
+        self.assertEqual(DEFAULTS["tv_show_folder_pattern"], preset[2])
+        self.assertEqual(DEFAULTS["tv_season_folder_pattern"], preset[3])
+        self.assertEqual(DEFAULTS["tv_file_pattern"], preset[4])
+        self.assertEqual(DEFAULTS["tv_template"], preset[4])
 
     def test_loads_legacy_values_and_fills_new_defaults(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -496,7 +506,8 @@ class FormattingSettingsTests(unittest.TestCase):
                 self.assertEqual(store.data["tv_preset_id"], TV_DEFAULT_ID)
                 self.assertEqual(
                     store.data["tv_file_pattern"],
-                    "{title} - S{season:00}E{episode:00} - {episode_title}",
+                    "{title} ({year}) - S{season:00}E{episode:00} "
+                    "- {episode_title}",
                 )
             finally:
                 store.close()

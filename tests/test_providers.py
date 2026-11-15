@@ -383,7 +383,7 @@ class SettingsTests(unittest.TestCase):
     def test_defaults(self):
         settings = ProviderSettings.from_config({})
         self.assertEqual(settings.order[0], "tmdb")
-        self.assertNotIn("offline", settings.enabled)
+        self.assertIn("offline", settings.enabled)
         self.assertEqual(settings.order[-1], "offline")
 
     def test_offline_provider_is_always_last_in_saved_order(self):

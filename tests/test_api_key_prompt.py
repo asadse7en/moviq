@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from moviq.ui.app import App
@@ -60,6 +61,31 @@ class ApiKeyPromptTests(unittest.TestCase):
                     self.assertTrue(app._maybe_show_api_key_prompt())
                     dialog.assert_not_called()
                 app.settings_store.set.assert_not_called()
+
+    def test_import_auto_match_respects_api_key_prompt_result(self):
+        for allowed in (False, True):
+            with self.subTest(allowed=allowed):
+                app = App.__new__(App)
+                item = SimpleNamespace(
+                    media_type="movie", is_tv_episode=False, error_code=None,
+                )
+                app._import_job = object()
+                app._import_waiting = []
+                app.items = [item]
+                app.push_undo = Mock()
+                app.auto_match = Mock()
+                app.auto_match.get.return_value = True
+                app._maybe_show_api_key_prompt = Mock(return_value=allowed)
+                app.start_match = Mock()
+
+                app._import_complete({"new": [item], "records": []})
+
+                app._maybe_show_api_key_prompt.assert_called_once_with()
+                if allowed:
+                    app.start_match.assert_called_once_with([item])
+                else:
+                    app.start_match.assert_not_called()
+                    self.assertEqual(app.items, [item])
 
 
 if __name__ == "__main__":

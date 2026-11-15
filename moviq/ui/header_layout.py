@@ -202,9 +202,12 @@ class HeaderLayout:
                 app.overflow_button.grid_remove()
         if previous_level is None:
             app.header_brand.grid(row=0, column=0, sticky="w")
-            app.header_actions.grid(row=0, column=1, sticky="w")
-            app.header.grid_columnconfigure(2, weight=1)
+            app.header.grid_columnconfigure(0, weight=0)
+            app.header.grid_columnconfigure(1, weight=1)
+            app.header_actions.grid(row=0, column=1, sticky="e")
+            app.header.grid_columnconfigure(2, weight=0)
             app.header_icons.grid(row=0, column=3, sticky="e")
+            app.header.grid_columnconfigure(3, weight=0)
 
     def filter_row_min_width(self):
         if self._filter_row_min_width is None:

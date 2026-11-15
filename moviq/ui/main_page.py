@@ -143,7 +143,7 @@ def build_main_page(app, page):
         background=app.pal["header_bg"],
     )
     app.rename_all_button.grid(
-        row=0, column=7, sticky="e", padx=(0, 12),
+        row=0, column=7, sticky="e",
     )
     app.header_icons = ttk.Frame(head, style="Toolbar.TFrame")
     app.header_icon_separator = tk.Frame(

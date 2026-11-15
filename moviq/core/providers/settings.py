@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 DEFAULT_ORDER = ("tmdb", "tvmaze", "anilist", "omdb", "offline")
-DEFAULT_ENABLED = ("tmdb", "tvmaze", "anilist", "omdb")
+DEFAULT_ENABLED = ("tmdb", "tvmaze", "anilist", "omdb", "offline")
 # Providers that work for ordinary movies/shows; AniList is anime-only.
 GENERAL = ("tmdb", "omdb", "tvmaze")
 SOURCE_SELECTIONS = ("automatic", "tmdb", "omdb", "tvmaze", "anilist")

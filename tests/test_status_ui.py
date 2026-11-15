@@ -269,6 +269,46 @@ class WindowStateTests(unittest.TestCase):
         )
         self.assertEqual(layout._choose_level(199), 3)
 
+    def test_initial_header_grid_places_flexible_space_before_actions(self):
+        widgets = {
+            name: SimpleNamespace(
+                grid=Mock(), grid_remove=Mock(), set_icon=Mock(),
+            )
+            for name in (
+                "header_subtitle", "add_files_button", "add_folder_button",
+                "header_brand", "header_actions", "header_icons",
+                "overflow_button",
+            )
+        }
+        widgets["toolbar_icon_group"] = SimpleNamespace(
+            states={}, set_visible_actions=Mock(),
+        )
+        app = SimpleNamespace(**widgets)
+        header = SimpleNamespace(
+            bind=Mock(), grid_columnconfigure=Mock(),
+        )
+        app.header = header
+        layout = HeaderLayout(app, header)
+
+        layout._set_level(1)
+
+        app.header_brand.grid.assert_called_once_with(
+            row=0, column=0, sticky="w",
+        )
+        app.header_actions.grid.assert_called_once_with(
+            row=0, column=1, sticky="e",
+        )
+        app.header_icons.grid.assert_called_once_with(
+            row=0, column=3, sticky="e",
+        )
+        self.assertEqual(
+            header.grid_columnconfigure.call_args_list,
+            [
+                call(0, weight=0), call(1, weight=1),
+                call(2, weight=0), call(3, weight=0),
+            ],
+        )
+
     def test_minimum_window_width_uses_l3_or_filter_row_width(self):
         layout = HeaderLayout(SimpleNamespace(), SimpleNamespace(bind=Mock()))
         layout.widths = (500, 400, 300, 250)

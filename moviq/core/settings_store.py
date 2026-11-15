@@ -47,6 +47,9 @@ TV_SAMPLE = {
     "episode": 1,
     "episode_title": "Pilot",
 }
+TV_DEFAULT_PRESET = next(
+    preset for preset in TV_FORMATS if preset[0] == TV_DEFAULT_ID
+)
 DEFAULTS = {
     "key": "",
     "api_key_prompt_seen": False,
@@ -58,7 +61,7 @@ DEFAULTS = {
     "name_template": MOVIE_PRESETS[0],
     "tag_id": False,
     "media_mode": "movie",
-    "tv_template": TV_PRESETS[0],
+    "tv_template": TV_DEFAULT_PRESET[4],
     "movie_folder": True,
     "tv_folder": True,
     "rename_subtitles": True,
@@ -74,12 +77,10 @@ DEFAULTS = {
     "movie_create_folder": True,
     "movie_custom_folder_pattern": "",
     "movie_custom_file_pattern": "",
-    "tv_preset_id": TV_DEFAULT_ID,
-    "tv_show_folder_pattern": "{title}",
-    "tv_season_folder_pattern": "Season {season:00}",
-    "tv_file_pattern": (
-        "{title} - S{season:00}E{episode:00} - {episode_title}"
-    ),
+    "tv_preset_id": TV_DEFAULT_PRESET[0],
+    "tv_show_folder_pattern": TV_DEFAULT_PRESET[2],
+    "tv_season_folder_pattern": TV_DEFAULT_PRESET[3],
+    "tv_file_pattern": TV_DEFAULT_PRESET[4],
     "tv_create_show_folder": True,
     "tv_create_season_folder": True,
     "tv_custom_show_folder_pattern": "",

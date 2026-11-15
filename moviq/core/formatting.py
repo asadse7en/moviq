@@ -55,7 +55,7 @@ TV_FORMATS = (
 )
 
 MOVIE_DEFAULT_ID = "title_year"
-TV_DEFAULT_ID = "no_year_s01e01"
+TV_DEFAULT_ID = "standard_s01e01"
 CUSTOM_ID = "custom"
 
 _TOKEN_RE = re.compile(
