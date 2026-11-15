@@ -28,7 +28,6 @@ def set_window_icon(window):
             master=window,
             file=resource("assets/moviq-icon.png"),
         )
-        if sys.platform != "darwin":
-            window.iconphoto(True, window._moviq_icon)
+        window.iconphoto(True, window._moviq_icon)
     except (OSError, tk.TclError):
         pass

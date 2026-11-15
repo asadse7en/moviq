@@ -163,8 +163,7 @@ def _run_smoke_test(name):
             root._moviq_icon = tk.PhotoImage(
                 file=resource("assets/moviq-icon.png"),
             )
-            if sys.platform != "darwin":
-                root.iconphoto(True, root._moviq_icon)
+            root.iconphoto(True, root._moviq_icon)
             user_data_dir = Path(user_data_dir)
             watchdog_id = root.after(30000, watchdog)
             root.after_idle(ready)
@@ -291,8 +290,7 @@ def main(argv=None):
         root._moviq_icon = tk.PhotoImage(
             file=resource("assets/moviq-icon.png"),
         )
-        if sys.platform != "darwin":
-            root.iconphoto(True, root._moviq_icon)
+        root.iconphoto(True, root._moviq_icon)
     except (OSError, tk.TclError):
         pass
     app = App(root)

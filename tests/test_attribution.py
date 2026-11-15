@@ -38,7 +38,8 @@ class TMDBAttributionTests(unittest.TestCase):
         photo_image.return_value = icon
         window = Mock()
 
-        set_window_icon(window)
+        with patch("moviq.ui.window_utils.sys.platform", "darwin"):
+            set_window_icon(window)
 
         self.assertIs(window._moviq_icon, icon)
         window.iconphoto.assert_called_once_with(True, icon)
