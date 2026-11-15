@@ -11,8 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
-from moviq.ui.app import App, _detect_media_mode
+from moviq.ui.app import App, ERROR_STATUS_DETAILS, _detect_media_mode
 from moviq.core.models import Item
+from moviq.core.list_filter import matches_list_filter
 from moviq.ui.design import (
     DARK_BACKGROUND,
     PALETTES,
@@ -680,6 +681,7 @@ class MediaModeDetectionTests(unittest.TestCase):
             app.clear = Mock()
             app.update_media_mode_selector = Mock()
             app.save_config = Mock()
+            app.schedule_summary = Mock()
             app.root = Mock()
             app.root.winfo_exists.return_value = True
             app.root.after.side_effect = lambda *args, **kwargs: (
@@ -704,6 +706,7 @@ class MediaModeDetectionTests(unittest.TestCase):
             app.clear.assert_called_once_with(record=False)
             app.update_media_mode_selector.assert_called_once_with()
             app.save_config.assert_called_once_with()
+            app.schedule_summary.assert_called_once_with()
             self.assertIn("Switch to TV Shows", confirm.call_args.args[2])
             self.assertIn("clear the current file list", confirm.call_args.args[2])
 
@@ -1227,12 +1230,21 @@ class SelectionActionTests(unittest.TestCase):
         app = App.__new__(App)
         app._sum_pending = True
         app.items = [
-            SimpleNamespace(status="auto"),
-            SimpleNamespace(status="review"),
-            SimpleNamespace(status="error"),
-            SimpleNamespace(status="done"),
-            SimpleNamespace(status="review", error="network failure"),
+            SimpleNamespace(status="auto", media_type="movie"),
+            SimpleNamespace(status="review", media_type="movie"),
+            SimpleNamespace(status="error", media_type="movie"),
+            SimpleNamespace(status="done", media_type="movie"),
+            SimpleNamespace(
+                status="review", error="network failure",
+                media_type="movie",
+            ),
+            SimpleNamespace(
+                status="error", media_type="tv",
+                error_code="wrong_mode_tv_in_movies",
+            ),
         ]
+        mode = {"value": "movie"}
+        app.media_mode = SimpleNamespace(get=lambda: mode["value"])
         app.tree = SimpleNamespace(selection=lambda: ())
         app.filter_vars = {
             key: Mock()
@@ -1246,15 +1258,58 @@ class SelectionActionTests(unittest.TestCase):
         app._matches_current_filter = Mock(return_value=True)
         app._status_filter = None
         app.empty_state = Mock()
+        app.summary_var = Mock()
+        app.summary_label = Mock()
+        app.summary_label.winfo_manager.return_value = "pack"
 
         app.update_summary()
 
-        app.filter_vars["all"].set.assert_called_once_with("All 5")
+        app.filter_vars["all"].set.assert_called_once_with("All 6")
         app.filter_vars["ready"].set.assert_called_once_with("Ready 1")
         app.filter_vars["review"].set.assert_called_once_with("Review 1")
-        app.filter_vars["error"].set.assert_called_once_with("Error 2")
+        app.filter_vars["error"].set.assert_called_once_with("Error 3")
         app.filter_vars["done"].set.assert_called_once_with("Done 1")
+        self.assertEqual(app._filter_counts["nomatch"], 0)
+        app.summary_var.set.assert_called_once_with(
+            "6 files \u00b7 1 ready \u00b7 1 review \u00b7 3 errors "
+            "\u00b7 1 renamed",
+        )
         app.empty_state.place_forget.assert_called_once_with()
+
+        mode["value"] = "tv"
+        app.update_summary()
+        app.summary_var.set.assert_called_with(
+            "1 files \u00b7 1 errors",
+        )
+
+    def test_wrong_mode_errors_ignore_media_mode_in_list_filters(self):
+        for error_code, mode, media_type in (
+            ("wrong_mode_movie_in_tv", "tv", "movie"),
+            ("wrong_mode_tv_in_movies", "movie", "tv"),
+        ):
+            item = SimpleNamespace(
+                status="error",
+                error="",
+                error_code=error_code,
+                media_type=media_type,
+            )
+            with self.subTest(error_code=error_code):
+                self.assertTrue(matches_list_filter(
+                    item, status_filter="all", media_mode=mode,
+                ))
+                self.assertTrue(matches_list_filter(
+                    item, status_filter="error", media_mode=mode,
+                ))
+        self.assertTrue(
+            ERROR_STATUS_DETAILS["wrong_mode_movie_in_tv"].endswith(
+                "Switch to the Movies tab and add this file again."
+            ),
+        )
+        self.assertTrue(
+            ERROR_STATUS_DETAILS["wrong_mode_tv_in_movies"].endswith(
+                "Switch to the TV Shows tab and add this file again."
+            ),
+        )
 
     def test_filter_categories_match_their_file_statuses(self):
         for status, selected_filter, expected in (

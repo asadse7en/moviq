@@ -376,6 +376,51 @@ class FormattingSettingsTests(unittest.TestCase):
             "2008 - Breaking Bad",
         )
 
+    def test_formatter_cleans_separators_left_by_empty_tokens(self):
+        self.assertEqual(
+            format_component(
+                "{title} ({year}) - S{season:00}E{episode:00} "
+                "- {episode_title}",
+                {
+                    "title": "One Piece", "year": 1999, "season": 24,
+                    "episode": 7,
+                },
+            ),
+            "One Piece (1999) - S24E07",
+        )
+        self.assertEqual(
+            format_component("{title} ({year}) - S{episode:00}", {
+                "title": "One Piece", "episode": 7,
+            }),
+            "One Piece - S07",
+        )
+        self.assertEqual(
+            format_component("{title} - - {episode_title} - - {episode}", {
+                "title": "One Piece", "episode": 7,
+            }),
+            "One Piece - 7",
+        )
+        self.assertEqual(
+            format_component("{title}__{episode_title}__{episode}", {
+                "title": "One Piece", "episode": 7,
+            }),
+            "One Piece_7",
+        )
+        self.assertEqual(
+            format_component("{title}..{episode_title}..{episode}", {
+                "title": "One Piece", "episode": 7,
+            }),
+            "One Piece.7",
+        )
+
+    def test_formatter_preserves_separators_without_empty_tokens(self):
+        self.assertEqual(
+            format_component("- {title}__ - {episode}", {
+                "title": "One Piece", "episode": 7,
+            }),
+            "- One Piece__ - 7",
+        )
+
     def test_year_first_preset_uses_year_folder_and_title_only_file(self):
         year_first = next(
             preset for preset in MOVIE_FORMATS if preset[0] == "year_first"

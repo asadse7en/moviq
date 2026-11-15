@@ -19,7 +19,13 @@ def matches_list_filter(
     original_name="",
 ):
     media_type = getattr(item, "media_type", None)
-    if media_mode and media_type is not None and media_type != media_mode:
+    wrong_mode_error = getattr(item, "error_code", None) in (
+        "wrong_mode_movie_in_tv", "wrong_mode_tv_in_movies",
+    )
+    if (
+        media_mode and media_type is not None and media_type != media_mode
+        and not wrong_mode_error
+    ):
         return False
 
     status = getattr(item, "status", None)

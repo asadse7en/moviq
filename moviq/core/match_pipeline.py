@@ -154,9 +154,10 @@ def match_tv_items(
                 return episode
         return None
 
-    def cumulative_episode(show_id, number):
+    def cumulative_episode(show_id, number, details=None):
         """Map an absolute number by adding up the season lengths."""
-        details = tmdb.tv(show_id) or {}
+        if details is None:
+            details = tmdb.tv(show_id) or {}
         seasons = sorted(
             (
                 season for season in details.get("seasons") or []
@@ -362,6 +363,7 @@ def match_tv_items(
             continue
         compact_number = getattr(item, "compact_episode_number", None)
         compact_handled = False
+        ambiguous_number = False
         if compact_number is not None:
             item.match_method = "compact season and episode"
             trace.trace_stage(
@@ -373,10 +375,45 @@ def match_tv_items(
                 },
             )
             show_details = tmdb.tv(show_id) or {}
+            seasons = show_details.get("seasons") or []
+            total_episodes = sum(
+                season.get("episode_count") or 0
+                for season in seasons
+                if isinstance(season.get("season_number"), int)
+                and season["season_number"] >= 1
+                and isinstance(season.get("episode_count"), int)
+            )
+            genres = (
+                show_details.get("genres") or show.get("genres") or []
+            )
+            origin_countries = (
+                show_details.get("origin_country")
+                or show.get("origin_country") or []
+            )
+            animation = any(
+                genre == 16
+                or isinstance(genre, dict) and genre.get("id") == 16
+                for genre in genres
+            ) or 16 in (show.get("genre_ids") or [])
+            anime_like = is_anilist or (
+                animation and "JP" in origin_countries
+            )
+            prefer_absolute = (
+                compact_number <= total_episodes
+                and (anime_like or total_episodes >= 150)
+            )
+            absolute_episode = None
+            if prefer_absolute:
+                absolute_episode = (
+                    cumulative_episode(
+                        show_id, compact_number, show_details,
+                    )
+                    or tmdb.absolute_episode(show_id, compact_number)
+                )
             max_season = max(
                 (
                     season.get("season_number", 0)
-                    for season in show_details.get("seasons") or []
+                    for season in seasons
                     if isinstance(season.get("season_number"), int)
                 ),
                 default=0,
@@ -410,41 +447,50 @@ def match_tv_items(
                 matched_compact.setdefault(
                     "season_number", season_number,
                 )
-            if matched_compact:
+            compact_valid = bool(matched_compact)
+            if not prefer_absolute:
+                absolute_episode = (
+                    cumulative_episode(
+                        show_id, compact_number, show_details,
+                    )
+                    or tmdb.absolute_episode(show_id, compact_number)
+                )
+            absolute_valid = bool(
+                absolute_episode
+                and isinstance(
+                    absolute_episode.get("season_number"), int,
+                )
+                and isinstance(
+                    absolute_episode.get("episode_number"), int,
+                )
+            )
+            ambiguous_number = compact_valid and absolute_valid
+            if prefer_absolute and absolute_valid:
+                item.match_method = "absolute number"
+                episodes = [absolute_episode]
+                season_number = absolute_episode["season_number"]
+                mapped_numbers = [absolute_episode["episode_number"]]
+                compact_handled = True
+            elif compact_valid:
                 episodes = [matched_compact]
                 mapped_numbers = [item.episode_number]
                 compact_handled = True
-            else:
+            elif absolute_valid:
                 item.match_method = "absolute number"
-                absolute_episode = (
-                    cumulative_episode(show_id, compact_number)
-                    or tmdb.absolute_episode(show_id, compact_number)
+                episodes = [absolute_episode]
+                season_number = absolute_episode["season_number"]
+                mapped_numbers = [absolute_episode["episode_number"]]
+                compact_handled = True
+            else:
+                choice = to_tv_choice(
+                    show, item.season_number, item.episode_number,
                 )
-                if (
-                    absolute_episode
-                    and isinstance(
-                        absolute_episode.get("season_number"), int,
-                    )
-                    and isinstance(
-                        absolute_episode.get("episode_number"), int,
-                    )
-                ):
-                    episodes = [absolute_episode]
-                    season_number = absolute_episode["season_number"]
-                    mapped_numbers = [
-                        absolute_episode["episode_number"],
-                    ]
-                    compact_handled = True
-                else:
-                    choice = to_tv_choice(
-                        show, item.season_number, item.episode_number,
-                    )
-                    _append_result(
-                        results, item, (
-                            "review", choice, "", "episode_missing",
-                        ), on_item_complete,
-                    )
-                    continue
+                _append_result(
+                    results, item, (
+                        "review", choice, "", "episode_missing",
+                    ), on_item_complete,
+                )
+                continue
         if compact_handled:
             absolute_needed = False
         else:
@@ -577,6 +623,8 @@ def match_tv_items(
         )
         if show.get("offline"):
             status, reason, error = "review", "offline", ""
+        if ambiguous_number:
+            status, reason = "review", "ambiguous_number"
         _append_result(
             results, item, (status, choice, error, reason),
             on_item_complete,

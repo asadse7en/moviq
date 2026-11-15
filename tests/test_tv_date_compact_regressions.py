@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 from moviq.core.match_pipeline import match_tv_items
 from moviq.core.matching import is_confident_tv, rank_tv
 from moviq.core.models import Item
+from moviq.core.providers.ids import encode
 from moviq.core.providers.base import Provider
 from moviq.core.providers.tvmaze import TVmazeProvider
 from moviq.core.show_resolver import ShowResult, ShowState, ShowResolver
@@ -218,6 +219,105 @@ class TVDateAndCompactMatchingTests(unittest.TestCase):
             (result[1]["season_number"], result[1]["episode_number"]),
             (2, 2),
         )
+
+    def test_compact_number_prefers_absolute_for_anime_or_long_shows(self):
+        def match(
+            total_episodes, anime_like, anilist=False,
+            include_absolute=True,
+        ):
+            item = Item(Path("Fringe.112.mkv"), Path("."), "tv")
+            counts = [total_episodes // 3] * 3
+            absolute_season = next(
+                index + 1
+                for index, count in enumerate(counts)
+                if 112 <= sum(counts[:index + 1])
+            )
+            absolute_episode = 112 - sum(counts[:absolute_season - 1])
+
+            class Provider:
+                @staticmethod
+                def tv(_show_id):
+                    return {
+                        "seasons": [{
+                            "season_number": 0, "episode_count": 1000,
+                        }] + [{
+                            "season_number": index + 1,
+                            "episode_count": count,
+                        } for index, count in enumerate(counts)],
+                        "genres": [{"id": 16}] if anime_like else [],
+                        "origin_country": ["JP"] if anime_like else [],
+                    }
+
+                @staticmethod
+                def season(_show_id, season_number):
+                    numbers = {1: [12]}
+                    if include_absolute:
+                        numbers[absolute_season] = [absolute_episode]
+                    return {"episodes": [{
+                        "season_number": season_number,
+                        "episode_number": number,
+                        "name": f"Episode {number}",
+                    } for number in numbers.get(season_number, [])]}
+
+                @staticmethod
+                def absolute_episode(_show_id, _number):
+                    return None
+
+            resolver = self.resolver()
+            if anilist:
+                resolver = Mock(resolve_show=Mock(return_value=ShowResult(
+                    ShowState.RESOLVED,
+                    encode("anilist", 7),
+                    "Fringe",
+                    2008,
+                    1.0,
+                    candidate={"id": encode("anilist", 7), "name": "Fringe"},
+                )))
+            result = match_tv_items(
+                Provider(), resolver, [item], TMDBOperationCache(),
+                0.9, lambda *_args: "partial",
+            )[0]
+            return item, result
+
+        for (
+            total, anime_like, anilist, include_absolute, expected, method,
+            status, reason,
+        ) in (
+            (
+                120, True, False, True, (3, 32), "absolute number",
+                "review", "ambiguous_number",
+            ),
+            (
+                180, False, False, True, (2, 52), "absolute number",
+                "review", "ambiguous_number",
+            ),
+            (
+                120, False, False, True, (1, 12),
+                "compact season and episode", "review", "ambiguous_number",
+            ),
+            (
+                120, False, True, True, (3, 32), "absolute number",
+                "review", "ambiguous_number",
+            ),
+            (
+                120, True, False, False, (1, 12),
+                "compact season and episode", "auto", "partial",
+            ),
+        ):
+            with self.subTest(
+                total=total, anime_like=anime_like, anilist=anilist,
+                include_absolute=include_absolute,
+            ):
+                item, result = match(
+                    total, anime_like, anilist, include_absolute,
+                )
+                self.assertEqual(result[0], status)
+                self.assertEqual(result[3], reason)
+                self.assertEqual(
+                    (result[1]["season_number"], result[1]["episode_number"]),
+                    expected,
+                )
+                self.assertEqual(item.match_method, method)
 
     def test_invalid_explicit_episode_stays_review_with_parsed_coordinates(self):
         item = Item(Path("Fringe.S01E100.mkv"), Path("."), "tv")

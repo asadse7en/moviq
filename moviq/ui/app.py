@@ -211,11 +211,12 @@ CONFIG_FIELDS = {
 ERROR_STATUS_DETAILS = {
     "wrong_mode_movie_in_tv": (
         "This file looks like a movie (no season or episode in the name), "
-        "but Moviq is in TV Shows mode. Switch to the Movies tab."
+        "but Moviq is in TV Shows mode. Switch to the Movies tab and add "
+        "this file again."
     ),
     "wrong_mode_tv_in_movies": (
         "This file looks like a TV episode ({code}), but Moviq is in Movies "
-        "mode. Switch to the TV Shows tab."
+        "mode. Switch to the TV Shows tab and add this file again."
     ),
     "file_missing": "The file no longer exists at its original location.",
     "name_conflict": (
@@ -760,6 +761,7 @@ class App:
                 self.apply_theme(theme)
         elif key == "media_mode":
             self.media_mode.set(value)
+            self.schedule_summary()
 
     # ---- pages --------------------------------------------------------------
     def build_ui(self):
@@ -1543,29 +1545,17 @@ class App:
         self._sum_pending = False
         self.update_action_labels()
         self.update_detail()
-        n = len(self.items)
+        media_mode = self.media_mode.get()
         counts = {
-            "all": n,
-            "ready": sum(
-                item.status in ("auto", "manual")
-                and not is_error_item(item)
+            key: sum(
+                matches_list_filter(
+                    item, status_filter=key, media_mode=media_mode,
+                )
                 for item in self.items
-            ),
-            "review": sum(
-                item.status == "review" and not is_error_item(item)
-                for item in self.items
-            ),
-            "nomatch": sum(
-                item.status == "nomatch" and not is_error_item(item)
-                for item in self.items
-            ),
-            "error": sum(is_error_item(item) for item in self.items),
-            "done": sum(
-                item.status in ("done", "no_change")
-                and not is_error_item(item)
-                for item in self.items
-            ),
+            )
+            for key in ("all", "ready", "review", "nomatch", "error", "done")
         }
+        n = counts["all"]
         self._filter_counts = counts
         if hasattr(self, "summary_var"):
             summary_parts = []
@@ -1578,7 +1568,11 @@ class App:
                 (counts["error"], "errors"),
                 (
                     sum(
-                        item.status == "done" and not is_error_item(item)
+                        item.status == "done"
+                        and matches_list_filter(
+                            item, status_filter="done",
+                            media_mode=media_mode,
+                        )
                         for item in self.items
                     ),
                     "renamed",
@@ -1879,6 +1873,7 @@ class App:
         self.media_mode.set(mode)
         self.update_media_mode_selector()
         self.save_config()
+        self.schedule_summary()
 
     def _restore_records(self, records, replace=False):
         if not records:
@@ -2139,6 +2134,7 @@ class App:
         self.media_mode.set(target)
         self.update_media_mode_selector()
         self.save_config()
+        self.schedule_summary()
         mode_name = "TV Shows" if self.media_mode.get() == "tv" else "Movies"
         self.status(f"{mode_name} mode selected.")
 
@@ -2187,6 +2183,7 @@ class App:
         self.media_mode.set(detected_mode)
         self.update_media_mode_selector()
         self.save_config()
+        self.schedule_summary()
         return True
 
     def add_paths(self, paths):

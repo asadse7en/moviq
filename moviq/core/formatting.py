@@ -65,6 +65,8 @@ _INVALID_COMPONENT_CHARS = re.compile(r'[\\/:*?"<>|]')
 _WINDOWS_RESERVED_NAME_RE = re.compile(
     r"(?i)(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])",
 )
+_EMPTY_BRACKETS_RE = re.compile(r"\s*(?:\(\s*\)|\[\s*\]|\{\s*\})")
+_REPEATED_SEPARATOR_RE = re.compile(r"([-_.])(?:\s*\1)+")
 
 
 def _avoid_windows_reserved_name(name):
@@ -100,21 +102,31 @@ def format_component(pattern, values):
     if not isinstance(pattern, str):
         return ""
     pattern, values = _provider_aware(pattern, values)
+    had_empty_token = False
 
     def replace(match):
+        nonlocal had_empty_token
         token = match.group(1)
         if token.endswith((":00", ":02d")):
             name = token.split(":", 1)[0]
             value = _value_for(name, values)
             try:
-                return f"{int(value):02d}"
+                result = f"{int(value):02d}"
             except (TypeError, ValueError, OverflowError):
-                return ""
-        return str(_value_for(token, values))
+                result = ""
+        else:
+            result = str(_value_for(token, values))
+        if not result:
+            had_empty_token = True
+        return result
 
     result = _TOKEN_RE.sub(replace, pattern)
     result = _INVALID_COMPONENT_CHARS.sub("", result)
     result = re.sub(r" {2,}", " ", result)
+    if had_empty_token:
+        result = _EMPTY_BRACKETS_RE.sub("", result)
+        result = _REPEATED_SEPARATOR_RE.sub(r"\1", result)
+        result = result.strip("-_. ")
     return _avoid_windows_reserved_name(result.strip().rstrip(". "))
 
 
